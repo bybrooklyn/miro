@@ -47,7 +47,7 @@ export async function maybeTriggerRepair(
   // Circuit breaker, checked BEFORE attempting — never lets a 4th attempt start.
   if (ext.repairAttempts >= MAX_REPAIR_ATTEMPTS) {
     store.disable(db, trigger.app, `Exceeded max repair attempts (${MAX_REPAIR_ATTEMPTS}): ${trigger.error}`);
-    send({ type: "activity", text: `Gave up repairing ${trigger.app} after ${MAX_REPAIR_ATTEMPTS} attempts — disabled.` });
+    send({ type: "notice", level: "warn", text: `Gave up repairing ${trigger.app} after ${MAX_REPAIR_ATTEMPTS} attempts — disabled.` });
     return false;
   }
 
@@ -55,7 +55,7 @@ export async function maybeTriggerRepair(
   if (!selection) return false; // no model available — leave enabled but broken; the next failure retries this same check
 
   const attempts = store.incrementRepairAttempts(db, trigger.app);
-  send({ type: "activity", text: `${trigger.app}'s ${trigger.tool} tool is failing — attempting a repair...` });
+  send({ type: "notice", level: "warn", text: `${trigger.app}'s ${trigger.tool} tool is failing — attempting a repair...` });
 
   const goal = `Extension "${trigger.app}"'s "${trigger.tool}" is failing: ${trigger.error}. Diagnose against the app as
 it runs right now (container_inspect, shell_inspect, http_get, net_capture if needed), re-research if its API or
@@ -85,7 +85,7 @@ tests). Keep tool names and behaviour the same wherever the app still supports t
   // waiting for the next real failure or re-probe to try again.
   if (!result.promoted && attempts >= MAX_REPAIR_ATTEMPTS) {
     store.disable(db, trigger.app, `Repair failed after ${MAX_REPAIR_ATTEMPTS} attempts: ${trigger.error}`);
-    send({ type: "activity", text: `Gave up repairing ${trigger.app} after ${MAX_REPAIR_ATTEMPTS} attempts — disabled.` });
+    send({ type: "notice", level: "warn", text: `Gave up repairing ${trigger.app} after ${MAX_REPAIR_ATTEMPTS} attempts — disabled.` });
   }
   return result.promoted;
 }

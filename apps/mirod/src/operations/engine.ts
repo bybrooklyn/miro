@@ -126,11 +126,11 @@ export async function runOperation<P, S>(
   }
 
   store.setPhase(db, id, "capturing");
-  send({ type: "activity", text: `Capturing current state for ${goal}...` });
+  send({ type: "operation_progress", id, phase: "capturing" });
   const captured = await kind.captureState(params);
   store.setCapturedAndApplying(db, id, JSON.stringify(captured), JSON.stringify(captured));
 
-  send({ type: "activity", text: `Applying: ${goal}...` });
+  send({ type: "operation_progress", id, phase: "applying" });
   try {
     await kind.apply(params);
   } catch (err) {
@@ -145,7 +145,7 @@ export async function runOperation<P, S>(
   }
 
   store.setPhase(db, id, "verifying");
-  send({ type: "activity", text: `Verifying: ${goal}...` });
+  send({ type: "operation_progress", id, phase: "verifying" });
   const ok = await kind.verify(params);
 
   if (ok) {
@@ -156,6 +156,7 @@ export async function runOperation<P, S>(
     // ack travels over the very path the change could have broken.
     if (plan.class === "lifeline") {
       const windowMs = ctx.lifelineConfirmMs ?? LIFELINE_CONFIRM_MS;
+      send({ type: "operation_progress", id, phase: "awaiting_reachability" });
       send({
         type: "question",
         id: `lifeline_confirm:${id}`,
@@ -164,6 +165,7 @@ export async function runOperation<P, S>(
           { label: "Still here — keep it", value: "keep" },
           { label: "Roll back", value: "rollback" },
         ],
+        timeoutMs: windowMs,
       });
       const answer = await Promise.race([waitForAnswer(`lifeline_confirm:${id}`), Bun.sleep(windowMs).then(() => "timeout" as const)]);
       if (answer !== "keep") {

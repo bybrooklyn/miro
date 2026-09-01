@@ -46,8 +46,36 @@ const systemPlanParams = Type.Object({
   notes: Type.Optional(Type.Array(Type.String(), { description: "Irreversible parts, credentials you will create, tradeoffs the user should know." })),
 });
 
+const credentialCreateParams = Type.Object({
+  ref: Type.String({ description: "Secret-store reference to create, e.g. extension.jellyfin.admin_password or extension.jellyfin.api_key." }),
+  purpose: Type.String({ description: "What it is for, shown to the user with the value, e.g. 'Jellyfin admin password for user admin'." }),
+  kind: Type.Optional(Type.Unsafe<"password" | "token">({ type: "string", enum: ["password", "token"], description: "password = 20 chars, letters/digits/symbols; token = 32 hex chars. Default password." })),
+});
+
+function generateCredential(kind: "password" | "token"): string {
+  if (kind === "token") return crypto.getRandomValues(new Uint8Array(16)).reduce((s, b) => s + b.toString(16).padStart(2, "0"), "");
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#%^*-_=+";
+  const bytes = crypto.getRandomValues(new Uint8Array(20));
+  return Array.from(bytes, (b) => alphabet[b % alphabet.length]).join("");
+}
+
 export function buildInteractionTools(ctx: InteractionContext) {
   return [
+    {
+      name: "credential_create",
+      label: "Create credential",
+      description:
+        "Generate a strong password or token for an app on this machine, store it under a secret reference, and show it to the user ONCE. You receive only the reference — never the value. Use this whenever an app needs a new password or API key (a first admin account, an API token); never ask the user to invent one.",
+      parameters: credentialCreateParams,
+      execute: async (_id: string, params: Static<typeof credentialCreateParams>) => {
+        const value = generateCredential(params.kind ?? "password");
+        ctx.setSecret(params.ref, value);
+        // The one place a secret value is ever sent to the client: the owner needs it to log in
+        // themselves. It goes to the user's screen, not into the model's context.
+        ctx.send({ type: "notice", level: "credential", text: `Created ${params.purpose} — stored as ${params.ref}. Value (shown once, save it): ${value}` });
+        return textResult({ created: true, ref: params.ref, shownToUserOnce: true });
+      },
+    },
     {
       name: "ask_user",
       label: "Ask the user",

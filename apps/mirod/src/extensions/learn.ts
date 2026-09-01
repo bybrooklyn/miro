@@ -39,6 +39,8 @@ export interface LearnFlowOptions {
   /** Gives the learning agent the engine's mutation tools, for the writes learning itself needs
    * (creating an API key). Absent for autonomous repair. */
   operationCtx?: OperationToolContext;
+  /** The app_learn tool call this learning session runs under — its activity nests there. */
+  parentActivityId?: string;
 }
 
 /** The single entry point for learning — reached only through the agent's own `app_learn`
@@ -61,7 +63,6 @@ export async function runLearnFlow(opts: LearnFlowOptions): Promise<{ text: stri
   }
   inProgress.add(app);
   try {
-    opts.send({ type: "activity", text: `${"  ".repeat(depth)}Learning ${app}...` });
     const golden = loadGoldenHint(app);
     const combinedHint = [opts.hint, golden ? formatGoldenHint(golden) : undefined].filter(Boolean).join(" | ");
     const goal = `Learn the self-hosted app "${app}"${combinedHint ? ` (hint: ${combinedHint})` : ""}: identify what it is and how it is best controlled, generate a local extension for it (read tools, diagnostics, and write bindings), and record its operational model.`;
@@ -81,6 +82,7 @@ export async function runLearnFlow(opts: LearnFlowOptions): Promise<{ text: stri
       waitForAnswer: opts.waitForAnswer,
       operationCtx: opts.operationCtx,
       resolveCodegenModel: opts.resolveCodegenModel,
+      parentActivityId: opts.parentActivityId,
     });
   } finally {
     inProgress.delete(app);

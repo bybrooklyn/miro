@@ -1,5 +1,5 @@
-import { existsSync, readFileSync, statSync, mkdirSync, chmodSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, readFileSync, statSync, mkdirSync, chmodSync, realpathSync } from "node:fs";
+import { dirname, basename, join } from "node:path";
 import type { OperationKind } from "../engine";
 import { isLifelinePath, isSensitivePath } from "../classify";
 import { trashDestination, moveToTrash } from "../trash";
@@ -22,6 +22,29 @@ export interface FileWriteCaptured {
   mode: number | null;
 }
 
+/** The path with symlinks resolved — the file itself if it exists, else its nearest existing
+ * ancestor plus the remainder. */
+export function realTarget(path: string): string {
+  if (existsSync(path)) {
+    try {
+      return realpathSync(path);
+    } catch {
+      return path;
+    }
+  }
+  let dir = dirname(path);
+  const rest: string[] = [basename(path)];
+  while (!existsSync(dir) && dir !== dirname(dir)) {
+    rest.unshift(basename(dir));
+    dir = dirname(dir);
+  }
+  try {
+    return join(realpathSync(dir), ...rest);
+  } catch {
+    return path;
+  }
+}
+
 const PREVIEW_LINES = 60;
 function preview(text: string): string {
   const lines = text.split("\n");
@@ -32,15 +55,18 @@ export const fileWriteKind: OperationKind<FileWriteParams, FileWriteCaptured> = 
   kind: "file.write",
 
   async describe(p) {
-    if (isSensitivePath(p.path)) throw new Error(`refused: ${p.path} is secret material and is never written through a generic operation`);
-    const lifeline = isLifelinePath(p.path);
+    // Check the path as the kernel will see it: a symlink at /srv/app/config pointing into /etc
+    // would otherwise be approved as "/srv/app/config" and written as /etc/… (adversarial review).
+    const real = realTarget(p.path);
+    if (isSensitivePath(p.path) || isSensitivePath(real)) throw new Error(`refused: ${p.path} is secret material and is never written through a generic operation`);
+    const lifeline = isLifelinePath(p.path) || isLifelinePath(real);
     const existed = existsSync(p.path);
     const previous = existed ? readFileSync(p.path, "utf-8") : null;
     return {
       summary: `${existed ? "Overwrite" : "Create"} ${p.path} (${Buffer.byteLength(p.content)} bytes)`,
       autoApprove: false,
       class: lifeline ? "lifeline" : "mutate",
-      writes: [dirname(p.path)],
+      writes: [dirname(real)],
       network: false,
       warning: lifeline ? "this file can affect SSH, networking, or Miro itself" : undefined,
       details: {

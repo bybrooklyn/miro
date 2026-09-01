@@ -11,17 +11,21 @@ import { runSandboxed, bwrapArgs, sandboxAvailable } from "./sandbox";
 const available = await sandboxAvailable();
 
 describe("bwrapArgs (pure)", () => {
-  test("read-only root, writable binds, scratch /tmp, network off by default", () => {
+  test("read-only root, writable binds, scratch /tmp, every namespace unshared, caps dropped", () => {
     const args = bwrapArgs({ writableRoots: ["/srv/media", "/var/run/docker.sock"], network: false });
     expect(args.slice(0, 3)).toEqual(["bwrap", "--ro-bind", "/"]);
-    expect(args).toContain("--unshare-net");
+    expect(args).toContain("--unshare-all");
+    expect(args).not.toContain("--share-net");
+    expect(args.join(" ")).toContain("--cap-drop ALL");
     expect(args).toContain("--tmpfs");
     expect(args.join(" ")).toContain("--bind /srv/media /srv/media");
     expect(args.join(" ")).toContain("--bind /var/run/docker.sock /var/run/docker.sock");
     expect(args[args.length - 1]).toBe("--");
   });
-  test("network on omits --unshare-net", () => {
-    expect(bwrapArgs({ writableRoots: [], network: true })).not.toContain("--unshare-net");
+  test("network on re-shares the host namespace; keepCapabilities keeps them", () => {
+    const args = bwrapArgs({ writableRoots: [], network: true, keepCapabilities: true });
+    expect(args).toContain("--share-net");
+    expect(args.join(" ")).not.toContain("--cap-drop");
   });
   test("declaring / writable is refused", () => {
     expect(() => bwrapArgs({ writableRoots: ["/"], network: false })).toThrow();
@@ -65,6 +69,20 @@ describe.skipIf(!available)("runSandboxed (real bubblewrap)", () => {
     const r = await runSandboxed(["touch", "/etc/sandbox-probe"], { writableRoots: [scope], network: false });
     expect(r.exitCode).not.toBe(0);
     expect(existsSync("/etc/sandbox-probe")).toBe(false);
+  });
+
+  test("a root payload cannot remount the root read-write and escape (adversarial review)", async () => {
+    for (const keepCapabilities of [false, true]) {
+      const r = await runSandboxed(["sh", "-c", "mount -o remount,rw / && touch /etc/sandbox-escape"], { writableRoots: [], network: false, keepCapabilities });
+      expect(r.exitCode).not.toBe(0);
+      expect(existsSync("/etc/sandbox-escape")).toBe(false);
+    }
+  });
+
+  test("/proc/self/root does not lead out of the read-only view", async () => {
+    const r = await runSandboxed(["sh", "-c", "echo x > /proc/self/root/etc/sandbox-escape2"], { writableRoots: [], network: false });
+    expect(r.exitCode).not.toBe(0);
+    expect(existsSync("/etc/sandbox-escape2")).toBe(false);
   });
 
   test("network off: even loopback is unreachable", async () => {

@@ -47,7 +47,10 @@ export function App() {
     if (event.type === "status") setHealth(event.health);
     else if (event.type === "question") setQuestion(event);
     else if (event.type === "secret_prompt") setSecretPrompt(event);
-    else if (event.type === "activity") setLines((prev) => [...prev, `  ├─ ${event.text}`]);
+    else if (event.type === "activity") {
+      if (event.status === "running") setLines((prev) => [...prev, `  ${event.parentId ? "   " : ""}├─ ${event.label}`]);
+    } else if (event.type === "notice") setLines((prev) => [...prev, `  ${event.level === "warn" ? "!" : event.level === "credential" ? "🔑" : "·"} ${event.text}`]);
+    else if (event.type === "operation_progress") setLines((prev) => [...prev, `    … ${event.phase}`]);
     else if (event.type === "reply") setLines((prev) => [...prev, `  ${event.text}`, ""]);
     else if (event.type === "operation_plan") setLines((prev) => [...prev, ...renderOperationPlan(event)]);
     else if (event.type === "operation_result") setLines((prev) => [...prev, `  ${event.outcome === "committed" ? "✓" : "↩"} ${event.message}`]);

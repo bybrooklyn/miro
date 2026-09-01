@@ -39,14 +39,51 @@ function textOf(message: AssistantMessage | undefined): string {
     .join("\n");
 }
 
+export interface ActivityNode {
+  id: string;
+  parentId?: string;
+  label: string;
+  status: "running" | "done" | "failed";
+  detail?: string;
+}
+
+export interface TurnHooks {
+  /** A tool call started (status running) or finished (done/failed) — the client renders a tree. */
+  onActivity?: (node: ActivityNode) => void;
+  /** A fragment of the assistant's visible text, in order — for streaming replies. */
+  onDelta?: (text: string) => void;
+  /** Nests this turn's tool calls under a parent call (a learning agent under its app_learn). */
+  parentActivityId?: string;
+}
+
+/** A short, safe outcome line for a finished tool call — never the full payload. */
+function summarizeResult(result: unknown, isError: boolean): string | undefined {
+  const text = typeof result === "string" ? result : (result as { content?: { text?: string }[] } | undefined)?.content?.[0]?.text;
+  if (!text) return isError ? "failed" : undefined;
+  const line = text.replace(/\s+/g, " ").trim();
+  return line.length > 120 ? `${line.slice(0, 117)}…` : line;
+}
+
 /** Runs one full turn (including any tool round-trips) and returns the final assistant text. */
-export async function runTurn(agent: Agent, text: string, onActivity?: (label: string) => void): Promise<string> {
+export async function runTurn(agent: Agent, text: string, hooks: TurnHooks | ((label: string) => void) = {}): Promise<string> {
+  const h: TurnHooks = typeof hooks === "function" ? { onActivity: (n) => hooks(n.label) } : hooks;
   const unsubscribe = agent.subscribe((event: AgentEvent) => {
-    if (event.type === "tool_execution_start" && onActivity) {
+    if (event.type === "tool_execution_start" && h.onActivity) {
       // Looked up from the agent's own tool list (not a module-level constant) so this also finds
       // labels for tools that aren't in AGENT_TOOLS (operation/memory/extension/learn tools).
       const tool = (agent.state.tools as { name: string; label?: string }[]).find((t) => t.name === event.toolName);
-      onActivity(tool?.label ?? event.toolName);
+      h.onActivity({ id: event.toolCallId, parentId: h.parentActivityId, label: tool?.label ?? event.toolName, status: "running" });
+    } else if (event.type === "tool_execution_end" && h.onActivity) {
+      const tool = (agent.state.tools as { name: string; label?: string }[]).find((t) => t.name === event.toolName);
+      h.onActivity({
+        id: event.toolCallId,
+        parentId: h.parentActivityId,
+        label: tool?.label ?? event.toolName,
+        status: event.isError ? "failed" : "done",
+        detail: summarizeResult(event.result, event.isError),
+      });
+    } else if (event.type === "message_update" && h.onDelta && event.assistantMessageEvent.type === "text_delta") {
+      h.onDelta(event.assistantMessageEvent.delta);
     }
   });
   try {

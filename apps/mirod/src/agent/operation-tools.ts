@@ -7,7 +7,7 @@ import { shellCommandKind, takeOutput as takeShellOutput, type ShellCommandParam
 import { fileWriteKind, type FileWriteParams } from "../operations/kinds/file-write";
 import { fileDeleteKind, type FileDeleteParams } from "../operations/kinds/file-delete";
 import { httpMutationKind, takeOutput as takeHttpOutput, type HttpMutationParams } from "../operations/kinds/http-mutation";
-import { classifyCommand } from "../operations/classify";
+import { classifyCommand, redactSecretsInText } from "../operations/classify";
 import { runSandboxed } from "../operations/sandbox";
 
 function textResult(details: unknown): AgentToolResult<unknown> {
@@ -91,8 +91,9 @@ export function buildOperationTools(ctx: OperationToolContext) {
           return textResult({ refused: true, reasons: c.reasons, alternative: c.alternative });
         }
         if (c.class === "read") {
-          const r = await runSandboxed(["sh", "-c", params.command], { writableRoots: [], network: params.network, cwd: params.cwd, timeoutMs: 60_000 });
-          return textResult({ class: "read", exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr, timedOut: r.timedOut, truncated: r.truncated });
+          // Same containment as shell_inspect: host network only for network-inspecting commands.
+          const r = await runSandboxed(["sh", "-c", params.command], { writableRoots: [], network: c.needsNetwork, cwd: params.cwd, timeoutMs: 60_000 });
+          return textResult({ class: "read", exitCode: r.exitCode, stdout: redactSecretsInText(r.stdout), stderr: redactSecretsInText(r.stderr), timedOut: r.timedOut, truncated: r.truncated });
         }
         const { reason, ...p } = params;
         const result = await runOperation(ctx, shellCommandKind, reason, p);

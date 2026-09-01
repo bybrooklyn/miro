@@ -1,5 +1,5 @@
 import { accessSync, constants, realpathSync } from "node:fs";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { homedir } from "node:os";
 
 // The command classifier (PLAN.md §5.7). Every agent-issued shell command — main agent, learn
@@ -49,6 +49,9 @@ export interface Classification {
   class: CommandClass;
   segments: SegmentClassification[];
   reasons: string[];
+  /** A `read` command that needs the host network namespace (routes, sockets, DNS, local HTTP).
+   * Everything else runs in an empty namespace, so a read can never be an egress. */
+  needsNetwork: boolean;
   /** For forbidden results: the safe thing to do instead, phrased for the model. */
   alternative?: string;
   /** The parse failed; `class` is the conservative fallback. */
@@ -290,32 +293,101 @@ const LIFELINE_PATHS: RegExp[] = [
   /^\/etc\/systemd\/system\/(ssh|sshd|docker|mirod|networking|systemd-networkd|NetworkManager)/,
 ];
 
-/** Reading these leaks a secret straight into model-visible context. Never `read`. */
+/** Reading these leaks a secret straight into model-visible context. Never `read` — and never a
+ * write target through any generic kind either. Whole directories, not just known filenames:
+ * `grep -r . ~/.ssh` and `cat /var/lib/miro/miro.db` are the same leak (adversarial review). */
 const SENSITIVE_READ_PATHS: RegExp[] = [
   /^\/etc\/shadow$/,
   /^\/etc\/gshadow$/,
-  /(^|\/)\.ssh\/id_[^/]*$/,
-  /(^|\/)\.ssh\/[^/]*_key$/,
-  /(^|\/)\.miro\/secret\.key$/,
-  /(^|\/)\.miro\/miro\.db(-wal|-shm)?$/,
-  /^\/etc\/wireguard\/.*\.conf$/,
+  // Everything under .ssh except the three public files an operator legitimately edits
+  // (authorized_keys / known_hosts / config) — those are lifeline writes, not secrets.
+  /(^|\/)\.ssh(\/(?!(authorized_keys|known_hosts|config)$)|$)/,
+  /(^|\/)\.miro(\/|$)/,
+  // /proc aliases that cannot be resolved from a string (cwd, fd) — no inspection needs them.
+  /^\/proc\/(self|thread-self|\d+)\/(cwd|fd)(\/|$)/,
+  /^\/var\/lib\/miro(\/|$)/,
+  /^\/etc\/wireguard(\/|$)/,
   /(^|\/)\.env$/,
+  /(^|\/)\.netrc$/,
+  /(^|\/)\.git-credentials$/,
+  /(^|\/)\.aws\/credentials$/,
+  /(^|\/)\.kube\/config$/,
+  /(^|\/)\.docker\/config\.json$/,
+  /^\/proc\/(self|\d+)\/environ$/,
+  /^\/proc\/(self|\d+)\/(mem|maps)$/,
 ];
+
+/** Canonical form for path matching: `~` expanded, `.`/`..`/`//` collapsed, the /proc back doors
+ * (`/proc/self/root/etc/shadow`, `/proc/1/cwd/…`) stripped to what they alias. Symlinks are the
+ * kinds' job at apply time (realpath); this handles what a string can hide. */
+export function normalizePath(path: string, home = homedir()): string {
+  let p = expandHome(path, home);
+  if (!p.startsWith("/")) return p;
+  // Aliases first, then textual normalisation: `/proc/self/root/../etc/shadow` must become
+  // `/etc/shadow`, which normalising first would turn into `/proc/self/etc/shadow`. The cwd/fd
+  // aliases cannot be resolved from a string; they are left in place for the sensitive-path rule.
+  for (let i = 0; i < 4; i++) {
+    const m = p.match(/^\/proc\/(self|thread-self|\d+)\/root(\/|$)/);
+    if (!m) break;
+    p = "/" + p.slice(m[0].length);
+  }
+  if (/^\/proc\/(self|thread-self|\d+)\/(cwd|fd)(\/|$)/.test(p)) return p;
+  p = posix.normalize(p);
+  const again = p.match(/^\/proc\/(self|thread-self|\d+)\/root(\/|$)/);
+  if (again) return normalizePath(p, home);
+  return p.length > 1 ? p.replace(/\/+$/, "") : p;
+}
 
 /** Exported for the file kinds: a write to one of these is `lifeline`, never plain `mutate`. */
 export function isLifelinePath(path: string, home = homedir()): boolean {
-  const p = expandHome(path, home);
+  const p = normalizePath(path, home);
   return LIFELINE_PATHS.some((re) => re.test(p));
 }
 
-/** Exported for the file kinds: Miro's own secret material and private keys — never read into
- * model context, never written or deleted through any generic kind. */
+/** Exported for the file kinds and read tools: Miro's own secret material, private keys, and
+ * credential files — never read into model context, never written or deleted through any
+ * generic kind. */
 export function isSensitivePath(path: string, home = homedir()): boolean {
-  const p = expandHome(path, home);
+  const p = normalizePath(path, home);
   return SENSITIVE_READ_PATHS.some((re) => re.test(p));
 }
 
-const LIFELINE_UNITS = /^(ssh|sshd|docker|containerd|mirod|networking|systemd-networkd|systemd-resolved|NetworkManager|wg-quick@.*|tailscaled|firewalld|nftables|ufw)(\.service)?$/;
+/** Masks credential-shaped values in text bound for model context (tool output, captures).
+ * ponytail: regex over common shapes, not a full parser — the structural defence is that
+ * secret-path reads are refused outright above; this catches the env dump and the JSON blob. */
+export function redactSecretsInText(text: string): string {
+  return text
+    .replace(/("?(?:password|passwd|pw|token|api_?key|secret|authorization|x-emby-token|x-mediabrowser-token|x-api-key|access_?key|private_?key)"?\s*[:=]\s*"?)([^"&\s,}]+)/gi, "$1[redacted]")
+    .replace(/(Authorization:\s*)(\S.*)/gi, "$1[redacted]")
+    .replace(/(MediaBrowser[^"\n]*Token=")([^"]+)/gi, "$1[redacted]")
+    .replace(/\b(sk-[A-Za-z0-9]{8,}|ghp_[A-Za-z0-9]{8,}|xox[abp]-[A-Za-z0-9-]{8,}|AKIA[A-Z0-9]{16})\b/g, "[redacted]")
+    .replace(/(-----BEGIN [A-Z ]*PRIVATE KEY-----)[\s\S]*?(-----END [A-Z ]*PRIVATE KEY-----)/g, "$1 [redacted] $2");
+}
+
+/** Binaries whose read-only use needs the host network namespace (routes, sockets, DNS, local
+ * HTTP). Everything else inspects in an empty namespace — no egress possible. */
+const NETWORK_READERS = new Set(["ip", "ss", "netstat", "nft", "iptables", "ip6tables", "ufw", "route", "arp", "ethtool", "wg", "tailscale", "nmcli", "dig", "nslookup", "host", "getent", "curl", "wget", "ping", "traceroute", "tracepath", "mtr", "tcpdump", "tshark", "nc", "ncat", "ifconfig"]);
+
+/** Only hosts on this machine or its private network — a `read`-class fetch may not leave the LAN;
+ * a public URL becomes a confirmed `mutate` (egress is visible in a plan). */
+export function isLocalOrPrivateUrl(raw: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+  const h = u.hostname.replace(/^\[|\]$/g, "");
+  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".lan") || h.endsWith(".home.arpa") || h.endsWith(".internal")) return true;
+  if (h === "::1" || h.startsWith("fe80:") || h.startsWith("fd") || h.startsWith("fc")) return true;
+  const m = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (!m) return !h.includes("."); // a bare single-label hostname is a LAN name
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
+}
+
+const LIFELINE_UNITS = /^(ssh|sshd|docker|containerd|mirod|networking|systemd-networkd|systemd-resolved|NetworkManager|wg-quick@.*|tailscaled|firewalld|nftables|ufw)(\.(service|socket|target|timer))?$/;
 const LIFELINE_PROCESSES = /^(mirod|sshd|dockerd|containerd|systemd|init|NetworkManager|systemd-networkd)$/;
 
 /** Wrappers that run another command: classify the inner one. Each returns the inner argv, or
@@ -396,6 +468,50 @@ const WRAPPERS: Record<string, (argv: string[]) => { inner: string[] } | { forbi
   },
   busybox: (a) => (a.length > 1 ? { inner: a.slice(1) } : { forbidden: "busybox with no applet opens a shell" }),
   toybox: (a) => (a.length > 1 ? { inner: a.slice(1) } : { forbidden: "toybox with no applet opens a shell" }),
+  // More exec wrappers (adversarial review): each runs its trailing command; classify that.
+  flock: (a) => {
+    let i = 1;
+    while (i < a.length && a[i].startsWith("-")) { if (["-w", "--timeout", "-E", "--conflict-exit-code"].includes(a[i])) i++; i++; }
+    i++; // the lock file/fd
+    return i < a.length ? { inner: a.slice(i) } : null;
+  },
+  runuser: (a) => {
+    let i = 1;
+    while (i < a.length && a[i].startsWith("-")) {
+      if (a[i] === "-c" || a[i] === "--command") return i + 1 < a.length ? { inner: ["sh", "-c", a[i + 1]] } : null;
+      if (["-u", "--user", "-g", "--group", "-G", "--supp-group"].includes(a[i])) i++;
+      i++;
+    }
+    if (a[i] === "--") i++;
+    return i < a.length ? { inner: a.slice(i) } : { forbidden: "runuser with no command opens an interactive shell" };
+  },
+  setpriv: (a) => {
+    let i = 1;
+    while (i < a.length && a[i].startsWith("-")) { if (a[i] === "--") { i++; break; } i++; }
+    return i < a.length ? { inner: a.slice(i) } : { forbidden: "setpriv with no command" };
+  },
+  taskset: (a) => {
+    let i = 1;
+    while (i < a.length && a[i].startsWith("-")) { if (["-p", "--pid", "-c", "--cpu-list"].includes(a[i])) i++; i++; }
+    i++; // the mask
+    return i < a.length ? { inner: a.slice(i) } : null;
+  },
+  chrt: (a) => {
+    let i = 1;
+    while (i < a.length && a[i].startsWith("-")) { if (["-p", "--pid"].includes(a[i])) i++; i++; }
+    i++; // the priority
+    return i < a.length ? { inner: a.slice(i) } : null;
+  },
+  unshare: (a) => {
+    let i = 1;
+    while (i < a.length && a[i].startsWith("-")) { if (["--setuid", "--setgid", "--wd", "--root", "-S", "-G", "-w", "-R"].includes(a[i])) i++; i++; }
+    return i < a.length ? { inner: a.slice(i) } : { forbidden: "unshare with no command opens a shell" };
+  },
+  script: (a) => {
+    const c = a.indexOf("-c");
+    if (c >= 0 && c + 1 < a.length) return { inner: ["sh", "-c", a[c + 1]] };
+    return { forbidden: "script without -c opens an interactive shell" };
+  },
   ssh: (a) => {
     let i = 1;
     while (i < a.length && a[i].startsWith("-")) {
@@ -444,18 +560,32 @@ const PLAIN_READERS = new Set([
   "test", "[", "sleep", "pgrep", "pidof", "ip", "nft", "iptables", "ip6tables", "ufw", "systemctl", "docker",
   "find", "sed", "awk", "gawk", "mawk", "curl", "wget", "git", "apt", "apt-get", "apt-cache", "dpkg",
   "sqlite3", "psql", "mysql", "mariadb", "mount", "findmnt", "ping", "traceroute", "tracepath", "mtr",
-  "nc", "ncat", "openssl", "tcpdump", "tshark", "nmcli", "wg", "tailscale", "top", "htop", "iostat",
+  "openssl", "tcpdump", "tshark", "nmcli", "wg", "tailscale", "top", "htop", "iostat",
   "vmstat", "sar", "ethtool", "arp", "route", "nvidia-smi", "vainfo", "ffprobe", "mediainfo", "tar", "zcat",
   "gzip", "gunzip", "xz", "unzip", "zip", "base64", "tail", "watch", "true", "yes", "crontab", "kill",
   "pkill", "killall",
 ]);
 
 /** Flag present, including inside a combined short-flag cluster (`-bn1` contains `-b`, `-rf`
- * contains `-r`). Long flags match exactly or as `--flag=value`. */
+ * contains `-r`). Long flags match exactly or as `--flag=value`. A cluster only counts when it is
+ * all short flags (`-rf`), never a word like `-SIGKILL` (adversarial review: `kill -SIGKILL 1`
+ * used to match `-L`). */
 function hasFlag(args: string[], ...flags: string[]): boolean {
   return args.some((a) =>
-    flags.some((f) => a === f || (f.length === 2 && f[0] === "-" && /^-[a-zA-Z0-9]+$/.test(a) && a.slice(1).includes(f[1])) || a.startsWith(`${f}=`)),
+    flags.some((f) => a === f || (f.length === 2 && f[0] === "-" && /^-[a-z][a-z0-9]{1,5}$/.test(a) && a.slice(1).includes(f[1])) || a.startsWith(`${f}=`)),
   );
+}
+
+/** First non-option word, with the given options' values consumed — the subcommand of `git -C
+ * /x clean`, `docker --log-level debug system prune`, `apt -o X=Y purge` (adversarial review:
+ * a flag's value used to be mistaken for the verb, downgrading these to `mutate`). */
+function firstVerb(args: string[], valueFlags: string[]): { verb: string; rest: string[] } {
+  let i = 0;
+  while (i < args.length && args[i].startsWith("-")) {
+    if (valueFlags.includes(args[i]) && !args[i].includes("=")) i++;
+    i++;
+  }
+  return { verb: args[i] ?? "", rest: args.slice(i + 1) };
 }
 
 /** Value of a flag written any of the usual ways: `-s 0`, `-s0`, `-s=0`, `--size 0`, `--size=0`. */
@@ -511,8 +641,8 @@ const RULES: Record<string, Rule> = {
     return "destructive";
   },
   truncate: (a) => {
-    const size = argAfter(a, "-s") ?? argAfter(a, "--size");
-    return size === "0" || size === "0B" ? "forbidden" : "mutate";
+    const size = argAfter(a, "-s") ?? argAfter(a, "--size") ?? "";
+    return /^[+-]?0+(\.0+)?\s*[kKmMgGtTbB]?[bB]?$/.test(size) ? "forbidden" : "mutate";
   },
   cp: (a) => (a.slice(1).some((x) => x === "/dev/null") && a.length >= 3 && a[a.length - 1] !== "/dev/null" ? "forbidden" : "mutate"),
   mv: (a) => {
@@ -521,7 +651,13 @@ const RULES: Record<string, Rule> = {
     if (rest[0] === "/" || rest.some((x) => x === "/*")) return "forbidden";
     return "mutate";
   },
-  crontab: (a) => (hasFlag(a, "-r") ? "forbidden" : hasFlag(a, "-l") ? "read" : "mutate"),
+  // A crontab is root code on a timer, run by cron outside any sandbox: installing one is
+  // `lifeline`, wiping them is forbidden, the editor is interactive.
+  crontab: (a) => (hasFlag(a, "-r") ? "forbidden" : hasFlag(a, "-e") ? "forbidden" : hasFlag(a, "-l") ? "read" : "lifeline"),
+  // Hand execution to PID 1 / atd, outside the sandbox and the classifier — never.
+  "systemd-run": () => "forbidden",
+  at: () => "forbidden",
+  batch: () => "forbidden",
   chmod: (a) => permClass(a),
   chown: (a) => permClass(a),
   chgrp: (a) => permClass(a),
@@ -543,6 +679,9 @@ const RULES: Record<string, Rule> = {
   ip6tables: (a) => (hasFlag(a, "-L", "-S", "--list", "--list-rules") ? "read" : "lifeline"),
   nft: (a) => (a[1] === "list" || a[1] === "--json" || a[1] === "-j" ? "read" : "lifeline"),
   ip: (a) => {
+    // Batch mode reads commands from a file or stdin — none of them visible here (adversarial
+    // review: `echo 'link set eth0 down' | ip -b -` classified read).
+    if (a.slice(1).some((x) => x === "-b" || x === "-batch" || x === "--batch" || x === "-force" || x.startsWith("-b="))) return "lifeline";
     // Skip global options; the ones that take a value (`-n <netns>`, `-f <family>`) consume it.
     const rest: string[] = [];
     for (let i = 1; i < a.length; i++) {
@@ -560,8 +699,8 @@ const RULES: Record<string, Rule> = {
   arp: (a) => (hasFlag(a, "-d", "-s") ? "lifeline" : "read"),
   ethtool: (a) => (a.slice(1).some((x) => x.startsWith("-") && !["-i", "-S", "-k", "-g", "-c", "-a", "-l", "--show-features"].includes(x)) ? "lifeline" : "read"),
   systemctl: (a) => {
-    const verb = a.slice(1).find((x) => !x.startsWith("-"));
-    const unit = a.slice(1).filter((x) => !x.startsWith("-"))[1] ?? "";
+    const { verb, rest } = firstVerb(a.slice(1), ["-M", "--machine", "-H", "--host", "-p", "--property", "-t", "--type", "-n", "--lines", "-o", "--output", "-s", "--signal", "--state", "--job-mode", "--preset-mode"]);
+    const unit = rest.find((x) => !x.startsWith("-")) ?? "";
     if (!verb) return "read";
     if (["reboot", "poweroff", "halt", "kexec", "emergency", "rescue", "suspend", "hibernate"].includes(verb)) return "forbidden";
     if (["status", "show", "cat", "is-active", "is-enabled", "is-failed", "is-system-running", "list-units", "list-unit-files", "list-timers", "list-sockets", "list-dependencies", "list-jobs", "show-environment", "get-default", "help"].includes(verb)) return "read";
@@ -569,13 +708,22 @@ const RULES: Record<string, Rule> = {
     if (["start", "restart", "reload", "enable", "reload-or-restart", "try-restart", "daemon-reload", "set-property", "reset-failed", "edit", "link", "unmask", "isolate", "set-default"].includes(verb)) return LIFELINE_UNITS.test(unit) && ["isolate", "set-default", "edit"].includes(verb) ? "lifeline" : "mutate";
     return "mutate";
   },
-  kill: (a) => (hasFlag(a, "-0", "-l", "-L") || a.includes("-s") && a.includes("0") ? "read" : "mutate"),
+  kill: (a) => {
+    const args = a.slice(1);
+    if (args.includes("-l") || args.includes("-L")) return "read";
+    const sig = args.includes("-0") || (args.includes("-s") && args[args.indexOf("-s") + 1] === "0") || args.includes("-n") && args[args.indexOf("-n") + 1] === "0";
+    const dash = args.indexOf("--");
+    const targets = [...args.filter((x, i) => (dash < 0 || i < dash) && !x.startsWith("-") && x !== "0"), ...(dash >= 0 ? args.slice(dash + 1) : [])];
+    if (sig && !args.some((x) => /^-(SIG)?[A-Z]+$/.test(x))) return "read"; // signal 0 = existence check
+    if (targets.some((t) => t === "1" || t === "-1")) return "lifeline"; // init, or every process
+    if (args.length === 1 && args[0] === "-1") return "lifeline"; // bare -1: only ever means "everything"
+    return "mutate";
+  },
   pkill: (a) => (a.slice(1).some((x) => LIFELINE_PROCESSES.test(x)) ? "lifeline" : "mutate"),
   killall: (a) => (a.slice(1).some((x) => LIFELINE_PROCESSES.test(x)) ? "lifeline" : "mutate"),
   docker: (a, ctx) => {
     const args = a.slice(1);
-    const sub = args.find((x) => !x.startsWith("-")) ?? "";
-    const subArgs = args.slice(args.indexOf(sub) + 1);
+    const { verb: sub, rest: subArgs } = firstVerb(args, ["-H", "--host", "-l", "--log-level", "-c", "--context", "--config", "--tlscacert", "--tlscert", "--tlskey"]);
     const sub2 = subArgs.find((x) => !x.startsWith("-")) ?? "";
     if (["ps", "images", "inspect", "logs", "top", "port", "diff", "history", "info", "version", "stats", "events", "search"].includes(sub)) return sub === "stats" && !hasFlag(subArgs, "--no-stream") ? "mutate" : "read";
     if (["network", "volume", "image", "container", "context", "plugin", "system"].includes(sub)) {
@@ -598,13 +746,17 @@ const RULES: Record<string, Rule> = {
     }
     if (sub === "rm" || sub === "rmi") return "destructive";
     if (sub === "run" || sub === "create") {
-      if (subArgs.some((x) => x === "--privileged" || x.startsWith("--pid=host") || x.startsWith("--cap-add") || x.startsWith("--security-opt") || x.startsWith("--userns=host") || x.startsWith("--ipc=host"))) return "destructive";
+      // The daemon does the container's work on the far side of a socket, outside any sandbox:
+      // a host bind mount is the host filesystem handed to whatever the container runs.
+      if (subArgs.some((x) => x === "--privileged" || x.startsWith("--pid=host") || x.startsWith("--cap-add") || x.startsWith("--security-opt") || x.startsWith("--userns=host") || x.startsWith("--ipc=host") || x.startsWith("--device"))) return "destructive";
       const binds = subArgs.flatMap((x, i) => (x === "-v" || x === "--volume" || x === "--mount" ? [subArgs[i + 1] ?? ""] : x.startsWith("-v") || x.startsWith("--volume=") || x.startsWith("--mount=") ? [x.replace(/^(-v|--volume=|--mount=)/, "")] : []));
-      if (binds.some((b) => /^(\/|source=\/)(:|,|$)/.test(b) || /^\/(etc|root|home|boot|var\/run\/docker\.sock|run\/docker\.sock)(:|\/|$)/.test(b) || /docker\.sock/.test(b))) return "destructive";
+      if (binds.some((b) => /^\/(:|$)/.test(b) || /(^|,)(source|src)=\/(,|$)/.test(b))) return "forbidden"; // the root filesystem itself
+      if (binds.some((b) => /^\/(etc|root|home|boot|var\/lib\/miro|usr|bin|sbin|lib|proc|sys|dev)(:|\/|$)/.test(b) || /docker\.sock/.test(b) || /(^|,)(source|src)=\/(etc|root|home|boot|var\/lib\/miro|usr|bin|sbin|lib|proc|sys|dev)(,|\/|$)/.test(b))) return "destructive";
+      if (binds.some((b) => /^\//.test(b) || /(^|,)(source|src)=\//.test(b))) return "destructive"; // any host path
       return "mutate";
     }
     if (sub === "compose") {
-      const verb = subArgs.find((x) => !x.startsWith("-")) ?? "";
+      const { verb } = firstVerb(subArgs, ["-f", "--file", "-p", "--project-name", "--project-directory", "--env-file", "--profile", "--ansi", "--progress"]);
       if (["ps", "ls", "logs", "config", "images", "top", "version", "events", "port"].includes(verb)) return "read";
       if (verb === "down" && (hasFlag(subArgs, "-v", "--volumes") || hasFlag(subArgs, "--rmi"))) return "destructive";
       if (verb === "rm") return "destructive";
@@ -634,19 +786,23 @@ const RULES: Record<string, Rule> = {
   curl: (a) => {
     const args = a.slice(1);
     const writes = args.some((x) => ["-o", "--output", "-O", "--remote-name", "-T", "--upload-file", "-d", "--data", "--data-raw", "--data-binary", "--data-urlencode", "-F", "--form", "-X", "--request", "-c", "--cookie-jar", "-D", "--dump-header", "--trace", "--trace-ascii"].includes(x) || /^-[a-zA-Z]*[oOTdFXcD]/.test(x) && !x.startsWith("--") || x.startsWith("--output=") || x.startsWith("--data") || x.startsWith("--request=") || x.startsWith("--upload-file="));
-    return writes ? "mutate" : "read";
+    if (writes) return "mutate";
+    // A read-class GET may not leave the local network (egress with data in the URL is
+    // exfiltration). A public URL is a confirmed mutate — visible in a plan.
+    const urls = args.filter((x) => /^https?:\/\//i.test(x));
+    return urls.length > 0 && urls.every(isLocalOrPrivateUrl) ? "read" : "mutate";
   },
   wget: (a) => {
     const args = a.slice(1);
     // wget always writes a file unless the output is stdout: `-O -`, `-O-`, `-qO-`, `--output-document=-`.
     const toStdout = args.some((x, i) => (x === "-O" && args[i + 1] === "-") || /^-[a-zA-Z]*O-$/.test(x) || x === "--output-document=-" || (/^-[a-zA-Z]*O$/.test(x) && args[i + 1] === "-"));
     const posts = args.some((x) => x.startsWith("--post") || x.startsWith("--method") || x.startsWith("--body"));
-    return posts || !toStdout ? "mutate" : "read";
+    if (posts || !toStdout) return "mutate";
+    const urls = args.filter((x) => /^https?:\/\//i.test(x));
+    return urls.length > 0 && urls.every(isLocalOrPrivateUrl) ? "read" : "mutate";
   },
   git: (a) => {
-    const args = a.slice(1);
-    const sub = args.find((x) => !x.startsWith("-")) ?? "";
-    const rest = args.slice(args.indexOf(sub) + 1);
+    const { verb: sub, rest } = firstVerb(a.slice(1), ["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"]);
     if (["status", "log", "diff", "show", "rev-parse", "ls-files", "ls-remote", "branch", "tag", "remote", "config", "describe", "blame", "shortlog", "cat-file", "grep", "reflog", "stash"].includes(sub)) {
       if (sub === "branch" && (hasFlag(rest, "-D", "-d", "--delete", "-m", "-M"))) return hasFlag(rest, "-D") ? "destructive" : "mutate";
       if (sub === "tag" && hasFlag(rest, "-d", "--delete")) return "destructive";
@@ -675,7 +831,15 @@ const RULES: Record<string, Rule> = {
   psql: (a) => sqlClass(argAfter(a, "-c") ?? argAfter(a, "--command")),
   mysql: (a) => sqlClass(argAfter(a, "-e") ?? argAfter(a, "--execute")),
   mariadb: (a) => RULES.mysql(a, undefined as any),
-  mount: (a) => (a.length === 1 || hasFlag(a, "-l") ? "read" : "mutate"),
+  // A bind mount can shadow /etc or /root with anything; a remount changes what the system can
+  // write — lockouts by another name.
+  mount: (a) => {
+    if (a.length === 1 || hasFlag(a, "-l")) return "read";
+    const opts = a.slice(1).flatMap((x, i) => (/^(-o|--options)$/.test(x) ? [a[i + 2] ?? ""] : /^-o./.test(x) ? [x.slice(2)] : []));
+    const optText = opts.join(",");
+    if (a.slice(1).some((x) => x === "--bind" || x === "--rbind" || x === "-B" || x === "-R") || /(^|,)(r?bind|remount)(,|$)/.test(optText)) return "lifeline";
+    return "mutate";
+  },
   tar: (a) => {
     const args = a.slice(1);
     if (args.some((x) => x === "--remove-files" || x === "--delete")) return "forbidden";
@@ -688,7 +852,9 @@ const RULES: Record<string, Rule> = {
   crontabs: () => "mutate",
   tcpdump: (a) => (hasFlag(a, "-w") ? "mutate" : "read"),
   tshark: (a) => (hasFlag(a, "-w") ? "mutate" : "read"),
-  nc: (a) => (hasFlag(a, "-l", "--listen") || hasFlag(a, "-e") ? "mutate" : "read"),
+  // netcat moves bytes to arbitrary hosts — `cat data | nc host 443` is exfiltration. Only the
+  // zero-I/O port scan is a read.
+  nc: (a) => (hasFlag(a, "-z") && !hasFlag(a, "-l", "--listen", "-e") ? "read" : "mutate"),
   ncat: (a) => RULES.nc(a, undefined as any),
   openssl: (a) => (["genrsa", "genpkey", "req", "x509", "pkcs12", "rand"].includes(a[1]) && hasFlag(a, "-out") ? "mutate" : "read"),
   gzip: (a) => (hasFlag(a, "-c", "--stdout", "-l", "--list", "-t", "--test") ? "read" : "mutate"),
@@ -732,7 +898,7 @@ function permClass(a: string[]): CommandClass {
 }
 
 function aptClass(a: string[]): CommandClass {
-  const verb = a.slice(1).find((x) => !x.startsWith("-")) ?? "";
+  const { verb } = firstVerb(a.slice(1), ["-o", "--option", "-c", "--config-file", "-t", "--target-release", "-a", "--host-architecture"]);
   if (["list", "show", "search", "policy", "depends", "rdepends", "showsrc", "changelog", "madison", "--version", "help"].includes(verb)) return "read";
   if (["remove", "purge", "autoremove", "autopurge", "upgrade", "full-upgrade", "dist-upgrade", "clean", "autoclean"].includes(verb)) return "destructive";
   return "mutate"; // install, update, download, source, build-dep, ...
@@ -768,9 +934,9 @@ function pathTokens(argv: string[], redirects: Redirect[], home: string): string
   const out: string[] = [];
   for (const a of argv.slice(1)) {
     const v = a.includes("=") && !a.startsWith("/") ? a.slice(a.indexOf("=") + 1) : a;
-    if (/^(\/|~|\.\/|\.\.\/)/.test(v)) out.push(expandHome(v, home));
+    if (/^(\/|~|\.\/|\.\.\/)/.test(v)) out.push(normalizePath(v, home));
   }
-  for (const r of redirects) if (/^(\/|~|\.\/|\.\.\/)/.test(r.target)) out.push(expandHome(r.target, home));
+  for (const r of redirects) if (/^(\/|~|\.\/|\.\.\/)/.test(r.target)) out.push(normalizePath(r.target, home));
   return out;
 }
 
@@ -787,10 +953,11 @@ export function classifyCommand(command: string, opts: ClassifyOptions = {}): Cl
       class: "forbidden",
       segments: [],
       reasons: [`could not parse command: ${err instanceof Error ? err.message : String(err)}`],
+      needsNetwork: false,
       parseError: err instanceof Error ? err.message : String(err),
     };
   }
-  if (segments.length === 0) return { class: "forbidden", segments: [], reasons: ["empty command"] };
+  if (segments.length === 0) return { class: "forbidden", segments: [], reasons: ["empty command"], needsNetwork: false };
 
   const classified = segments.map((seg) => classifySegment(seg, { resolveBinary, trusted, home }));
   const overall = classified.reduce<CommandClass>((acc, s) => maxClass(acc, s.class), "read");
@@ -800,6 +967,7 @@ export function classifyCommand(command: string, opts: ClassifyOptions = {}): Cl
     class: overall,
     segments: classified,
     reasons: reasons.length > 0 ? reasons : ["read-only"],
+    needsNetwork: classified.some((s) => NETWORK_READERS.has(baseName(s.effectiveArgv[0] ?? ""))),
     alternative: forbidden ? alternativeFor(forbidden.effectiveArgv[0] ?? "") : undefined,
   };
 }
@@ -826,10 +994,12 @@ function classifySegment(segment: Segment, env: Env): SegmentClassification {
   let redirectClass: CommandClass = "read";
   let redirectReason = "";
   for (const r of segment.redirects) {
-    if (r.op === ">&" || (r.op === ">" && r.target.startsWith("&"))) continue; // fd duplication
+    // fd duplication (`2>&1`, `>&2`) is harmless; `>&file` is a write (adversarial review).
+    if ((r.op === ">&" || (r.op === ">" && r.target.startsWith("&"))) && /^&?\d+-?$/.test(r.target)) continue;
     if (r.op === "<" || r.op === "<<") continue; // input
     if (r.target === "/dev/null" || r.target === "/dev/stderr" || r.target === "/dev/stdout") continue;
-    const target = expandHome(r.target, env.home);
+    const target = normalizePath(r.target, env.home);
+    if (SENSITIVE_READ_PATHS.some((re) => re.test(target))) return { segment, effectiveArgv: segment.argv, class: "forbidden", reason: `redirect writes to secret material ${target}` };
     if (BLOCK_DEVICE.test(target)) return { segment, effectiveArgv: segment.argv, class: "forbidden", reason: `redirect writes to block device ${target}` };
     if (LIFELINE_PATHS.some((re) => re.test(target))) { redirectClass = maxClass(redirectClass, "lifeline"); redirectReason = `writes to lifeline path ${target}`; }
     else { redirectClass = maxClass(redirectClass, "mutate"); redirectReason = redirectReason || `writes to ${target} via redirect`; }
@@ -856,6 +1026,13 @@ function classifySegment(segment: Segment, env: Env): SegmentClassification {
   if (argv.length === 0) return { segment, effectiveArgv: segment.argv, class: "forbidden", reason: "no command after unwrapping" };
 
   const name = baseName(argv[0]);
+
+  // Secret material is off limits for EVERY command, before any per-tool logic: `awk '{print}'
+  // /etc/shadow` used to slip past because the awk branch returned before the path check
+  // (adversarial review). Reading it leaks it; writing it corrupts Miro or locks the user out.
+  const earlyPaths = pathTokens(argv, segment.redirects, env.home);
+  const secret = earlyPaths.find((p) => SENSITIVE_READ_PATHS.some((re) => re.test(p)));
+  if (secret) return { segment, effectiveArgv: argv, class: "forbidden", reason: `touches secret material at ${secret}` };
 
   // Interpreters and shells.
   if (SHELLS.has(name)) {

@@ -52,11 +52,13 @@ TOOLS ARE OUTCOMES, NOT ENDPOINTS. Name and shape them around what an operator w
 (add_media_library, list_active_sessions, complete_setup_wizard), not around URL paths.
 
 CREDENTIALS ARE YOUR JOB. Discover existing ones where you legitimately can (container env,
-config files via read_file). Create an API key or token yourself when the app allows it — that is
-a write, so use http_mutation / shell_command and the user will confirm it. Save every credential
-immediately with secret_store and refer to it only by its reference afterwards. Never paste a
-secret into generated code, a plan, or your own messages. Ask the user (ask_user, secretRef) ONLY
-for a credential that lives outside this machine (a VPN provider login, an external account).
+config files via read_file). When the app needs a NEW password or token (a first admin account,
+an API key), call credential_create — it generates a strong value, stores it under a reference,
+and shows it to the user once; you only ever see the reference. Then pass the reference (never a
+value) into operation bindings via secretHeader, or read it in generated code via ctx.secrets.
+Save credentials you discover with secret_store. NEVER ask the user to invent a password for an
+app on this machine. Ask the user (ask_user, secretRef) ONLY for a credential that lives outside
+this machine (a VPN provider login, an external account).
 
 ASK ABOUT INTENT, INFER IMPLEMENTATION. Before asking anything, check whether the machine already
 answers it. Never ask about ports, networks, paths, or which component to use.
@@ -66,7 +68,15 @@ binding in operations.ts: buildOperations(ctx) returns ExtensionOperation[] whos
 returns plain data — { kind: "http_mutation" | "shell_command" | "file_write", goal, ...params }
 — and the daemon runs it through its engine (confirmation, sandbox, verification, rollback).
 Give every binding a verify (verifyUrl/verifyExpect, or a verify command) and a rollback where the
-app makes one possible. Credentials in a binding only as secretHeader: { name, ref }.
+app makes one possible. Credentials in a binding only as secretHeader: { name, ref }. A binding
+that needs a secret VALUE in its body (e.g. creating the first admin with a password) takes the
+secret REFERENCE as its argument and reads the value from ctx.secrets[name] inside bind().
+
+SCHEMAS: every tool's, diagnostic's and operation's "parameters" is a real JSON Schema built with
+Type from "@miro/sdk" — e.g. parameters: Type.Object({ path: Type.String({ description: "..." }) })
+— or Type.Object({}) for none. Never a plain object like { path: "string" }; validation rejects it.
+In tests.ts, treat bind()'s result as loosely typed data (check bound.kind, bound.goal, and the
+field that matters for that kind).
 
 RECURSE WHEN YOU MUST. If operating this app requires another app you do not know (an indexer
 manager, a download client), call app_learn for it, let it finish, then continue here.
@@ -224,8 +234,12 @@ function buildExtensionWriteTool(
 
       const result = await validateExtension(dir, app, args.baseUrl, secrets, hostMgr);
       if (!result.ok) {
+        // Logged, not just returned to the model: a failed learn otherwise leaves no trace of WHY
+        // (found post-mortem on a run that burned all attempts).
+        console.log(`[mirod] extension_write(${app}) attempt ${attempts} failed:\n  ${result.failures.join("\n  ")}`);
         return textResult({ ok: false, failures: result.failures, attemptsRemaining: MAX_WRITE_ATTEMPTS - attempts });
       }
+      console.log(`[mirod] extension_write(${app}) attempt ${attempts} validated`);
 
       const existing = store.getExtension(db, app);
       const version = (existing?.version ?? 0) + 1;
@@ -267,6 +281,8 @@ export interface LearnAgentOptions {
   operationCtx?: OperationToolContext;
   /** Needed for recursion — a nested app_learn resolves its own codegen model the same way. */
   resolveCodegenModel: () => Promise<CodegenSelection | null>;
+  /** This session's tool calls render nested under this activity node (the app_learn call). */
+  parentActivityId?: string;
   maxTurns?: number;
 }
 
@@ -274,7 +290,6 @@ const DEFAULT_MAX_TURNS = 40; // ponytail: a guess, tuned by live runs — resea
 
 export async function spawnLearningAgent(o: LearnAgentOptions): Promise<{ text: string; promoted: boolean }> {
   const { tool: writeTool, wasPromoted } = buildExtensionWriteTool(o.app, o.db, o.hostMgr, o.getSecret);
-  const indent = "  ".repeat(o.depth + 1);
 
   // Lazy import breaks the learn.ts <-> learn-agent.ts cycle for recursion: learn.ts imports
   // spawnLearningAgent statically; this side only needs runLearnFlow at call time.
@@ -283,7 +298,7 @@ export async function spawnLearningAgent(o: LearnAgentOptions): Promise<{ text: 
     label: "Learn another app",
     description: "Learn a dependency you discovered you need (an indexer manager, a download client, ...). Runs a nested learning session and returns when it is done; then continue here.",
     parameters: Type.Object({ app: Type.String(), hint: Type.Optional(Type.String()) }),
-    execute: async (_id: string, args: { app: string; hint?: string }) => {
+    execute: async (id: string, args: { app: string; hint?: string }) => {
       const { runLearnFlow } = await import("./learn");
       const r = await runLearnFlow({
         app: args.app,
@@ -299,6 +314,7 @@ export async function spawnLearningAgent(o: LearnAgentOptions): Promise<{ text: 
         send: o.send,
         waitForAnswer: o.waitForAnswer,
         operationCtx: o.operationCtx,
+        parentActivityId: id, // nest the next level under this call
       });
       return textResult(r);
     },
@@ -334,7 +350,10 @@ export async function spawnLearningAgent(o: LearnAgentOptions): Promise<{ text: 
   });
 
   try {
-    const text = await runTurn(agent, o.goal, (label) => o.send({ type: "activity", text: `${indent}├─ ${label}` }));
+    const text = await runTurn(agent, o.goal, {
+      parentActivityId: o.parentActivityId,
+      onActivity: (node) => o.send({ type: "activity", ...node }),
+    });
     return { text, promoted: wasPromoted() };
   } finally {
     o.hostMgr.closeBrowserSession(o.app);

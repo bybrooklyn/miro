@@ -1,4 +1,5 @@
 import type { OperationKind } from "../engine";
+import { isLocalOrPrivateUrl } from "../classify";
 
 // The generic HTTP write (PLAN.md §5.4 B). This is how a learned extension's declarative write
 // bindings, and the main agent directly, change an app's state through its API: the plan shows
@@ -43,25 +44,8 @@ export function takeOutput(params: object): HttpMutationOutput | undefined {
   return r;
 }
 
-/** Only hosts on this machine or its private network. The URL is in the plan and the user sees it;
- * a public destination would be an egress the classifier's rules exist to prevent. ponytail: a
- * fixed private-range check, no allowlist config — add one when a legitimate public API shows up. */
-export function isLocalOrPrivateUrl(raw: string): boolean {
-  let u: URL;
-  try {
-    u = new URL(raw);
-  } catch {
-    return false;
-  }
-  if (u.protocol !== "http:" && u.protocol !== "https:") return false;
-  const h = u.hostname.replace(/^\[|\]$/g, "");
-  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".lan") || h.endsWith(".home.arpa") || h.endsWith(".internal")) return true;
-  if (h === "::1" || h.startsWith("fe80:") || h.startsWith("fd") || h.startsWith("fc")) return true;
-  const m = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
-  if (!m) return !h.includes("."); // a bare single-label hostname is a LAN name
-  const [a, b] = [Number(m[1]), Number(m[2])];
-  return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
-}
+// The URL guard lives with the classifier (curl/wget use it too); re-exported for existing imports.
+export { isLocalOrPrivateUrl };
 
 async function request(
   method: string,
@@ -70,7 +54,9 @@ async function request(
 ): Promise<{ status: number; body: string }> {
   const headers: Record<string, string> = { ...(opts.headers ?? {}) };
   if (opts.body !== undefined && opts.contentType) headers["Content-Type"] = opts.contentType;
-  const res = await fetch(url, { method, headers, body: opts.body, signal: AbortSignal.timeout(opts.timeoutMs ?? 30_000) });
+  // redirect: "manual" — a compromised local app must not be able to 302 the secret header to a
+  // public host (adversarial review). A redirect is reported as its 3xx status, never followed.
+  const res = await fetch(url, { method, headers, body: opts.body, redirect: "manual", signal: AbortSignal.timeout(opts.timeoutMs ?? 30_000) });
   return { status: res.status, body: (await res.text()).slice(0, 64 * 1024) };
 }
 
@@ -89,8 +75,11 @@ export function httpMutationKind(getSecret: (ref: string) => string | null): Ope
     kind: "http.mutation",
 
     async describe(p) {
-      if (!isLocalOrPrivateUrl(p.url)) throw new Error(`refused: ${p.url} is not a local or private-network address`);
-      if (p.rollback && !isLocalOrPrivateUrl(p.rollback.url)) throw new Error(`refused: rollback URL ${p.rollback.url} is not local`);
+      // Every URL the secret header could be sent to, not just the primary one (adversarial
+      // review: captureUrl pointed at a public host exfiltrated the credential).
+      for (const [label, url] of [["url", p.url], ["rollback URL", p.rollback?.url], ["captureUrl", p.captureUrl], ["verifyUrl", p.verifyUrl]] as const) {
+        if (url && !isLocalOrPrivateUrl(url)) throw new Error(`refused: ${label} ${url} is not a local or private-network address`);
+      }
       if (p.headers && Object.keys(p.headers).some((k) => /authorization|token|api[-_]?key|cookie|secret|password/i.test(k))) {
         throw new Error("refused: credentials must be injected via secretHeader (by reference), never as a literal header");
       }

@@ -138,7 +138,7 @@ test("runOperation: auto-approved, verify succeeds -> committed, no rollback cal
 
   expect(result.outcome).toBe("committed");
   expect(kind.calls).toEqual(["describe", "captureState", "apply", "verify"]);
-  expect(events.map((e) => e.type)).toEqual(["operation_plan", "activity", "activity", "activity", "operation_result"]);
+  expect(events.map((e) => e.type)).toEqual(["operation_plan", "operation_progress", "operation_progress", "operation_progress", "operation_result"]);
   const last = events[events.length - 1] as Extract<ServerEvent, { type: "operation_result" }>;
   expect(last.outcome).toBe("committed");
 });

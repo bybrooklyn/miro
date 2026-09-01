@@ -140,11 +140,21 @@ export interface FileWriteBinding {
   mode?: number;
 }
 
-export type OperationBinding = HttpMutationBinding | ShellCommandBinding | FileWriteBinding;
+/** What bind() returns. Deliberately loose (kind + goal + whatever that kind needs) rather than a
+ * discriminated union: generated tests naturally write `bound.url`, and a union made that a type
+ * error that cost a real learn run three attempts. The daemon validates the fields per kind at
+ * learn time (validate.ts dryRunBinding) and again at run time; the specific interfaces above
+ * document the exact shapes. */
+export interface OperationBinding {
+  kind: "http_mutation" | "shell_command" | "file_write";
+  goal: string;
+  [field: string]: unknown;
+}
 
 /** A write the extension offers, as data: the daemon binds the caller's args to one of its own
  * operation kinds and runs it with full engine semantics. The extension never performs the write
- * itself and never contains rollback logic. */
+ * itself and never contains rollback logic. `parameters` MUST be a JSON Schema object —
+ * Type.Object({...}) from "@miro/sdk" — it becomes the tool schema the agent calls with. */
 export interface ExtensionOperation<P = any> {
   name: string;
   label: string;

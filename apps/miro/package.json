@@ -1,10 +1,12 @@
 {
   "name": "miro",
+  "license": "AGPL-3.0-only",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "dependencies": {
     "@miro/protocol": "workspace:*",
+    "@miro/ui-model": "workspace:*",
     "@number0/iroh": "1.1.0",
     "@opentui/core": "^0.5.9",
     "@opentui/react": "^0.5.9",

@@ -253,8 +253,24 @@ async function resolveReflectionModel(): Promise<Model<any> | null> {
   return pickDefaultModel(models, getStoredKey, "cheapest") ?? (await resolveChatSelection())?.model ?? null;
 }
 
+/** Remembered from the last chat-model resolution so the status line can name it. */
+let lastChatModelId: string | undefined;
+function statusEvent(): ServerEvent {
+  return {
+    type: "status",
+    server: "home",
+    health: "healthy",
+    model: lastChatModelId,
+    privilege: typeof process.getuid === "function" && process.getuid() === 0 ? "root" : "user",
+  };
+}
+
 async function handleChat(text: string, send: (event: ServerEvent) => void, state: ConnState): Promise<void> {
   const chat = await resolveChatSelection();
+  if (chat && chat.model.id !== lastChatModelId) {
+    lastChatModelId = chat.model.id;
+    send(statusEvent());
+  }
   if (!chat) {
     send({
       type: "reply",
@@ -299,7 +315,10 @@ async function handleChat(text: string, send: (event: ServerEvent) => void, stat
     state.lastExtensionVersion = extensionVersions;
   }
   recordEvent(db, "chat", text);
-  const reply = await runTurn(state.agent, text, (label) => send({ type: "activity", text: label }));
+  const reply = await runTurn(state.agent, text, {
+    onActivity: (node) => send({ type: "activity", ...node }),
+    onDelta: (delta) => send({ type: "reply_delta", text: delta }),
+  });
   recordEvent(db, "chat", reply);
   // runTurn surfaces provider errors as text now, so an empty reply here means the model genuinely
   // ended the turn with no final text (e.g. tool calls only) — say so rather than pretending.
@@ -329,7 +348,7 @@ function createConnectionState(send: (event: ServerEvent) => void): ConnState {
       resolve(msg.value);
     } else if (msg.type === "answer" && msg.id === "personality") {
       setSetting("personality", msg.value);
-      send({ type: "status", server: "home", health: "healthy" });
+      send(statusEvent());
     } else if (msg.type === "answer" && msg.id === "provider_choice") {
       state.pendingProvider = msg.value;
       const entry = PROVIDER_CATALOG.find((p) => p.provider === msg.value);
@@ -403,7 +422,7 @@ function createConnectionState(send: (event: ServerEvent) => void): ConnState {
       ],
     });
   } else {
-    send({ type: "status", server: "home", health: "healthy" });
+    send(statusEvent());
   }
 
   return state;

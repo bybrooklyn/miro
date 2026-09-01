@@ -15,7 +15,7 @@ import type { HostRequest, HostResponse, HostToolSpec } from "./host-protocol";
 // Pure / CLI-backed modules with no path to the DB or secrets — safe to import into this process.
 // They let generated code's ctx.exec/ctx.readFile be gated by the same classifier and sandbox the
 // daemon uses (PLAN.md §5.7), without a reverse RPC.
-import { classifyCommand, isSensitivePath } from "../operations/classify";
+import { classifyCommand, isSensitivePath, redactSecretsInText } from "../operations/classify";
 import { runSandboxed, sandboxAvailable } from "../operations/sandbox";
 
 function send(res: HostResponse): void {
@@ -177,12 +177,14 @@ function createReadPrimitives(): Pick<ExtensionContext, "exec" | "readFile"> {
       const c = classifyCommand(command);
       if (c.class !== "read") throw new Error(`refused: ${command} is ${c.class} (${c.reasons.join("; ")}) — extension code may only read; writes are operation bindings`);
       if (!(await sandboxAvailable())) throw new Error("refused: sandbox unavailable");
-      const r = await runSandboxed(["sh", "-c", command], { writableRoots: [], network: true, timeoutMs: 60_000 });
-      return { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr };
+      // Network only for network-inspecting commands, like shell_inspect — generated code holding
+      // ctx.secrets must not be able to curl them anywhere (adversarial review).
+      const r = await runSandboxed(["sh", "-c", command], { writableRoots: [], network: c.needsNetwork, timeoutMs: 60_000 });
+      return { exitCode: r.exitCode, stdout: redactSecretsInText(r.stdout), stderr: redactSecretsInText(r.stderr) };
     },
     async readFile(path) {
       if (isSensitivePath(path)) throw new Error(`refused: ${path} is secret material`);
-      return readFileSync(path).subarray(0, 256 * 1024).toString("utf-8");
+      return redactSecretsInText(readFileSync(path).subarray(0, 256 * 1024).toString("utf-8"));
     },
   };
 }

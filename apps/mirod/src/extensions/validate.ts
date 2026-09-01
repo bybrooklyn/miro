@@ -112,6 +112,14 @@ export async function validateExtension(
   let tools: HostToolSpec[] = [];
   try {
     tools = await hostMgr.listTools(dir, app, baseUrl, secrets);
+    // Every spec's `parameters` becomes a tool schema the main agent calls with. A generated
+    // `parameters: { name: "string" }` (not a schema) passed everything else and would have made
+    // the provider reject the whole tool list at the next chat turn — found in a real learn run.
+    for (const spec of tools) {
+      const failure = invalidSchema(spec.parameters);
+      if (failure) failures.push(`${spec.kind} ${spec.name}: parameters ${failure} — use Type.Object({ ... }) from "@miro/sdk"`);
+    }
+    if (failures.length > 0) return { ok: false, failures, tools };
     for (const diag of tools.filter((t) => t.kind === "diagnostic")) {
       if (requiresArguments(diag.parameters)) continue; // scope limit: no-arg diagnostics only, see module comment
       try {
@@ -139,6 +147,20 @@ export async function validateExtension(
   }
 
   return { ok: failures.length === 0, failures, tools };
+}
+
+/** A tool/operation `parameters` value must be a JSON Schema object schema. Returns why it isn't,
+ * or null. `{}` (no parameters) is accepted as the empty object schema. */
+export function invalidSchema(parameters: unknown): string | null {
+  if (parameters === null || typeof parameters !== "object" || Array.isArray(parameters)) return "is not an object schema";
+  const p = parameters as Record<string, unknown>;
+  if (Object.keys(p).length === 0) return null;
+  if (p.type !== "object") return `has type ${JSON.stringify(p.type)} — must be "object"`;
+  if (p.properties !== undefined && (typeof p.properties !== "object" || p.properties === null)) return "has a non-object properties field";
+  for (const [name, prop] of Object.entries((p.properties ?? {}) as Record<string, unknown>)) {
+    if (prop === null || typeof prop !== "object" || Array.isArray(prop)) return `property ${name} is not a schema (got ${JSON.stringify(prop)})`;
+  }
+  return null;
 }
 
 /** Describe a bound operation through the daemon's own kind without applying anything. Returns a

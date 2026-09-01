@@ -1,9 +1,8 @@
 import { Type, type Static } from "@earendil-works/pi-ai";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { classifyCommand, isSensitivePath } from "../operations/classify";
+import { existsSync, statSync, openSync, readSync, closeSync } from "node:fs";
+import { classifyCommand, isSensitivePath, isLocalOrPrivateUrl, redactSecretsInText } from "../operations/classify";
 import { runSandboxed, sandboxAvailable } from "../operations/sandbox";
-import { isLocalOrPrivateUrl } from "../operations/kinds/http-mutation";
 import { commandExists, run } from "../inventory/exec";
 
 // Read-only primitives that need a little context (PLAN.md §5.4 B): a sandboxed shell for
@@ -17,13 +16,7 @@ function textResult(details: unknown): AgentToolResult<unknown> {
 }
 
 const shellInspectParams = Type.Object({
-  command: Type.String({ description: "A read-only inspection command (ip route, docker inspect, ss -tlnp, cat /etc/x, journalctl -u x, ...). Anything that would change state is refused — use shell_command for that." }),
-  // Host network namespace by default: `ip route`, `ss`, `nft list` inspect *this* machine's
-  // network, which a fresh, empty namespace would hide entirely (found live — `ip route show`
-  // returned nothing under --unshare-net). The classifier keeps the command read-only; egress
-  // through a GET is the accepted, logged residual risk (PLAN.md §5.7).
-  isolateNetwork: Type.Optional(Type.Boolean({ description: "Run in an empty network namespace (no network at all). Default false — network-state commands need the host's namespace." })),
-  cwd: Type.Optional(Type.String()),
+  command: Type.String({ description: "A read-only inspection command (ip route, docker inspect, ss -tlnp, cat /etc/x, journalctl -u x, ...). Anything that would change state is refused — use shell_command for that. Use absolute paths." }),
 });
 
 const readFileParams = Type.Object({
@@ -45,18 +38,21 @@ const netCaptureParams = Type.Object({
   mode: Type.Optional(Type.Unsafe<"summary" | "http">({ type: "string", enum: ["summary", "http"], description: "summary = one line per packet (time, src→dst, protocol, info). http = decoded plaintext HTTP requests/responses only (method, URI, status, body). Default summary." })),
 });
 
-/** Payload lines that look like credentials are masked before the model sees a capture.
- * ponytail: regex over common shapes, not a full parser — the real protection is that captures
- * of plaintext logins are rare on a local network and the model never stores what it sees. */
-function redactPayload(text: string): string {
-  return text
-    .replace(/("?(?:password|passwd|pw|token|api_?key|secret|authorization|x-emby-token|x-mediabrowser-token)"?\s*[:=]\s*"?)([^"&\s,}]+)/gi, "$1[redacted]")
-    .replace(/(Authorization:\s*)(\S.*)/gi, "$1[redacted]")
-    .replace(/(MediaBrowser[^"\n]*Token=")([^"]+)/gi, "$1[redacted]");
-}
-
 export interface ReadToolContext {
   getSecret: (ref: string) => string | null;
+}
+
+/** Reads at most `max` bytes from `offset` without loading the whole file — `read_file /dev/zero`
+ * or a multi-GB log must not take the daemon down (adversarial review). */
+function readCapped(path: string, offset: number, max: number): Buffer {
+  const fd = openSync(path, "r");
+  try {
+    const buf = Buffer.alloc(max);
+    const n = readSync(fd, buf, 0, max, offset);
+    return buf.subarray(0, n);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 export function buildReadTools(ctx: ReadToolContext) {
@@ -68,7 +64,7 @@ export function buildReadTools(ctx: ReadToolContext) {
       name: "shell_inspect",
       label: "Inspect (shell)",
       description:
-        "Run a read-only shell command in a read-only filesystem sandbox and return its output. Use for ad-hoc inspection: routes, sockets, container internals, config files, logs. Commands that would change state are refused with the reason — use shell_command for those.",
+        "Run a read-only shell command in a read-only filesystem sandbox and return its output. Use for ad-hoc inspection: routes, sockets, container internals, config files, logs. Commands that would change state are refused with the reason — use shell_command for those. Secret material (keys, Miro's own state, credential files) is refused.",
       parameters: shellInspectParams,
       execute: async (_id: string, params: Static<typeof shellInspectParams>) => {
         const c = classifyCommand(params.command);
@@ -76,23 +72,26 @@ export function buildReadTools(ctx: ReadToolContext) {
           return textResult({ refused: true, class: c.class, reasons: c.reasons, hint: c.class === "forbidden" ? c.alternative : "This changes state — run it with shell_command instead, declaring what it writes." });
         }
         if (!(await sandbox())) return textResult({ unavailable: true, reason: "bubblewrap is not installed; refusing to run unsandboxed" });
-        const r = await runSandboxed(["sh", "-c", params.command], { writableRoots: [], network: !(params.isolateNetwork ?? false), cwd: params.cwd, timeoutMs: 60_000 });
-        return textResult({ exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr, timedOut: r.timedOut, truncated: r.truncated });
+        // Host network namespace only for commands that inspect the network (ip, ss, dig, local
+        // curl ...); everything else runs with no network at all, so a read can never be an egress.
+        const r = await runSandboxed(["sh", "-c", params.command], { writableRoots: [], network: c.needsNetwork, timeoutMs: 60_000 });
+        return textResult({ exitCode: r.exitCode, stdout: redactSecretsInText(r.stdout), stderr: redactSecretsInText(r.stderr), timedOut: r.timedOut, truncated: r.truncated });
       },
     },
     {
       name: "read_file",
       label: "Read file",
-      description: "Read a file's contents (capped). Secret material — private keys, /etc/shadow, Miro's own key and database — is refused.",
+      description: "Read a file's contents (capped). Secret material — private keys, /etc/shadow, Miro's own key and database, credential files — is refused.",
       parameters: readFileParams,
       execute: async (_id: string, params: Static<typeof readFileParams>) => {
         if (isSensitivePath(params.path)) return textResult({ refused: true, reason: `${params.path} is secret material` });
         if (!existsSync(params.path)) return textResult({ missing: true, path: params.path });
         const st = statSync(params.path);
         if (st.isDirectory()) return textResult({ directory: true, path: params.path, hint: "use shell_inspect with ls" });
+        if (!st.isFile()) return textResult({ refused: true, reason: `${params.path} is not a regular file` });
         const max = Math.min(params.maxBytes ?? 65_536, 1_048_576);
         const offset = params.offset ?? 0;
-        const buf = readFileSync(params.path).subarray(offset, offset + max);
+        const buf = readCapped(params.path, offset, max);
         const binary = buf.subarray(0, 1024).includes(0);
         return textResult({
           path: params.path,
@@ -100,14 +99,14 @@ export function buildReadTools(ctx: ReadToolContext) {
           offset,
           returned: buf.length,
           truncated: offset + buf.length < st.size,
-          ...(binary ? { binary: true, note: "binary content omitted" } : { content: buf.toString("utf-8") }),
+          ...(binary ? { binary: true, note: "binary content omitted" } : { content: redactSecretsInText(buf.toString("utf-8")) }),
         });
       },
     },
     {
       name: "http_get",
       label: "HTTP GET",
-      description: "GET a local or private-network URL and return status, headers, and body (capped). Credentials only as a secretHeader reference — never pasted literally.",
+      description: "GET a local or private-network URL and return status, headers, and body (capped). Credentials only as a secretHeader reference — never pasted literally. Redirects are reported, not followed.",
       parameters: httpGetParams,
       execute: async (_id: string, params: Static<typeof httpGetParams>) => {
         if (!isLocalOrPrivateUrl(params.url)) return textResult({ refused: true, reason: `${params.url} is not a local or private-network address` });
@@ -121,11 +120,11 @@ export function buildReadTools(ctx: ReadToolContext) {
           headers[params.secretHeader.name] = value;
         }
         try {
-          const res = await fetch(params.url, { method: "GET", headers, signal: AbortSignal.timeout(30_000) });
+          const res = await fetch(params.url, { method: "GET", headers, redirect: "manual", signal: AbortSignal.timeout(30_000) });
           const body = (await res.text()).slice(0, 65_536);
           const resHeaders: Record<string, string> = {};
           res.headers.forEach((v, k) => { if (!/set-cookie|authorization/i.test(k)) resHeaders[k] = v; });
-          return textResult({ status: res.status, headers: resHeaders, body });
+          return textResult({ status: res.status, headers: resHeaders, body: redactSecretsInText(body) });
         } catch (err) {
           return textResult({ error: err instanceof Error ? err.message : String(err) });
         }
@@ -154,13 +153,13 @@ export function buildReadTools(ctx: ReadToolContext) {
           const capped = lines.slice(0, 500).map((line, i) => {
             // tshark emits http.file_data (the last field in http mode) hex-encoded; decode it so
             // the model reads the body, then mask anything credential-shaped.
-            if (mode !== "http" || i === 0) return redactPayload(line);
+            if (mode !== "http" || i === 0) return redactSecretsInText(line);
             const cells = line.split("|");
             const body = cells[cells.length - 1];
             if (body && body.length % 2 === 0 && /^[0-9a-f]+$/i.test(body)) {
               cells[cells.length - 1] = Buffer.from(body, "hex").toString("utf-8").replace(/[\r\n]+/g, " ").slice(0, 2000);
             }
-            return redactPayload(cells.join("|"));
+            return redactSecretsInText(cells.join("|"));
           });
           return textResult({ mode, interface: params.interface ?? "any", filter: params.filter ?? null, durationSeconds: duration, packets: lines.length - 1, truncated: lines.length > capped.length, lines: capped });
         } catch (err) {

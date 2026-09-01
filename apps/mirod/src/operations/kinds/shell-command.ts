@@ -1,5 +1,5 @@
 import type { OperationKind } from "../engine";
-import { classifyCommand } from "../classify";
+import { classifyCommand, normalizePath, isSensitivePath, isLifelinePath, maxClass } from "../classify";
 import { runSandboxed, type SandboxResult } from "../sandbox";
 import { snapshotPaths, restoreSnapshot, type Snapshot } from "../snapshot";
 
@@ -44,17 +44,24 @@ export const shellCommandKind: OperationKind<ShellCommandParams, ShellCommandCap
       const r = classifyCommand(p.rollback);
       if (r.class === "forbidden") throw new Error(`refused: rollback command — ${r.reasons.join("; ")}`);
     }
+    // The declared scope is part of what is being approved (adversarial review: `tar -C /etc`
+    // with writes:["/etc"] classified from the command text alone stayed `mutate`).
+    const writes = p.writes.map((w) => normalizePath(w));
+    const secret = writes.find((w) => isSensitivePath(w));
+    if (secret) throw new Error(`refused: declared write scope ${secret} is Miro's own state or secret material`);
+    if (writes.includes("/")) throw new Error("refused: a command cannot declare the whole filesystem writable");
+    const cls = writes.some((w) => isLifelinePath(w)) ? maxClass(c.class, "lifeline") : c.class;
     const warning =
-      c.class === "lifeline"
+      cls === "lifeline"
         ? "can affect SSH, networking, or Miro itself"
-        : c.class === "destructive"
+        : cls === "destructive"
           ? "destroys data or is hard to reverse"
           : undefined;
     return {
       summary: `Run: ${p.command}`,
       autoApprove: false, // ponytail: maturity-based auto-approve for mutate lands with the ladder (§5.4 G)
-      class: c.class,
-      writes: p.writes,
+      class: cls,
+      writes,
       network: p.network,
       warning,
       details: { command: p.command, reasons: c.reasons, verify: p.verify ?? null, rollback: p.rollback ?? null, cwd: p.cwd ?? null },
@@ -66,7 +73,9 @@ export const shellCommandKind: OperationKind<ShellCommandParams, ShellCommandCap
   },
 
   async apply(p) {
-    const r = await runSandboxed(["sh", "-c", p.command], { writableRoots: p.writes, network: p.network, cwd: p.cwd, timeoutMs: p.timeoutMs });
+    // Capabilities kept: a mutate operation may legitimately need root's (apt, dpkg, chown). Reads
+    // drop them all; this is confirmed, scoped, snapshotted, and verified instead.
+    const r = await runSandboxed(["sh", "-c", p.command], { writableRoots: p.writes, network: p.network, cwd: p.cwd, timeoutMs: p.timeoutMs, keepCapabilities: true });
     outputs.set(p, r);
     if (r.exitCode !== 0) {
       throw new Error(`exit ${r.exitCode}${r.timedOut ? " (timed out)" : ""}: ${(r.stderr || r.stdout).trim().slice(0, 2000)}`);
@@ -83,7 +92,7 @@ export const shellCommandKind: OperationKind<ShellCommandParams, ShellCommandCap
   async rollback(p, captured) {
     await restoreSnapshot(captured.snapshot).catch((err) => console.error("[mirod] snapshot restore failed", err));
     if (p.rollback) {
-      await runSandboxed(["sh", "-c", p.rollback], { writableRoots: p.writes, network: p.network, timeoutMs: 60_000 }).catch(() => {});
+      await runSandboxed(["sh", "-c", p.rollback], { writableRoots: p.writes, network: p.network, timeoutMs: 60_000, keepCapabilities: true }).catch(() => {});
     }
   },
 };

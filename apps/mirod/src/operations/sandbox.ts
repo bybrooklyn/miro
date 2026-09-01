@@ -30,6 +30,9 @@ export interface SandboxOptions {
   stdin?: string;
   /** Output is truncated past this many bytes (per stream) with a marker. */
   maxOutputBytes?: number;
+  /** Keep the caller's capabilities inside the sandbox. Off (the default, for reads) drops every
+   * capability; a confirmed mutate operation that genuinely needs root's (apt, chown) turns it on. */
+  keepCapabilities?: boolean;
 }
 
 export interface SandboxResult {
@@ -46,6 +49,9 @@ export const DEFAULT_MAX_OUTPUT_BYTES = 256 * 1024;
 /** The bubblewrap argv for a given policy — exported so tests and the plan display can show the
  * exact containment a command will run under. */
 export function bwrapArgs(opts: SandboxOptions): string[] {
+  // --unshare-all puts the command in fresh user/pid/ipc/uts/cgroup/net namespaces; the mounts it
+  // sees are locked there, so even a root payload cannot `mount -o remount,rw /` its way out
+  // (adversarial review). --share-net re-shares the host network namespace when declared.
   const args = [
     "bwrap",
     "--ro-bind", "/", "/",
@@ -53,7 +59,9 @@ export function bwrapArgs(opts: SandboxOptions): string[] {
     "--proc", "/proc",
     "--die-with-parent",
     "--new-session",
-    "--unshare-pid",
+    "--unshare-all",
+    ...(opts.network ? ["--share-net"] : []),
+    ...(opts.keepCapabilities ? [] : ["--cap-drop", "ALL"]),
   ];
   const roots = [...new Set(opts.writableRoots.map((p) => p.replace(/\/+$/, "") || "/"))];
   if (roots.includes("/")) throw new Error("a sandbox cannot declare / writable");
@@ -68,7 +76,6 @@ export function bwrapArgs(opts: SandboxOptions): string[] {
     args.push("--ro-bind", root, root);
   }
   for (const root of roots) args.push("--bind", root, root);
-  if (!opts.network) args.push("--unshare-net");
   if (opts.cwd) args.push("--chdir", opts.cwd);
   args.push("--");
   return args;

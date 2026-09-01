@@ -51,7 +51,7 @@ export function buildLearnTools(ctx: LearnToolContext) {
       description:
         "Learn a self-hosted app you do not have tools for yet: inspect how it is deployed here, research it, choose its best control method, generate and validate an extension (read tools + write operations), and record its operational model. Its ext_<app>_* tools become available to you immediately in this same task — continue with the original request afterwards. Also use it for a dependency you discover you need.",
       parameters: learnParams,
-      execute: async (_id: string, params: { app: string; hint?: string }): Promise<AgentToolResult<unknown>> => {
+      execute: async (id: string, params: { app: string; hint?: string }): Promise<AgentToolResult<unknown>> => {
         const result = await runLearnFlow({
           app: params.app,
           hint: params.hint,
@@ -65,6 +65,7 @@ export function buildLearnTools(ctx: LearnToolContext) {
           send: ctx.send,
           waitForAnswer: ctx.waitForAnswer,
           operationCtx: ctx.operationCtx,
+          parentActivityId: id, // the learning session's tool calls nest under this app_learn call
         });
         const addedToolNames = result.promoted && ctx.onPromoted ? ctx.onPromoted(params.app.trim().toLowerCase()) : [];
         return {

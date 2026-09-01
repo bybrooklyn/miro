@@ -25,6 +25,10 @@ export interface StatusEvent {
   type: "status";
   server: string;
   health: "healthy" | "degraded";
+  /** The chat model in use, for the client's status line. Absent until a provider is connected. */
+  model?: string;
+  /** Whether the daemon runs as root (the system-service layout) or unprivileged. */
+  privilege?: "root" | "user";
 }
 
 export interface QuestionOption {
@@ -34,21 +38,53 @@ export interface QuestionOption {
 
 export interface QuestionEvent {
   type: "question";
+  /** Prefix names the kind: `op_confirm:`, `lifeline_confirm:`, `plan_confirm:`, `plan_change:`, `ask:`. */
   id: string;
   prompt: string;
   /** Empty = free-text answer (the client shows an input instead of a selector). */
   options: QuestionOption[];
+  /** The daemon acts on its own if no answer arrives within this window (lifeline auto-revert). */
+  timeoutMs?: number;
 }
 
+/** The final text of a turn. Always sent, even when reply_delta streamed the same text first. */
 export interface ReplyEvent {
   type: "reply";
   text: string;
 }
 
-/** One step of visible tool activity while Miro investigates (plan §20). */
+/** A streamed fragment of the reply being written. Concatenate in order; `reply` closes it. */
+export interface ReplyDeltaEvent {
+  type: "reply_delta";
+  text: string;
+}
+
+/** One node of the tool-activity tree (plan §20). Sent once with status "running" when a tool
+ * call starts and again with the same id when it finishes. `parentId` nests a learning agent's
+ * calls under the app_learn call that spawned it, recursively. */
 export interface ActivityEvent {
   type: "activity";
+  id: string;
+  parentId?: string;
+  label: string;
+  status: "running" | "done" | "failed";
+  /** Short outcome text on done/failed (an error message, a count) — never a full payload. */
+  detail?: string;
+}
+
+/** A one-off line that is not part of a tool tree: a repair gave up, a credential was created.
+ * `credential` carries a value the owner must save — the only time a secret crosses the wire. */
+export interface NoticeEvent {
+  type: "notice";
+  level: "info" | "warn" | "credential";
   text: string;
+}
+
+/** Phase progress of a running operation, attached to its operation_plan by id. */
+export interface OperationProgressEvent {
+  type: "operation_progress";
+  id: string;
+  phase: "capturing" | "applying" | "verifying" | "awaiting_reachability";
 }
 
 /** Asks the client for a free-text value (e.g. pasting an API key) rather than a selection. */
@@ -101,9 +137,12 @@ export type ServerEvent =
   | StatusEvent
   | QuestionEvent
   | ReplyEvent
+  | ReplyDeltaEvent
   | ActivityEvent
+  | NoticeEvent
   | SecretPromptEvent
   | OperationPlanEvent
+  | OperationProgressEvent
   | OperationResultEvent
   | SystemPlanEvent;
 

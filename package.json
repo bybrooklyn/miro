@@ -1,5 +1,6 @@
 {
   "name": "miro",
+  "license": "AGPL-3.0-only",
   "private": true,
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {

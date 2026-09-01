@@ -4,6 +4,7 @@ import type { OperationKind } from "../engine";
 import { isLifelinePath, isSensitivePath } from "../classify";
 import { trashDestination, moveToTrash, restoreFromTrash, TRASH_DIR, type TrashEntry } from "../trash";
 import { sizeOf } from "../snapshot";
+import { realTarget } from "./file-write";
 
 // The only way anything gets deleted (PLAN.md §5.7): a move into Miro's trash, recoverable, with
 // rollback being the move back. The destination is computed in captureState and carried in the
@@ -29,11 +30,12 @@ export const fileDeleteKind: OperationKind<FileDeleteParams, FileDeleteCaptured>
 
   async describe(p) {
     if (!existsSync(p.path)) throw new Error(`${p.path} does not exist`);
-    if (isSensitivePath(p.path) || p.path.includes("/.miro/") || p.path.endsWith("/.miro")) {
+    const real = realTarget(p.path);
+    if (isSensitivePath(p.path) || isSensitivePath(real)) {
       throw new Error(`refused: ${p.path} is Miro's own state or secret material`);
     }
     const st = statSync(p.path);
-    const lifeline = isLifelinePath(p.path);
+    const lifeline = isLifelinePath(p.path) || isLifelinePath(real);
     return {
       summary: `Move ${p.path} to trash (${st.isDirectory() ? "directory" : "file"}, ${sizeOf(p.path)} bytes)`,
       autoApprove: false,

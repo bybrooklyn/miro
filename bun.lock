@@ -15,6 +15,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@miro/protocol": "workspace:*",
+        "@miro/ui-model": "workspace:*",
         "@number0/iroh": "1.1.0",
         "@opentui/core": "^0.5.9",
         "@opentui/react": "^0.5.9",
@@ -42,6 +43,13 @@
       "version": "0.0.0",
       "dependencies": {
         "@earendil-works/pi-ai": "^0.84.4",
+      },
+    },
+    "packages/ui-model": {
+      "name": "@miro/ui-model",
+      "version": "0.0.0",
+      "dependencies": {
+        "@miro/protocol": "workspace:*",
       },
     },
   },
@@ -109,6 +117,8 @@
     "@miro/protocol": ["@miro/protocol@workspace:packages/protocol"],
 
     "@miro/sdk": ["@miro/sdk@workspace:packages/sdk"],
+
+    "@miro/ui-model": ["@miro/ui-model@workspace:packages/ui-model"],
 
     "@number0/iroh": ["@number0/iroh@1.1.0", "", { "optionalDependencies": { "@number0/iroh-android-arm-eabi": "1.1.0", "@number0/iroh-android-arm64": "1.1.0", "@number0/iroh-darwin-arm64": "1.1.0", "@number0/iroh-linux-arm-gnueabihf": "1.1.0", "@number0/iroh-linux-arm-musleabihf": "1.1.0", "@number0/iroh-linux-arm64-gnu": "1.1.0", "@number0/iroh-linux-arm64-musl": "1.1.0", "@number0/iroh-linux-x64-gnu": "1.1.0", "@number0/iroh-linux-x64-musl": "1.1.0", "@number0/iroh-win32-arm64-msvc": "1.1.0", "@number0/iroh-win32-x64-msvc": "1.1.0" } }, "sha512-DlrJ4Sza5MiI+WwQg63lg+7eSbxlfQR2Bd+wVDjo7XTqenALD2OCRoSfPTuD12IhcvDbVHr4l7qH48DilocqYA=="],
 

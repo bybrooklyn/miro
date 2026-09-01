@@ -40,6 +40,21 @@ test("ask_user batches questions, returns answers by key, and stores secrets by 
   expect(free.options).toEqual([]); // free text
 });
 
+test("credential_create stores a strong value by reference, shows it to the user once, never returns it to the model", async () => {
+  const h = harness({});
+  const r = await h.tool("credential_create").execute("1", { ref: "extension.jellyfin.admin_password", purpose: "Jellyfin admin password" });
+  const value = h.secrets["extension.jellyfin.admin_password"];
+  expect(value).toHaveLength(20);
+  expect(JSON.stringify(r)).not.toContain(value);
+  expect(r.details).toEqual({ created: true, ref: "extension.jellyfin.admin_password", shownToUserOnce: true });
+  const shown = h.events.find((e) => e.type === "notice") as Extract<ServerEvent, { type: "notice" }>;
+  expect(shown.level).toBe("credential");
+  expect(shown.text).toContain(value);
+  const t = await h.tool("credential_create").execute("1", { ref: "extension.x.api_key", purpose: "x", kind: "token" });
+  expect(h.secrets["extension.x.api_key"]).toMatch(/^[0-9a-f]{32}$/);
+  expect(t.details).toMatchObject({ created: true });
+});
+
 test("system_plan sends the plan, asks once, and reports approval", async () => {
   const h = harness({ plan_confirm: "approve" });
   const r = await h.tool("system_plan").execute("1", {
