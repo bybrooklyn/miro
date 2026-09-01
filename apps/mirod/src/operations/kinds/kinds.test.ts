@@ -157,6 +157,27 @@ describe("http.mutation", () => {
     }
   });
 
+  test("{{secret:ref}} placeholders resolve at request time only; a literal password in the body is refused", async () => {
+    let seenBody = "";
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: async (req) => { seenBody = await req.text(); return new Response("ok"); } });
+    const base = `http://127.0.0.1:${server.port}`;
+    try {
+      const kind = httpMutationKind((ref) => (ref === "extension.jellyfin.admin_password" ? "hunter2-very-secret" : null));
+      const { ctx: c, events } = ctx();
+      const body = '{"Name":"admin","Password":"{{secret:extension.jellyfin.admin_password}}"}';
+      const r = await runOperation(c, kind, "create admin", { method: "POST", url: `${base}/Startup/User`, body, contentType: "application/json" });
+      expect(r.outcome).toBe("committed");
+      expect(seenBody).toBe('{"Name":"admin","Password":"hunter2-very-secret"}'); // the app got the value
+      expect(JSON.stringify(events)).not.toContain("hunter2"); // the user/model never did
+      expect(JSON.stringify(planOf(events).details)).toContain("{{secret:extension.jellyfin.admin_password}}");
+
+      await expect(kind.describe({ method: "POST", url: `${base}/x`, body: '{"Name":"admin","Password":"hunter2-literal"}' })).rejects.toThrow(/literal credential/);
+      await expect(kind.describe({ method: "POST", url: `${base}/x`, body: '{"Password":"{{secret:extension.nope.pw}}"}' })).rejects.toThrow(/not set/);
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test("literal credential headers and public URLs are refused; no undo means irreversible", async () => {
     const kind = httpMutationKind(() => null);
     await expect(kind.describe({ method: "POST", url: "http://127.0.0.1/x", headers: { Authorization: "Bearer x" } })).rejects.toThrow(/by reference/);

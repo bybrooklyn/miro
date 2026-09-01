@@ -68,9 +68,11 @@ binding in operations.ts: buildOperations(ctx) returns ExtensionOperation[] whos
 returns plain data — { kind: "http_mutation" | "shell_command" | "file_write", goal, ...params }
 — and the daemon runs it through its engine (confirmation, sandbox, verification, rollback).
 Give every binding a verify (verifyUrl/verifyExpect, or a verify command) and a rollback where the
-app makes one possible. Credentials in a binding only as secretHeader: { name, ref }. A binding
-that needs a secret VALUE in its body (e.g. creating the first admin with a password) takes the
-secret REFERENCE as its argument and reads the value from ctx.secrets[name] inside bind().
+app makes one possible. Credentials never appear as values: in a header use secretHeader:
+{ name, ref }; anywhere in a body or URL write the placeholder {{secret:<ref>}} (e.g.
+{"Name":"admin","Password":"{{secret:extension.jellyfin.admin_password}}"}) — the daemon
+substitutes the real value at request time and the plan shows only the placeholder. The same
+placeholder works when you call http_mutation yourself during learning.
 
 SCHEMAS: every tool's, diagnostic's and operation's "parameters" is a real JSON Schema built with
 Type from "@miro/sdk" — e.g. parameters: Type.Object({ path: Type.String({ description: "..." }) })
@@ -330,7 +332,7 @@ export async function spawnLearningAgent(o: LearnAgentOptions): Promise<{ text: 
       // prompt tells the agent to treat as "decide yourself or stop".
       waitForAnswer: o.waitForAnswer ?? (async () => "[no user available — decide yourself or stop]"),
       setSecret: o.setSecret,
-    }).filter((t) => t.name === "ask_user"),
+    }).filter((t) => t.name === "ask_user" || t.name === "credential_create"),
     ...(o.operationCtx ? buildOperationTools(o.operationCtx) : []),
     buildSecretStoreTool(o.app, o.setSecret),
     buildCapabilityWriteTool(o.app, o.db),

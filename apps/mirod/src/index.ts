@@ -20,6 +20,7 @@ import { createSecretStore } from "./secrets";
 import { generateIrohSecretKey, startIrohEndpoint, ticketFor, acceptLoop } from "./iroh";
 import { reconcileOperations, type OperationToolContext, type ReflectionTrigger } from "./operations/engine";
 import { allOperationKinds } from "./agent/operation-tools";
+import { buildContextBlock, takeSnapshot } from "./agent/context";
 import { ensureMemoryTable, buildSummary, listAll, forget, formatForDisplay } from "./memory/store";
 import { reflectOnOperation, reflectOnCorrection, isLikelyCorrection } from "./memory/dreaming";
 import { ensureExtensionsTable, listEnabled } from "./extensions/store";
@@ -145,6 +146,7 @@ interface ConnState {
   lastReply?: string; // for the user-correction heuristic (plan §37)
   lastMemorySummary?: string; // forces an agent rebuild when Memory changes mid-connection
   lastExtensionVersion?: string; // forces an agent rebuild when an extension is learned/repaired
+  lastContextBlock?: string; // forces an agent rebuild when the server snapshot changes
 }
 
 function waitForAnswer(state: ConnState, id: string): Promise<string> {
@@ -295,11 +297,15 @@ async function handleChat(text: string, send: (event: ServerEvent) => void, stat
   // "gets visibly better as you use it" (plan §37).
   const memorySummary = buildSummary(db);
   const extensionVersions = extensionVersionHash();
+  // The assembled context (server snapshot, operated systems, refusals) is part of the prompt;
+  // a changed snapshot rebuilds the agent the same way changed memory does.
+  const contextBlock = buildContextBlock(db, await takeSnapshot());
   if (
     !state.agent ||
     state.agent.state.model.id !== defaultModel.id ||
     state.lastMemorySummary !== memorySummary ||
-    state.lastExtensionVersion !== extensionVersions
+    state.lastExtensionVersion !== extensionVersions ||
+    state.lastContextBlock !== contextBlock
   ) {
     const operationCtx: OperationToolContext = { db, send, waitForAnswer: (id) => waitForAnswer(state, id), reflect, getSecret: (ref) => secretStore.getSecret(db, ref) };
     state.agent = createMiroAgent(models, defaultModel, getStoredKey, personality(), operationCtx, {
@@ -310,9 +316,10 @@ async function handleChat(text: string, send: (event: ServerEvent) => void, stat
       waitForAnswer: (id) => waitForAnswer(state, id),
       operationCtx,
       repair,
-    }, chat.reasoning);
+    }, chat.reasoning, contextBlock);
     state.lastMemorySummary = memorySummary;
     state.lastExtensionVersion = extensionVersions;
+    state.lastContextBlock = contextBlock;
   }
   recordEvent(db, "chat", text);
   const reply = await runTurn(state.agent, text, {

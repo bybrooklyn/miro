@@ -5,6 +5,8 @@ import { buildOperationTools } from "./operation-tools";
 import { buildMemoryTools } from "./memory-tools";
 import { buildReadTools } from "./read-tools";
 import { buildInteractionTools } from "./interaction-tools";
+import { buildCapabilitiesTool } from "./context";
+import { ensureExtensionsTable } from "../extensions/store";
 import { sanitizeNamePart } from "./extension-tools";
 import { ensureOperationsTable } from "../operations/store";
 import { ensureMemoryTable } from "../memory/store";
@@ -36,6 +38,12 @@ test("buildOperationTools names all match OpenAI's tool-name pattern", () => {
 
 test("buildReadTools names all match OpenAI's tool-name pattern", () => {
   expectValidNames(buildReadTools({ getSecret: () => null }).map((t) => t.name));
+});
+
+test("capabilities tool name matches OpenAI's tool-name pattern", () => {
+  const db = new Database(":memory:");
+  ensureExtensionsTable(db);
+  expectValidNames([buildCapabilitiesTool(db).name]);
 });
 
 test("buildInteractionTools names all match OpenAI's tool-name pattern", () => {

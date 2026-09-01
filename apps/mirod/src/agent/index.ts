@@ -6,6 +6,7 @@ import { OLLAMA_PROVIDER } from "./ollama";
 import { buildOperationTools } from "./operation-tools";
 import { buildReadTools } from "./read-tools";
 import { buildInteractionTools } from "./interaction-tools";
+import { buildCapabilitiesTool } from "./context";
 import { buildMemoryTools } from "./memory-tools";
 import { buildExtensionTools, buildToolsForExtension } from "./extension-tools";
 import { buildLearnTools, type LearnToolContext } from "./learn-tools";
@@ -27,10 +28,13 @@ You are given OUTCOMES, not instructions. For anything beyond a quick question, 
    assumptions and beat documentation.
 2. INFER. Decide everything you can from what exists: paths, ports, networks, which components fit.
    Existing, working software wins — reuse and adapt it rather than replacing it with a favourite.
-3. ASK ONLY FOR INTENT, in one batch (ask_user): genuine preferences (movies or TV? torrent or
-   Usenet?), credentials that live outside this machine, tradeoffs that matter to them, irreversible
-   choices. Never ask about ports, networks, subnets, paths you can inspect, or which tool to use —
-   those are your job. If the machine already answers a question, do not ask it.
+3. ASK ONLY FOR INTENT, in one batch, through the ask_user tool — never as questions in your
+   reply. Ending a turn with "tell me X" is a failure: call ask_user, get the answers, keep going.
+   Genuine intent means preferences (movies or TV? torrent or Usenet?), credentials that live
+   outside this machine, tradeoffs that matter to them, irreversible choices. Never ask about
+   ports, networks, subnets, paths you can inspect, or which tool to use — those are your job. If
+   the machine already answers a question, do not ask it. A request to set something up is not
+   finished until it is set up and verified, or the user cancelled.
 4. ARCHITECT. Before the first write of any setup, install, or configure request — even for a
    single app — show a system_plan: findings, components (reuse vs install), steps, how you will
    verify. Wait for the one approval, then proceed without re-asking for routine steps.
@@ -65,9 +69,10 @@ export function systemPrompt(
   personality: keyof typeof PERSONALITY_TONE,
   learnedStyle: string | null = null,
   memorySummary = "",
+  contextBlock = "",
 ): string {
   const tone = learnedStyle ? `${PERSONALITY_TONE[personality]} Also: ${learnedStyle}` : PERSONALITY_TONE[personality];
-  return `${BASE_SYSTEM_PROMPT}\n${tone}${memorySummary ? `\n\n${memorySummary}` : ""}`;
+  return `${BASE_SYSTEM_PROMPT}\n${tone}${contextBlock ? `\n\n${contextBlock}` : ""}${memorySummary ? `\n\n${memorySummary}` : ""}`;
 }
 
 // Matches plan §17's routing selector exactly.
@@ -119,6 +124,8 @@ export function createMiroAgent(
   learnCtx?: Omit<LearnToolContext, "db" | "send" | "models" | "getStoredKey" | "onPromoted">,
   /** Reasoning effort for models that support it — e.g. Codex logins always run at "medium". */
   reasoning?: ThinkingLevel,
+  /** The assembled per-turn context (agent/context.ts): server snapshot, operated systems, refusals. */
+  contextBlock = "",
 ): Agent {
   const getSecret = learnCtx?.getSecret ?? operationCtx?.getSecret;
   // Hot-load (PLAN.md §5.4 D): after app_learn promotes an extension, swap its tools into THIS
@@ -137,6 +144,7 @@ export function createMiroAgent(
   const tools = [
     ...AGENT_TOOLS,
     ...(getSecret ? buildReadTools({ getSecret }) : []),
+    ...(operationCtx ? [buildCapabilitiesTool(operationCtx.db)] : []),
     ...(operationCtx && learnCtx
       ? buildInteractionTools({ send: operationCtx.send, waitForAnswer: operationCtx.waitForAnswer, setSecret: learnCtx.setSecret })
       : []),
@@ -165,7 +173,7 @@ export function createMiroAgent(
   agent = new Agent({
     // Heterogeneous per-tool parameter schemas can't unify into one array type without erasure —
     // this is how pi-agent-core's own AgentState.tools is typed.
-    initialState: { systemPrompt: systemPrompt(personality, learnedStyle, memorySummary), model, tools: tools as AgentTool<any>[] },
+    initialState: { systemPrompt: systemPrompt(personality, learnedStyle, memorySummary, contextBlock), model, tools: tools as AgentTool<any>[] },
     streamFn: (m, context, options) => models.streamSimple(m, context, reasoning ? { ...options, reasoning } : options),
     // Re-resolved on every request (not just once at Agent construction), so a key added via
     // /provider after the daemon started takes effect on the very next turn.

@@ -1654,6 +1654,40 @@ main-agent loop → live proof. Each step tested; each OS-touching step live-ver
   Reflection uses the cheapest connected model, or Codex when it is the only one. Without Codex,
   cost-tier routing over the other providers is unchanged.
 
+- **Step 11, first acceptance run — partial, and the review that followed.** One plain message
+  ("can you set up jellyfin") to the root daemon: Miro inspected everything first, asked intent in
+  one batch (correctly noticed no media exists), and called `app_learn` on its own. It also asked
+  for the admin *password* three times, and the learn agent's four `extension_write` attempts all
+  failed validation — the generated extension was good (five real write bindings) but its tests
+  hit a TypeScript nit in the SDK's binding union, and `parameters` written as a plain object
+  passed validation when it should not have. Fixed: `OperationBinding` is deliberately loose,
+  validation checks every `parameters` is a real object schema, failures are logged, and
+  `credential_create` makes credential creation mechanical (generated, stored by reference, shown
+  to the owner once, never to the model). The plan trigger now fires before the first write of
+  any setup request, single app or not.
+- **Adversarial review (Opus, read-only) — 13 findings, all fixed and asserted in the corpus.**
+  Critical ones: `awk '{print}' /etc/shadow` classified `read` (secret-path check ran after the
+  interpreter branch); no path normalisation (`/etc//shadow`, `/proc/self/root/etc/shadow`);
+  `nc`/public-URL fetches as `read` with the host network = free egress; `ip -b -` (batch mode);
+  `kill -SIGKILL 1` via the flag-cluster matcher; `http.mutation` sending the secret header to
+  unchecked `captureUrl`/`verifyUrl` and following redirects. Plus `ssh.socket` units, `git -C …
+  clean`, `docker run -v /srv:… alpine rm`, `systemd-run`/`at`/`crontab` (execution outside the
+  sandbox), exec wrappers (`flock`, `runuser`, `setpriv`, `script`, …), symlinked `file_write`
+  targets, `>&file`, `truncate -s 0K`, `read_file /dev/zero`, no output redaction, and the
+  sandbox lacking `--unshare-all`/`--cap-drop`. Now: `normalizePath` (aliases first, then
+  normalise), a secret-path guard before any per-tool logic, `.ssh`/`.miro`/`/var/lib/miro`/
+  credential files as secret material (with `authorized_keys`/`known_hosts`/`config` as lifeline
+  writes), `needsNetwork` so only network-inspecting reads get the host namespace, `firstVerb()`
+  for global-option-aware subcommands, `--unshare-all` + `--cap-drop ALL` for reads (a root payload
+  cannot remount `/` rw — proven on the VM), `redirect: "manual"` everywhere, `realTarget()` in
+  the file kinds, `redactSecretsInText` on every read path. Deliberately kept: a public `curl` is
+  now a confirmed `mutate`, not refused — egress becomes visible, not impossible.
+- **Client (in progress).** Protocol: structured `activity` (id/parent/status — a real tree),
+  `reply_delta` streaming, `operation_progress`, `notice`, `question.timeoutMs`, `status.model`/
+  `privilege`. `packages/ui-model`: the headless view-model (blocks, pending prompt, keymap,
+  countdown, quiet-collapse) tested against a real turn's event sequence — the "one view-model,
+  two thin renderers" decision made concrete. Renderer next.
+
 ### 5.9 Positioning (decided 2026-09-01)
 
 Against "just point a generic privileged agent at the server" (`claude --remote-control` and the

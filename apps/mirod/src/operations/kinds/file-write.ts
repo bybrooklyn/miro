@@ -3,6 +3,7 @@ import { dirname, basename, join } from "node:path";
 import type { OperationKind } from "../engine";
 import { isLifelinePath, isSensitivePath } from "../classify";
 import { trashDestination, moveToTrash } from "../trash";
+import { unifiedDiff } from "../diff";
 
 // Writing a whole file as a tracked operation. The full new content is in the plan the user sees
 // (alongside the current content, so the change is reviewable), the previous content is captured,
@@ -76,6 +77,8 @@ export const fileWriteKind: OperationKind<FileWriteParams, FileWriteCaptured> = 
         mode: p.mode !== undefined ? `0${p.mode.toString(8)}` : null,
         current: previous !== null ? preview(previous) : null,
         proposed: preview(p.content),
+        // What the client renders as the approval surface: a real diff, not two dumps.
+        diff: unifiedDiff(previous ?? "", p.content, p.path),
       },
     };
   },
