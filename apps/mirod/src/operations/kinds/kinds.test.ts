@@ -181,6 +181,10 @@ describe("http.mutation", () => {
   test("literal credential headers and public URLs are refused; no undo means irreversible", async () => {
     const kind = httpMutationKind(() => null);
     await expect(kind.describe({ method: "POST", url: "http://127.0.0.1/x", headers: { Authorization: "Bearer x" } })).rejects.toThrow(/by reference/);
+    // Jellyfin's token-less client identification is not a credential; with a literal token it is.
+    await expect(kind.describe({ method: "POST", url: "http://127.0.0.1/x", headers: { Authorization: 'MediaBrowser Client="Miro", Device="miro", DeviceId="m", Version="1"' } })).resolves.toBeDefined();
+    await expect(kind.describe({ method: "POST", url: "http://127.0.0.1/x", headers: { Authorization: 'MediaBrowser Client="Miro", Token="abc123"' } })).rejects.toThrow(/by reference/);
+    await expect(kind.describe({ method: "POST", url: "http://127.0.0.1/x", headers: { "X-Emby-Token": "{{secret:extension.jellyfin.api_key}}" } })).rejects.toThrow(/not set/); // placeholder ok, ref missing
     await expect(kind.describe({ method: "POST", url: "http://example.com/x" })).rejects.toThrow(/not a local/);
     const plan = await kind.describe({ method: "POST", url: "http://127.0.0.1/x" });
     expect(plan.irreversible).toBe(true);

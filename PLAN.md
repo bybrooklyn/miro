@@ -1682,6 +1682,21 @@ main-agent loop → live proof. Each step tested; each OS-touching step live-ver
   cannot remount `/` rw — proven on the VM), `redirect: "manual"` everywhere, `realTarget()` in
   the file kinds, `redactSecretsInText` on every read path. Deliberately kept: a public `curl` is
   now a confirmed `mutate`, not refused — egress becomes visible, not impossible.
+- **Self-assembling context — done.** `agent/context.ts`: every turn the agent is handed a map of
+  itself — a cached (60s) server snapshot (host, containers, services of note, storage), the
+  systems it already operates with their read/write tool names and maturity, and what is refused
+  with the alternative — all read from the same stores the tools use, bounded in size; a
+  `capabilities` tool returns full detail (descriptions, operational models, kinds, classes) on
+  demand. A changed block rebuilds the agent like changed memory does.
+- **Acceptance runs #2 and #3.** #2: streaming worked end to end, but the agent ended its turn
+  asking questions in prose — the rule is now unambiguous (questions only via `ask_user`; a setup
+  request runs until verified). #3: inspect → `app_learn` on its own → the learn agent drove the
+  Jellyfin wizard through `http_mutation` operations (locale POST confirmed, applied, verified).
+  Two findings, fixed mechanically: the learn agent never had `credential_create` (my filter
+  passed only `ask_user`), so it minted a password with `shell_inspect` + `secret_store`; and it
+  put that value literally in a request body, which the plan displayed — the kind guarded headers
+  only. Now `{{secret:<ref>}}` placeholders in bodies/URLs/headers resolve at request time only,
+  a literal credential in a body is refused, and the plan shows the placeholder.
 - **Client (in progress).** Protocol: structured `activity` (id/parent/status — a real tree),
   `reply_delta` streaming, `operation_progress`, `notice`, `question.timeoutMs`, `status.model`/
   `privilege`. `packages/ui-model`: the headless view-model (blocks, pending prompt, keymap,

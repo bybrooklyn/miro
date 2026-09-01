@@ -62,7 +62,8 @@ async function request(
 
 /** `{{secret:<ref>}}` anywhere in a body, URL, or header value — resolved at request time only.
  * The plan the user approves and everything the model sees carry the placeholder. */
-const SECRET_PLACEHOLDER = /\{\{secret:([A-Za-z0-9_.-]+)\}\}/g;
+const SECRET_PLACEHOLDER = /\{\{secret:([A-Za-z0-9_.-]+)\}\}/g; // for replace/matchAll only — /g regexes are stateful under .test()
+const HAS_PLACEHOLDER = /\{\{secret:[A-Za-z0-9_.-]+\}\}/;
 
 export function substituteSecrets(text: string, getSecret: (ref: string) => string | null): string {
   return text.replace(SECRET_PLACEHOLDER, (_, ref: string) => {
@@ -70,6 +71,15 @@ export function substituteSecrets(text: string, getSecret: (ref: string) => stri
     if (value === null) throw new Error(`secret ${ref} is not set`);
     return value;
   });
+}
+
+/** An Authorization-style header that carries no secret: a `{{secret:ref}}` placeholder, or the
+ * Jellyfin/Emby `MediaBrowser Client="…", Device="…", DeviceId="…", Version="…"` client
+ * identification that `AuthenticateByName` requires *without* a Token — refusing that would push
+ * the agent to the browser for something the API supports (found in acceptance run #3). */
+export function isCredentialFreeHeader(value: string): boolean {
+  if (HAS_PLACEHOLDER.test(value)) return true;
+  return /^MediaBrowser\s/i.test(value) && !/Token\s*=\s*"(?!\{\{secret:)[^"]+"/i.test(value);
 }
 
 /** A literal credential in a request body is exactly what the placeholder exists to prevent:
@@ -98,7 +108,7 @@ export function httpMutationKind(getSecret: (ref: string) => string | null): Ope
       for (const [label, url] of [["url", p.url], ["rollback URL", p.rollback?.url], ["captureUrl", p.captureUrl], ["verifyUrl", p.verifyUrl]] as const) {
         if (url && !isLocalOrPrivateUrl(url)) throw new Error(`refused: ${label} ${url} is not a local or private-network address`);
       }
-      if (p.headers && Object.entries(p.headers).some(([k, v]) => /authorization|token|api[-_]?key|cookie|secret|password/i.test(k) && !SECRET_PLACEHOLDER.test(v))) {
+      if (p.headers && Object.entries(p.headers).some(([k, v]) => /authorization|token|api[-_]?key|cookie|secret|password/i.test(k) && !isCredentialFreeHeader(v))) {
         throw new Error("refused: credentials must be injected via secretHeader (by reference) or a {{secret:ref}} placeholder, never as a literal header");
       }
       if (p.body && LITERAL_CREDENTIAL.test(p.body)) {
