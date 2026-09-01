@@ -1,0 +1,70 @@
+#cloud-config
+hostname: miro-test-vm
+users:
+  - name: miro
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+    ssh_authorized_keys:
+      - __SSH_PUBKEY__
+ssh_pwauth: false
+package_update: true
+package_upgrade: false
+packages:
+  # chromium: backs Bun.WebView for the self-extension browser tool set (plan §32-35) — Playwright
+  # doesn't work under Bun's runtime, Bun.WebView drives a real installed Chrome/Chromium instead.
+  - chromium
+  # docker.io + docker-cli: Stage D's target deployment method (plan §6 — Docker/Compose/Portainer
+  # is Miro's assumed ground truth). Debian trixie splits the CLI into a separate docker-cli
+  # package from docker.io (the daemon) — found live, `docker.io` alone installs dockerd but no
+  # `docker` binary at all. Deliberately NOT Docker's official convenience script (docker-ce +
+  # docker-ce-cli + containerd.io + buildx + compose plugins) — meaningfully heavier; Debian's own
+  # packages are leaner and this VM's disk is intentionally small (see 12G note in ../up.sh).
+  - docker.io
+  - docker-cli
+  # bubblewrap: the kernel sandbox every non-read command runs under (PLAN.md §5.7 — plan-declared
+  # writable roots, network off unless declared). Debian 13's kernel has Landlock built in too.
+  - bubblewrap
+  # tshark: machine-readable packet capture (-T json) for the learn agent's net_capture primitive,
+  # the last rung of the discovery ladder. tcpdump is already in the base image.
+  - tshark
+write_files:
+  # Zero-consequence unit for live-testing the operation engine's `fix it` acceptance test — not
+  # ssh.service/cron, to avoid lifeline territory and any dependency on the image's package set.
+  - path: /etc/systemd/system/miro-demo.service
+    content: |
+      [Unit]
+      Description=Miro operation-engine demo target (dev only, no real consequence)
+
+      [Service]
+      ExecStart=/bin/sleep infinity
+
+      [Install]
+      WantedBy=multi-user.target
+  # Gotify (single static Go binary, real documented REST API + its own web admin UI) — the
+  # confirmed live-verification target for self-extension: genuinely unfamiliar to Miro, no
+  # Docker dependency, exercises both the "has docs" codegen path and the browser-tools path.
+  - path: /etc/systemd/system/gotify.service
+    content: |
+      [Unit]
+      Description=Gotify server (dev-only, self-extension live-test target)
+
+      [Service]
+      WorkingDirectory=/opt/gotify
+      ExecStart=/opt/gotify/gotify-linux-arm64
+      Environment=GOTIFY_SERVER_PORT=8080
+      Restart=on-failure
+
+      [Install]
+      WantedBy=multi-user.target
+runcmd:
+  - [systemctl, enable, --now, ssh]
+  - [systemctl, enable, --now, miro-demo]
+  # The docker group is created by the docker.io package, installed via `packages:` above, which
+  # runs before runcmd — usermod here (not `users:`'s groups list) avoids a group-doesn't-exist-yet
+  # race, since cloud-init processes `users:` before `packages:`.
+  - [usermod, -aG, docker, miro]
+  - [mkdir, -p, /opt/gotify]
+  - [bash, -c, "curl -sL https://github.com/gotify/server/releases/download/v3.1.0/gotify-linux-arm64.zip -o /tmp/gotify.zip && unzip -o /tmp/gotify.zip -d /opt/gotify && chmod +x /opt/gotify/gotify-linux-arm64 && rm /tmp/gotify.zip"]
+  - [systemctl, daemon-reload]
+  - [systemctl, enable, --now, gotify]

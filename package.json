@@ -1,0 +1,14 @@
+{
+  "name": "miro",
+  "private": true,
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev": "(bun run --cwd apps/mirod dev &) ; sleep 0.3 ; bun run --cwd apps/miro dev",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.18",
+    "bun-types": "^1.4.0",
+    "typescript": "^5.9.3"
+  }
+}

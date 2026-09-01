@@ -1,0 +1,60 @@
+import { commandExists, run } from "./exec";
+
+export interface ServiceInfo {
+  unit: string;
+  load: string;
+  active: string;
+  sub: string;
+  description: string;
+}
+
+/** Parses `systemctl list-units --type=service --all --no-legend --plain` output. */
+export function parseSystemctlList(output: string): ServiceInfo[] {
+  return output
+    .split("\n")
+    .filter((line) => line.trim())
+    .map((line) => {
+      const parts = line.trim().split(/\s+/);
+      const [unit, load, active, sub, ...description] = parts;
+      return { unit, load, active, sub, description: description.join(" ") };
+    });
+}
+
+export async function listServices(): Promise<{ available: boolean; services: ServiceInfo[] }> {
+  if (!(await commandExists("systemctl"))) return { available: false, services: [] };
+  const output = await run("systemctl", ["list-units", "--type=service", "--all", "--no-legend", "--plain"]);
+  return { available: true, services: parseSystemctlList(output) };
+}
+
+/** Single-unit read for a specific service's active state — used by the operation engine
+ * (apps/mirod/src/operations/kinds/systemd-restart.ts) to capture/verify one unit without
+ * re-listing every service on the machine. */
+export async function getServiceState(unit: string): Promise<{ active: boolean; activeState: string }> {
+  if (!(await commandExists("systemctl"))) return { active: false, activeState: "unknown" };
+  const output = await run("systemctl", ["show", unit, "--property=ActiveState", "--value"]);
+  const activeState = output.trim();
+  return { active: activeState === "active", activeState };
+}
+
+export interface LogRecord {
+  timestamp: string;
+  line: string;
+}
+
+/** Parses `journalctl -o short-iso` output: a leading ISO timestamp token, then the rest of the line. */
+export function parseJournalctl(output: string): LogRecord[] {
+  return output
+    .split("\n")
+    .filter((line) => line.trim())
+    .map((line) => {
+      const spaceIdx = line.indexOf(" ");
+      if (spaceIdx === -1) return { timestamp: "", line };
+      return { timestamp: line.slice(0, spaceIdx), line: line.slice(spaceIdx + 1) };
+    });
+}
+
+export async function serviceLogs(unit: string, lines = 100): Promise<{ available: boolean; logs: LogRecord[] }> {
+  if (!(await commandExists("journalctl"))) return { available: false, logs: [] };
+  const output = await run("journalctl", ["-u", unit, "-n", String(lines), "--no-pager", "-o", "short-iso"]);
+  return { available: true, logs: parseJournalctl(output) };
+}

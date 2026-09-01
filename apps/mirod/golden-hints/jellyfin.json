@@ -1,0 +1,5 @@
+{
+  "docsUrl": "https://api.jellyfin.org/",
+  "defaultPort": 8096,
+  "authScheme": "API key via the 'X-Emby-Token' request header (create one in the Jellyfin admin dashboard under Api Keys, or exchange a username/password at POST /Users/AuthenticateByName)"
+}

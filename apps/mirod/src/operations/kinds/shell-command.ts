@@ -1,0 +1,89 @@
+import type { OperationKind } from "../engine";
+import { classifyCommand } from "../classify";
+import { runSandboxed, type SandboxResult } from "../sandbox";
+import { snapshotPaths, restoreSnapshot, type Snapshot } from "../snapshot";
+
+// The generic shell mutation (PLAN.md §5.4 B, §5.7). The model supplies the command, the scope it
+// needs (writable roots + network), and optionally a verify command and a rollback command; the
+// engine supplies confirmation, a snapshot of the declared roots before apply, the kernel sandbox
+// during apply, verification, and rollback (snapshot restore, then the model's undo command).
+// The classifier is the gate: a `forbidden` command never becomes an operation — the tool refuses
+// before runOperation, and describe() refuses again as defence in depth.
+
+export interface ShellCommandParams {
+  command: string;
+  writes: string[];
+  network: boolean;
+  verify?: string;
+  rollback?: string;
+  cwd?: string;
+  timeoutMs?: number;
+}
+
+export interface ShellCommandCaptured {
+  snapshot: Snapshot;
+}
+
+/** Output of the last apply for a given params object, for the tool to hand back to the model —
+ * runOperation itself only returns outcome + message. Keyed by object identity, so it cannot leak
+ * across calls; entries are dropped once read. */
+const outputs = new WeakMap<object, SandboxResult>();
+export function takeOutput(params: object): SandboxResult | undefined {
+  const r = outputs.get(params);
+  outputs.delete(params);
+  return r;
+}
+
+export const shellCommandKind: OperationKind<ShellCommandParams, ShellCommandCaptured> = {
+  kind: "shell.command",
+
+  async describe(p) {
+    const c = classifyCommand(p.command);
+    if (c.class === "forbidden") throw new Error(`refused: ${c.reasons.join("; ")}${c.alternative ? ` — ${c.alternative}` : ""}`);
+    if (p.rollback) {
+      const r = classifyCommand(p.rollback);
+      if (r.class === "forbidden") throw new Error(`refused: rollback command — ${r.reasons.join("; ")}`);
+    }
+    const warning =
+      c.class === "lifeline"
+        ? "can affect SSH, networking, or Miro itself"
+        : c.class === "destructive"
+          ? "destroys data or is hard to reverse"
+          : undefined;
+    return {
+      summary: `Run: ${p.command}`,
+      autoApprove: false, // ponytail: maturity-based auto-approve for mutate lands with the ladder (§5.4 G)
+      class: c.class,
+      writes: p.writes,
+      network: p.network,
+      warning,
+      details: { command: p.command, reasons: c.reasons, verify: p.verify ?? null, rollback: p.rollback ?? null, cwd: p.cwd ?? null },
+    };
+  },
+
+  async captureState(p) {
+    return { snapshot: await snapshotPaths(p.writes, `shell-${Date.now()}`) };
+  },
+
+  async apply(p) {
+    const r = await runSandboxed(["sh", "-c", p.command], { writableRoots: p.writes, network: p.network, cwd: p.cwd, timeoutMs: p.timeoutMs });
+    outputs.set(p, r);
+    if (r.exitCode !== 0) {
+      throw new Error(`exit ${r.exitCode}${r.timedOut ? " (timed out)" : ""}: ${(r.stderr || r.stdout).trim().slice(0, 2000)}`);
+    }
+  },
+
+  async verify(p) {
+    if (!p.verify) return true;
+    // Read-only view of the same roots apply wrote, so verify can see its work but not change it.
+    const r = await runSandboxed(["sh", "-c", p.verify], { writableRoots: [], visibleRoots: p.writes, network: p.network, timeoutMs: 60_000 });
+    return r.exitCode === 0;
+  },
+
+  async rollback(p, captured) {
+    await restoreSnapshot(captured.snapshot).catch((err) => console.error("[mirod] snapshot restore failed", err));
+    if (p.rollback) {
+      await runSandboxed(["sh", "-c", p.rollback], { writableRoots: p.writes, network: p.network, timeoutMs: 60_000 }).catch(() => {});
+    }
+  },
+};

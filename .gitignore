@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.log
+tools/dev-vm/state/
+# macOS AppleDouble sidecars and Finder metadata — Bun's test runner tries to run ._*.test.ts files.
+._*
+.DS_Store
