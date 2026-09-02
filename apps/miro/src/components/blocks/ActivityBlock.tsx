@@ -32,7 +32,10 @@ function NodeView({ node, indent }: { node: ActivityNode; indent: number }) {
 export function ActivityBlock({ node }: { node: ActivityNode }) {
   if (isQuiet(node)) {
     const steps = countSteps(node);
-    return <text fg={theme.textMuted}>{`✓ ${node.label}${steps > 0 ? ` (+${steps} steps)` : ""}`}</text>;
+    // The detail rides along on the collapsed line: it is the one thing the daemon reported about a
+    // call that went fine ("Debian 13"), and collapsing it away would lose it for good.
+    const detail = node.detail ? ` · ${node.detail}` : "";
+    return <text fg={theme.textMuted}>{`✓ ${node.label}${detail}${steps > 0 ? ` (+${steps} steps)` : ""}`}</text>;
   }
   return <NodeView node={node} indent={0} />;
 }

@@ -64,7 +64,15 @@ function createBrowserSession(): BrowserSession {
 
   return {
     async open(url) {
-      await ensure().navigate(url);
+      // navigate() can wait forever on a single-page app that never settles (found live on
+      // Jellyfin's web UI); the session is still usable afterwards, so time out and let the
+      // agent snapshot whatever has rendered.
+      await Promise.race([
+        ensure().navigate(url),
+        Bun.sleep(30_000).then(() => {
+          throw new Error(`navigate to ${url} did not settle within 30s — snapshot the page as it is`);
+        }),
+      ]);
     },
     async snapshot() {
       return (await ensure().evaluate(SNAPSHOT_JS)) as SnapshotNode[];

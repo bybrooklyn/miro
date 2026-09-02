@@ -4,6 +4,10 @@ import type { HostRequest, HostResponse, HostToolSpec, HostTestResult } from "./
 
 const HOST_ENTRY = join(import.meta.dir, "host-entry.ts");
 const IDLE_REAP_MS = 5 * 60 * 1000;
+/** ponytail: one ceiling for every host call; a generated tool that legitimately needs longer
+ * (a big library scan) can grow this when one shows up. Browser calls get a shorter one. */
+const REQUEST_TIMEOUT_MS = 120_000;
+const BROWSER_TIMEOUT_MS = 60_000;
 
 /** The unprivileged user the extension host runs as when the daemon itself is root. Unset (and
  * unused) for an unprivileged dev daemon. ponytail: MIRO_HOST_USER env, default "miro" — the
@@ -140,18 +144,33 @@ export function createExtensionHostManager(): ExtensionHostManager {
   // Same class of fix as waitReady: if the subprocess dies mid-request (crashes, or is killed)
   // rather than merely failing to start, the pending promise would otherwise hang forever with
   // nothing ever resolving or rejecting it.
-  async function request(session: Session, req: Extract<HostRequest, { id: string }>): Promise<HostResponse> {
+  async function request(session: Session, req: Extract<HostRequest, { id: string }>, timeoutMs = REQUEST_TIMEOUT_MS): Promise<HostResponse> {
     session.lastUsed = Date.now();
     const pending = new Promise<HostResponse>((resolve, reject) => {
       session.pending.set(req.id, { resolve, reject });
       writeLine(session, req);
     });
-    return Promise.race([
-      pending,
-      session.proc.exited.then(() => {
-        throw new Error("extension-host process exited before responding — check its logs");
-      }),
-    ]);
+    // A call that never answers (a browser navigate that hangs on a SPA — found in acceptance run
+    // #3, where one browser_open stalled the learning agent and with it the whole chat turn) must
+    // fail like any other tool error so the agent can move on.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        session.pending.delete(req.id);
+        reject(new Error(`extension-host call ${req.type}${"tool" in req ? ` ${req.tool}` : ""} timed out after ${Math.round(timeoutMs / 1000)}s`));
+      }, timeoutMs);
+    });
+    try {
+      return await Promise.race([
+        pending,
+        timeout,
+        session.proc.exited.then(() => {
+          throw new Error("extension-host process exited before responding — check its logs");
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   return {
@@ -202,7 +221,7 @@ export function createExtensionHostManager(): ExtensionHostManager {
       // learn_init mode never dynamically imports anything from cwd, so any valid directory
       // works here — the daemon's own cwd is just a convenient always-existent default.
       const session = await getSession(key, process.cwd(), { type: "learn_init", app });
-      const res = await request(session, { type: "call", id: nextId(), tool, args });
+      const res = await request(session, { type: "call", id: nextId(), tool, args }, BROWSER_TIMEOUT_MS);
       if (res.type !== "result") throw new Error(`unexpected response type: ${res.type}`);
       if (!res.ok) throw new Error(res.error);
       return res.value;

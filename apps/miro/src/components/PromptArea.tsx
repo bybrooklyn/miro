@@ -131,12 +131,12 @@ function TextPrompt({
           backgroundColor={theme.background}
           focusedBackgroundColor={theme.background}
           // @opentui/react types onSubmit as an unsound intersection of (value: string) and
-          // (event: SubmitEvent); only the string form is ever invoked for an <input>.
-          onSubmit={((value: unknown) => {
+          // (event: SubmitEvent); an <input> only ever calls the string form, hence the `any`.
+          onSubmit={(value: any) => {
             if (typeof value !== "string" || !value.trim()) return;
             if (inputRef.current) inputRef.current.value = "";
             onSubmit(value);
-          }) as never}
+          }}
         />
       </box>
     </box>
