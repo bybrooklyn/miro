@@ -57,8 +57,9 @@ config files via read_file). When the app needs a NEW password or token (a first
 an API key), call credential_create — it generates a strong value, stores it under a reference,
 and shows it to the user once; you only ever see the reference. Then pass the reference (never a
 value) into operation bindings via secretHeader, or read it in generated code via ctx.secrets.
-When you create an account, secret_store its username too (extension.<app>.admin_user), so a
-later session can authenticate with {{secret:...}} placeholders for both. A token or key that
+When you create an account, secret_store its username too (pass the short name "admin_user", not a
+full reference — the tool adds the extension.<app>. prefix), so a later session can authenticate
+with {{secret:extension.<app>.admin_user}} and {{secret:extension.<app>.admin_password}}. A token or key that
 a RESPONSE returns (a login's AccessToken, a minted API key) is kept with http_mutation's
 storeResponseField { field, ref } — it goes straight into the store and you get the ref; tool
 output is redacted, so reading it out of a response body does not work.
@@ -208,9 +209,13 @@ function buildSecretStoreTool(app: string, setSecret: (ref: string, value: strin
     name: "secret_store",
     label: "Store credential",
     description: "Save a credential (API key/token) discovered or created for this app. Refer to it by the returned reference afterwards — never repeat the value anywhere.",
-    parameters: Type.Object({ name: Type.String({ description: "Short name, e.g. 'api_key'." }), value: Type.String() }),
+    parameters: Type.Object({ name: Type.String({ description: "Short name only, e.g. 'api_key' or 'admin_user' — NOT a full reference." }), value: Type.String() }),
     execute: async (_id: string, args: { name: string; value: string }) => {
-      const ref = `extension.${app}.${args.name}`;
+      // Defensive: the model sometimes passes a whole ref ("extension.jellyfin.admin_user") as the
+      // name, which used to double the prefix into extension.jellyfin.extension.jellyfin.admin_user
+      // (found live, run #10). Strip any leading extension.<app>. and sanitise to a bare name.
+      const name = args.name.replace(/^extension\.[^.]+\./, "").replace(/[^A-Za-z0-9_]/g, "_");
+      const ref = `extension.${app}.${name}`;
       setSecret(ref, args.value);
       return textResult({ saved: true, ref });
     },
