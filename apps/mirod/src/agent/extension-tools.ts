@@ -7,6 +7,7 @@ import type { RepairTrigger } from "../extensions/repair";
 import { extensionDir } from "../extensions/paths";
 import { runOperation, type OperationToolContext, type OperationKind } from "../operations/engine";
 import { allOperationKinds } from "./operation-tools";
+import { resolveBindingUrls } from "../extensions/validate";
 
 function textResult(details: unknown): AgentToolResult<unknown> {
   // details ?? null: JSON.stringify(undefined) returns the value undefined (not a string),
@@ -93,7 +94,7 @@ export function buildToolsForExtension(
     execute: async (_id: string, args: unknown) => {
       if (!operationCtx) return textResult({ error: "operations are not available in this context" });
       const secrets = resolveSecrets(manifest, getSecret);
-      const bound = (await hostMgr.bind(dir, manifest.app, manifest.baseUrl, secrets, spec.name, args)) as { kind?: string; goal?: string } & Record<string, unknown>;
+      const bound = resolveBindingUrls((await hostMgr.bind(dir, manifest.app, manifest.baseUrl, secrets, spec.name, args)) as { kind?: string; goal?: string } & Record<string, unknown>, manifest.baseUrl);
       const { kind: bindingKind, goal, ...params } = bound;
       const engineKind = bindingKind ? kinds[BINDING_KIND_TO_ENGINE[bindingKind] ?? ""] : undefined;
       if (!engineKind) return textResult({ error: `unknown binding kind ${String(bindingKind)}` });

@@ -1757,7 +1757,25 @@ main-agent loop → live proof. Each step tested; each OS-touching step live-ver
   [200]`; Jellyfin answered 204 and the kind reported "failed to apply" and rolled back — a
   false rollback of an admin account the server had in fact created. Any 2xx is now an applied
   write; `expectStatus` can only widen success (a 409 "already exists"), never narrow it. The
-  golden hint records the 204s.
+  golden hint records the 204s. **Outcome:** the setup itself succeeded end to end through the
+  engine — wizard, admin via `credential_create`, container recreated with `/home/miro/media`
+  mounted read-only (the root-sandbox fix, proven live), Movies and TV libraries, scan,
+  capability document, `admin_user` + `admin_password` refs — and the reply to the user was the
+  right one ("Done. Jellyfin is set up at …, admin `admin`, password shown once"). What did not
+  happen: a promoted extension. The main agent invoked `app_learn` three times on its own; each
+  session died on `tests.ts` type errors (arity of `bind()` on operations declared `bind: () =>`,
+  fakes called without fixtures, a stray name). Root fix (commit c432685): the prompt requires
+  `buildTools(ctx: ExtensionContext): ExtensionTool[]`-style annotated signatures — which also
+  turns run #4's `{tool:…}` wrapper into a compile error — and args-taking binds; the SDK fakes
+  default their fixtures. Third finding, a leak: `http_mutation`'s tool output carried the raw
+  response body, so the learn agent read a session token out of `/Users/AuthenticateByName` and
+  `secret_store`d it — the value passed through model context and the transcript. Bodies are
+  redacted now, and the legitimate need has a mechanism: `storeResponseField { field, ref }`
+  keeps a response field (a login's AccessToken, a minted key) straight in the store under an
+  `extension.<app>.<name>` ref; the plan shows `field → ref`, the output the ref, and a missing
+  field reports instead of rolling the write back. Real-server test covers store, missing field,
+  and a refused non-extension ref.
+- **Run #6 (fresh install again, all of the above in place) launched.**
 
 ### 5.9 Positioning (decided 2026-09-01)
 

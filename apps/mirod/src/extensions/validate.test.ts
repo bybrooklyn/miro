@@ -2,7 +2,20 @@ import { test, expect } from "bun:test";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { typecheckExtension, scanForbiddenImports } from "./validate";
+import { typecheckExtension, scanForbiddenImports, resolveBindingUrls, dryRunBinding } from "./validate";
+
+test("binding URLs may be app-relative; they resolve against baseUrl before the kind's URL guard", async () => {
+  const bound = { kind: "http_mutation", goal: "create admin", method: "POST", url: "/Startup/User", verifyUrl: "/Startup/User", rollback: { method: "DELETE", url: "/Users/x" } };
+  expect(await dryRunBinding(bound)).toMatch(/not a local or private-network address/);
+  const resolved = resolveBindingUrls(bound, "http://127.0.0.1:8096/");
+  expect(resolved.url).toBe("http://127.0.0.1:8096/Startup/User");
+  expect(resolved.verifyUrl).toBe("http://127.0.0.1:8096/Startup/User");
+  expect((resolved.rollback as { url: string }).url).toBe("http://127.0.0.1:8096/Users/x");
+  expect(await dryRunBinding(resolved)).toBeNull();
+  // Absolute URLs and other kinds pass through untouched.
+  expect(resolveBindingUrls({ kind: "http_mutation", url: "http://10.0.0.5/x" }, "http://127.0.0.1:8096").url).toBe("http://10.0.0.5/x");
+  expect(resolveBindingUrls({ kind: "shell_command", command: "ls /" }, "http://127.0.0.1:8096")).toEqual({ kind: "shell_command", command: "ls /" });
+});
 import { ensureNodeModulesSymlink, MIROD_NODE_MODULES } from "./paths";
 
 // Real filesystem, real TypeScript compiler API, real @miro/sdk resolution through the exact

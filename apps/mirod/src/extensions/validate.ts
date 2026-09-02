@@ -33,8 +33,12 @@ export function typecheckExtension(dir: string): string[] {
   const program = ts.createProgram(files, COMPILER_OPTIONS);
   const diagnostics = [...program.getSyntacticDiagnostics(), ...program.getSemanticDiagnostics()];
   return diagnostics.map((d) => {
-    const file = d.file ? `${d.file.fileName}:${d.file.getLineAndCharacterOfPosition(d.start ?? 0).line + 1}` : "?";
-    return `${file}: ${ts.flattenDiagnosticMessageText(d.messageText, "\n")}`;
+    if (!d.file) return `?: ${ts.flattenDiagnosticMessageText(d.messageText, "\n")}`;
+    const line = d.file.getLineAndCharacterOfPosition(d.start ?? 0).line;
+    // Quote the offending line: the retry has to fix it without seeing the file (the staging dir
+    // is discarded on failure), and "',' expected" alone cost two attempts in a live run.
+    const text = d.file.text.split("\n")[line]?.trim().slice(0, 160) ?? "";
+    return `${d.file.fileName}:${line + 1}: ${ts.flattenDiagnosticMessageText(d.messageText, "\n")} — in: ${text}`;
   });
 }
 
@@ -135,7 +139,7 @@ export async function validateExtension(
     for (const op of tools.filter((t) => t.kind === "operation")) {
       if (requiresArguments(op.parameters)) continue;
       try {
-        const bound = (await hostMgr.bind(dir, app, baseUrl, secrets, op.name, {})) as { kind?: string; goal?: string } & Record<string, unknown>;
+        const bound = resolveBindingUrls((await hostMgr.bind(dir, app, baseUrl, secrets, op.name, {})) as { kind?: string; goal?: string } & Record<string, unknown>, baseUrl);
         const failure = await dryRunBinding(bound);
         if (failure) failures.push(`operation ${op.name}: ${failure}`);
       } catch (err) {
@@ -161,6 +165,18 @@ export function invalidSchema(parameters: unknown): string | null {
     if (prop === null || typeof prop !== "object" || Array.isArray(prop)) return `property ${name} is not a schema (got ${JSON.stringify(prop)})`;
   }
   return null;
+}
+
+/** A binding's URLs may be app-relative ("/Startup/User"), exactly like a generated tool's
+ * ctx.http.get — resolved against the extension's baseUrl here, before the kind ever sees
+ * them. Found live: every absolute-URL refusal in a learn run was a relative path the model
+ * had every reason to write. */
+export function resolveBindingUrls<T extends Record<string, unknown>>(bound: T, baseUrl: string): T {
+  if (bound.kind !== "http_mutation") return bound;
+  const base = baseUrl.replace(/\/+$/, "");
+  const abs = (u: unknown) => (typeof u === "string" && u.startsWith("/") ? `${base}${u}` : u);
+  const rollback = bound.rollback && typeof bound.rollback === "object" ? { ...(bound.rollback as Record<string, unknown>), url: abs((bound.rollback as Record<string, unknown>).url) } : bound.rollback;
+  return { ...bound, url: abs(bound.url), captureUrl: abs(bound.captureUrl), verifyUrl: abs(bound.verifyUrl), rollback };
 }
 
 /** Describe a bound operation through the daemon's own kind without applying anything. Returns a

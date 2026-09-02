@@ -74,7 +74,8 @@ WRITES NEVER LIVE IN GENERATED CODE. Anything that changes the app's state is an
 binding in operations.ts: buildOperations(ctx) returns ExtensionOperation[] whose bind(args)
 synchronously returns plain data (no async, no fetch) — { kind: "http_mutation" |
 "shell_command" | "file_write", goal, ...params } — and the daemon runs it through its engine
-(confirmation, sandbox, verification, rollback).
+(confirmation, sandbox, verification, rollback). URLs in a binding may be app-relative
+("/Startup/User"), like ctx.http.get; the daemon resolves them against the app's base URL.
 Give every binding a verify (verifyUrl/verifyExpect, or a verify command) and a rollback where the
 app makes one possible. Credentials never appear as values: in a header use secretHeader:
 { name, ref }; anywhere in a body or URL write the placeholder {{secret:<ref>}} (e.g.
