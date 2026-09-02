@@ -14,7 +14,6 @@ import { fileWriteKind } from "../operations/kinds/file-write";
 // actually run under at real runtime.
 
 const GENERATED_FILES = ["tools.ts", "diagnostics.ts", "browser.ts", "operations.ts"];
-const ALL_GENERATED_FILES = [...GENERATED_FILES, "tests.ts"];
 
 const COMPILER_OPTIONS: ts.CompilerOptions = {
   target: ts.ScriptTarget.ESNext,
@@ -26,9 +25,7 @@ const COMPILER_OPTIONS: ts.CompilerOptions = {
 };
 
 export function typecheckExtension(dir: string): string[] {
-  // Includes tests.ts too — a syntax/type error there should surface here, not only at
-  // run_tests execution time inside the subprocess.
-  const files = ALL_GENERATED_FILES.map((f) => join(dir, f)).filter(existsSync);
+  const files = GENERATED_FILES.map((f) => join(dir, f)).filter(existsSync);
   if (files.length === 0) return ["no tools.ts/diagnostics.ts/browser.ts found to typecheck"];
   const program = ts.createProgram(files, COMPILER_OPTIONS);
   const diagnostics = [...program.getSyntacticDiagnostics(), ...program.getSemanticDiagnostics()];
@@ -50,7 +47,7 @@ const ALLOWED_MODULES = new Set(["@miro/sdk"]);
 
 export function scanForbiddenImports(dir: string): string[] {
   const violations: string[] = [];
-  const files = ALL_GENERATED_FILES.map((f) => join(dir, f)).filter(existsSync);
+  const files = GENERATED_FILES.map((f) => join(dir, f)).filter(existsSync);
   for (const file of files) {
     const source = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.ESNext, true);
     const visit = (node: ts.Node): void => {
@@ -100,54 +97,52 @@ export async function validateExtension(
 
   failures.push(...typecheckExtension(dir));
   failures.push(...scanForbiddenImports(dir));
-  // Don't bother running code that doesn't even typecheck or pass the import scan.
-  if (failures.length > 0) return { ok: false, failures };
-
-  try {
-    const testResults = await hostMgr.runTests(dir, app);
-    for (const r of testResults) {
-      if (!r.passed) failures.push(`test failed: ${r.name}${r.error ? ` — ${r.error}` : ""}`);
-    }
-  } catch (err) {
-    failures.push(`tests.ts failed to run: ${String(err instanceof Error ? err.message : err)}`);
-  }
+  // The one hard ordering dependency: never RUN code that doesn't compile or violates the import
+  // allowlist. Everything past here is independent and aggregated, so one attempt surfaces every
+  // remaining problem at once instead of one class per attempt (audit X1). tests.ts is no longer
+  // generated or run — the live probe and dry-run below test the real code against the real kinds,
+  // which is stronger and matches the no-mocks house rule (audit X4).
   if (failures.length > 0) return { ok: false, failures };
 
   let tools: HostToolSpec[] = [];
   try {
     tools = await hostMgr.listTools(dir, app, baseUrl, secrets);
-    // Every spec's `parameters` becomes a tool schema the main agent calls with. A generated
-    // `parameters: { name: "string" }` (not a schema) passed everything else and would have made
-    // the provider reject the whole tool list at the next chat turn — found in a real learn run.
-    for (const spec of tools) {
-      const failure = invalidSchema(spec.parameters);
-      if (failure) failures.push(`${spec.kind} ${spec.name}: parameters ${failure} — use Type.Object({ ... }) from "@miro/sdk"`);
-    }
-    if (failures.length > 0) return { ok: false, failures, tools };
-    for (const diag of tools.filter((t) => t.kind === "diagnostic")) {
-      if (requiresArguments(diag.parameters)) continue; // scope limit: no-arg diagnostics only, see module comment
-      try {
-        await hostMgr.call(dir, app, baseUrl, secrets, diag.name, {});
-      } catch (err) {
-        failures.push(`live probe failed for ${diag.name}: ${String(err instanceof Error ? err.message : err)}`);
-      }
-    }
-    // Operation bindings never execute at validation time, but their bound params can be dry-run
-    // through the real kind's describe(): the classifier refuses a forbidden command, the URL guard
-    // refuses a public host, a literal credential header is refused — at learn time, not in front
-    // of the user later. No-arg operations only (same scope limit as the live probe).
-    for (const op of tools.filter((t) => t.kind === "operation")) {
-      if (requiresArguments(op.parameters)) continue;
-      try {
-        const bound = resolveBindingUrls((await hostMgr.bind(dir, app, baseUrl, secrets, op.name, {})) as { kind?: string; goal?: string } & Record<string, unknown>, baseUrl);
-        const failure = await dryRunBinding(bound);
-        if (failure) failures.push(`operation ${op.name}: ${failure}`);
-      } catch (err) {
-        failures.push(`operation ${op.name} failed to bind: ${String(err instanceof Error ? err.message : err)}`);
-      }
-    }
   } catch (err) {
     failures.push(`live probe setup failed: ${String(err instanceof Error ? err.message : err)}`);
+    return { ok: false, failures };
+  }
+
+  // Every spec's `parameters` becomes a tool schema the main agent calls with. A generated
+  // `parameters: { name: "string" }` (not a schema) would make the provider reject the whole tool
+  // list at the next chat turn — found in a real learn run.
+  for (const spec of tools) {
+    const failure = invalidSchema(spec.parameters);
+    if (failure) failures.push(`${spec.kind} ${spec.name}: parameters ${failure} — use Type.Object({ ... }) from "@miro/sdk"`);
+  }
+
+  // A no-arg diagnostic with a valid schema is probed live; a bad-schema tool is skipped here (its
+  // schema failure is already reported) rather than called with an unknown shape.
+  for (const diag of tools.filter((t) => t.kind === "diagnostic")) {
+    if (requiresArguments(diag.parameters) || invalidSchema(diag.parameters)) continue;
+    try {
+      await hostMgr.call(dir, app, baseUrl, secrets, diag.name, {});
+    } catch (err) {
+      failures.push(`live probe failed for ${diag.name}: ${String(err instanceof Error ? err.message : err)}`);
+    }
+  }
+
+  // Operation bindings never execute at validation time, but their bound params are dry-run through
+  // the real kind's describe(): the classifier refuses a forbidden command, the URL guard refuses a
+  // public host, a literal credential header is refused — at learn time, not in front of the user.
+  for (const op of tools.filter((t) => t.kind === "operation")) {
+    if (requiresArguments(op.parameters) || invalidSchema(op.parameters)) continue;
+    try {
+      const bound = resolveBindingUrls((await hostMgr.bind(dir, app, baseUrl, secrets, op.name, {})) as { kind?: string; goal?: string } & Record<string, unknown>, baseUrl);
+      const failure = await dryRunBinding(bound);
+      if (failure) failures.push(`operation ${op.name}: ${failure}`);
+    } catch (err) {
+      failures.push(`operation ${op.name} failed to bind: ${String(err instanceof Error ? err.message : err)}`);
+    }
   }
 
   return { ok: failures.length === 0, failures, tools };

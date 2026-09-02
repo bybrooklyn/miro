@@ -81,30 +81,20 @@ test("typecheckExtension reports when no generated files exist", () => {
 });
 
 test(
-  "typecheckExtension also typechecks tests.ts, cross-resolving its imports of tools.ts/diagnostics.ts",
+  "typecheckExtension cross-resolves imports between the generated files and reports a real type error",
   () => {
     const dir = tempExtDir();
     writeFileSync(
       join(dir, "tools.ts"),
       `import { Type, type ExtensionContext, type ExtensionTool } from "@miro/sdk";
-export function buildTools(ctx: ExtensionContext): ExtensionTool[] {
-  return [{ name: "t", label: "T", description: "d", parameters: Type.Object({}), execute: async () => ctx.http.get("/x") }];
-}`,
-    );
-    writeFileSync(join(dir, "diagnostics.ts"), `export function buildDiagnostics(ctx: any) { return []; }`);
-    writeFileSync(
-      join(dir, "tests.ts"),
-      `import { createFakeHttpClient } from "@miro/sdk";
-import { buildTools } from "./tools";
 const bad: number = "not a number"; // real type error, should be caught
-export default async function runTests() {
-  const ctx = { http: createFakeHttpClient({ "/x": {} }), browser: null as any, secrets: {} };
-  const tools = buildTools(ctx);
-  return [{ name: tools[0].name, passed: true }];
+export function buildTools(ctx: ExtensionContext): ExtensionTool[] {
+  return [{ name: "t", description: "d", parameters: Type.Object({}), execute: async () => (await ctx.http.get("/x")).json() }];
 }`,
     );
+    writeFileSync(join(dir, "diagnostics.ts"), `export function buildDiagnostics(_ctx: any) { return []; }`);
     const errors = typecheckExtension(dir);
-    expect(errors.some((e) => e.includes("tests.ts") && /not assignable/i.test(e))).toBe(true);
+    expect(errors.some((e) => e.includes("tools.ts") && /not assignable/i.test(e))).toBe(true);
     rmSync(dir, { recursive: true, force: true });
   },
   15000,
