@@ -2033,3 +2033,32 @@ describe()/captureState leaves a phantom `planning` row with no terminal event.
 ones are pure-function testable in the corpus with the auditor's exact exploit strings) → Tier 2 →
 Tier 3 → Tier 4 (X3+X1+X4 to finally promote an extension) → Tier 5. Commit per tier at green
 (bun test + tsc across packages); live-verify the leak fixes and the reconcile fixes on the dev VM.
+
+### 5.12 Audit fixes — live verification (2026-09-02)
+
+All six audit tiers plus the Jellyfin golden-hint fix were verified on the dev VM as root:
+
+- **Run #9** (all fixes, corrected golden hint): the Jellyfin first-run wizard completed cleanly for
+  the first time — no `POST /Startup/User` 404 loop (the GET-prime fix works), admin created via
+  `credential_create`, both libraries created and verified, correct final reply. `applied_unverified`
+  fired on genuinely-unconfirmable steps instead of false rollbacks. It also surfaced a regression:
+  Tier 1's `chmod 700` on `MIRO_DIR` blocked the extension host (runs as the `miro` user, must
+  traverse `MIRO_DIR/extensions`) → "Cannot find module tools.ts". Reverted the dir chmod (DB stays
+  0600, secret.key 0600), fixed the VM's already-tightened dir, restarted.
+- **Run #10** (H2 fixed): **the self-extension loop promoted an extension for the first time across
+  every run this session** — `extension_write ok:true, version 1, 3 tools / 2 diagnostics / 2
+  operations`; the aggregated validator and the removal of generated `tests.ts` did it. Verified
+  independently against the daemon's on-disk state: `extensions` row `jellyfin` enabled v1, the three
+  generated files + manifest on disk, a `jellyfin` capability document in memory, wizard completed.
+- **Retained-capability follow-up** (a second, separate chat turn): "what libraries does jellyfin
+  have, and is it healthy?" was answered using the hot-loaded `ext_jellyfin_*` tools directly
+  (`list_media_libraries`, `reachable`, `list_active_sessions`) with NO learning phase — proving the
+  thesis end to end: learn an app once, retain the capability, operate it on future requests in one
+  shot. (One diagnostic tripped the inline repair loop and self-repaired, `repaired:true`.)
+- Minor bug found and fixed live: `secret_store` doubled the `extension.<app>.` prefix when the model
+  passed a full ref as the name; the tool now strips it (commit e342bd8).
+
+Slice 1 (Jellyfin fresh install through the whole Goal→Inspect→Infer→Ask-intent→Architect→Execute→
+Verify→Retain loop, live-verified) is met. Residuals: `snapshots/` dir at default perms could hold
+sensitive file contents (low-severity remainder of H2); the `esc interrupt` hint still has no
+`ClientMessage` behind it; maturity-gated auto-approve still unwired.
