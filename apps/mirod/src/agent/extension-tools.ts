@@ -104,6 +104,10 @@ export function buildToolsForExtension(
       if (!engineKind) return textResult({ error: `unknown binding kind ${String(bindingKind)}` });
       try {
         const result = await runOperation(operationCtx, engineKind, goal ?? spec.description, params);
+        // Maturity counts only a VERIFIED commit, deliberately: applied_unverified means the write
+        // reached the app but could not be confirmed, which is not the clean signal that should move
+        // an extension toward auto-approve (audit finding on the applied_unverified/successful_runs
+        // interaction).
         if (result.outcome === "committed") store.recordSuccess(db, manifest.app);
         return textResult(result);
       } catch (err) {

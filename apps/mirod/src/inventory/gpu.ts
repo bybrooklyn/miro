@@ -47,6 +47,10 @@ export async function detectGpus(): Promise<GpuDetectionResult> {
   if (!(await commandExists("lspci"))) {
     return { available: false, gpus: [], hasNvidiaSmi, hasDriRenderNodes };
   }
-  const output = await run("lspci", ["-mm"]);
-  return { available: true, gpus: parseLspci(output), hasNvidiaSmi, hasDriRenderNodes };
+  try {
+    const output = await run("lspci", ["-mm"]);
+    return { available: true, gpus: parseLspci(output), hasNvidiaSmi, hasDriRenderNodes };
+  } catch {
+    return { available: false, gpus: [], hasNvidiaSmi, hasDriRenderNodes };
+  }
 }

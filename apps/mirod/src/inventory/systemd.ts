@@ -22,8 +22,14 @@ export function parseSystemctlList(output: string): ServiceInfo[] {
 
 export async function listServices(): Promise<{ available: boolean; services: ServiceInfo[] }> {
   if (!(await commandExists("systemctl"))) return { available: false, services: [] };
-  const output = await run("systemctl", ["list-units", "--type=service", "--all", "--no-legend", "--plain"]);
-  return { available: true, services: parseSystemctlList(output) };
+  // "present but not usable" (systemd not the init, dbus down) throws — degrade like the container
+  // and tailscale readers do, rather than trap the next direct caller (audit H6).
+  try {
+    const output = await run("systemctl", ["list-units", "--type=service", "--all", "--no-legend", "--plain"]);
+    return { available: true, services: parseSystemctlList(output) };
+  } catch {
+    return { available: false, services: [] };
+  }
 }
 
 /** Single-unit read for a specific service's active state — used by the operation engine
@@ -55,6 +61,10 @@ export function parseJournalctl(output: string): LogRecord[] {
 
 export async function serviceLogs(unit: string, lines = 100): Promise<{ available: boolean; logs: LogRecord[] }> {
   if (!(await commandExists("journalctl"))) return { available: false, logs: [] };
-  const output = await run("journalctl", ["-u", unit, "-n", String(lines), "--no-pager", "-o", "short-iso"]);
-  return { available: true, logs: parseJournalctl(output) };
+  try {
+    const output = await run("journalctl", ["-u", unit, "-n", String(lines), "--no-pager", "-o", "short-iso"]);
+    return { available: true, logs: parseJournalctl(output) };
+  } catch {
+    return { available: false, logs: [] };
+  }
 }

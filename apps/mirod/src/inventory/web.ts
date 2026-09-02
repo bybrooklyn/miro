@@ -27,7 +27,9 @@ export async function webSearch(query: string): Promise<WebSearchResponse> {
   if (!apiKey) return { available: false, results: [] };
 
   const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}`;
-  const response = await fetch(url, { headers: { "X-Subscription-Token": apiKey, Accept: "application/json" } });
+  // Timeout like every other network path in the daemon — a slow/unreachable Brave endpoint would
+  // otherwise hang the whole chat turn with no way to cancel it (audit H3).
+  const response = await fetch(url, { headers: { "X-Subscription-Token": apiKey, Accept: "application/json" }, signal: AbortSignal.timeout(15_000) });
   if (!response.ok) return { available: true, results: [] };
   return { available: true, results: parseBraveResponse(await response.text()) };
 }
