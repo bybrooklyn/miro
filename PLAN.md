@@ -1775,7 +1775,26 @@ main-agent loop → live proof. Each step tested; each OS-touching step live-ver
   `extension.<app>.<name>` ref; the plan shows `field → ref`, the output the ref, and a missing
   field reports instead of rolling the write back. Real-server test covers store, missing field,
   and a refused non-extension ref.
-- **Run #6 (fresh install again, all of the above in place) launched.**
+- **Run #6 — the setup succeeded again, and exposed two engine-honesty bugs.** The final reply
+  was right (Jellyfin configured, admin shown once, both libraries, media read-only, wizard
+  verified), but the run thrashed for minutes first, and its learn session ran on a daemon that
+  predated the app-relative-URL fix so it could never promote. Fixes (commits e46a1ee, 3613810):
+  (1) An extension operation binding's URLs may be app-relative (`/Startup/User`), exactly like
+  `ctx.http.get`; every absolute-URL refusal in the learn session was a relative path the model
+  had every reason to write. `resolveBindingUrls` resolves them against the extension's base URL
+  before the dry run and before the engine. (2) The bigger one: an irreversible POST that applied
+  (2xx) but failed the agent's own `verify` was reported "rolled back" — a lie, because
+  `http_mutation`'s rollback no-ops when there is no rollback request, so the write stayed on the
+  server. Independent `GET`s confirmed the config and admin writes had landed while every step was
+  reported rolled back; the agent then re-fought them (503 "server loading", 404, 405 as the
+  wizard's state shifted under it). New terminal outcome `applied_unverified` (engine, protocol,
+  ui-model, `OperationCard` ⚠, smoke): apply reached the server, verify did not confirm, nothing
+  was undone — inspect before retrying. Reversible ops still roll back honestly, and an
+  `applied_unverified` does not bump an extension's `successful_runs`. Also: `typecheckExtension`
+  now quotes the offending source line (the retry never sees the discarded staging dir, and a
+  bare "',' expected" cost attempts).
+- **Run #7 (fresh install, every finding above fixed before the learn session even starts)
+  launched** — the first clean-room test of the whole loop.
 
 ### 5.9 Positioning (decided 2026-09-01)
 
