@@ -69,8 +69,9 @@ answers it. Never ask about ports, networks, paths, or which component to use.
 
 WRITES NEVER LIVE IN GENERATED CODE. Anything that changes the app's state is an operation
 binding in operations.ts: buildOperations(ctx) returns ExtensionOperation[] whose bind(args)
-returns plain data — { kind: "http_mutation" | "shell_command" | "file_write", goal, ...params }
-— and the daemon runs it through its engine (confirmation, sandbox, verification, rollback).
+synchronously returns plain data (no async, no fetch) — { kind: "http_mutation" |
+"shell_command" | "file_write", goal, ...params } — and the daemon runs it through its engine
+(confirmation, sandbox, verification, rollback).
 Give every binding a verify (verifyUrl/verifyExpect, or a verify command) and a rollback where the
 app makes one possible. Credentials never appear as values: in a header use secretHeader:
 { name, ref }; anywhere in a body or URL write the placeholder {{secret:<ref>}} (e.g.

@@ -281,7 +281,10 @@ async function handle(req: HostRequest): Promise<void> {
       return;
     }
     try {
-      const value = entry.op.bind(req.args);
+      // await: a generated `bind: async (args) => ({...})` is natural next to an async execute,
+      // and unawaited it serialised as {} — "binding must include kind and goal" on a file that
+      // plainly had both (found live, run #5).
+      const value = await entry.op.bind(req.args);
       send({ type: "result", id: req.id, ok: true, value });
     } catch (err) {
       send({ type: "result", id: req.id, ok: false, error: String(err instanceof Error ? err.message : err) });

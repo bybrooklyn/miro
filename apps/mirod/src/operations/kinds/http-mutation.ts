@@ -16,7 +16,7 @@ export interface HttpMutationParams {
   contentType?: string;
   /** Header injected from the secret store at apply time, e.g. { name: "X-Emby-Token", ref: "extension.jellyfin.api_key" }. */
   secretHeader?: { name: string; ref: string };
-  /** Statuses that count as success (default: any 2xx). */
+  /** Extra statuses that count as success, on top of any 2xx (e.g. 409 "already exists"). */
   expectStatus?: number[];
   /** GET before apply — the captured representation rollback can restore for PUT. */
   captureUrl?: string;
@@ -146,7 +146,11 @@ export function httpMutationKind(getSecret: (ref: string) => string | null): Ope
     async apply(p) {
       const r = await request(p.method, resolved(p.url)!, { headers: authHeaders(p), body: resolved(p.body), contentType: p.contentType, timeoutMs: p.timeoutMs });
       outputs.set(p, { status: r.status, body: r.body });
-      const ok = p.expectStatus ? p.expectStatus.includes(r.status) : r.status >= 200 && r.status < 300;
+      // Any 2xx is an applied write, whatever the plan predicted: a plan saying expectStatus
+      // [200] against Jellyfin's real 204 rolled back an admin account the server had in fact
+      // created (found live, run #5). expectStatus can only widen success (a 409 "already
+      // exists" counts), never turn a 2xx into a false rollback.
+      const ok = (r.status >= 200 && r.status < 300) || (p.expectStatus?.includes(r.status) ?? false);
       if (!ok) throw new Error(`${p.method} ${p.url} → ${r.status}: ${r.body.slice(0, 500)}`);
     },
 

@@ -154,7 +154,9 @@ export interface OperationBinding {
 /** A write the extension offers, as data: the daemon binds the caller's args to one of its own
  * operation kinds and runs it with full engine semantics. The extension never performs the write
  * itself and never contains rollback logic. `parameters` MUST be a JSON Schema object —
- * Type.Object({...}) from "@miro/sdk" — it becomes the tool schema the agent calls with. */
+ * Type.Object({...}) from "@miro/sdk" — it becomes the tool schema the agent calls with.
+ * `bind` is synchronous: it shapes data, it never fetches (the host tolerates an async bind, but
+ * generated tests read the result directly). */
 export interface ExtensionOperation<P = any> {
   name: string;
   label: string;

@@ -1713,7 +1713,42 @@ main-agent loop → live proof. Each step tested; each OS-touching step live-ver
   `reply_delta` streaming, `operation_progress`, `notice`, `question.timeoutMs`, `status.model`/
   `privilege`. `packages/ui-model`: the headless view-model (blocks, pending prompt, keymap,
   countdown, quiet-collapse) tested against a real turn's event sequence — the "one view-model,
-  two thin renderers" decision made concrete. Renderer next.
+  two thin renderers" decision made concrete. Renderer done (`apps/miro/src/App.tsx` is ~65
+  lines holding one `UiState`; components under `components/` and `components/blocks/`; one
+  palette in `theme.ts`, token names borrowed from opencode, values Miro's own). Live-smoked in
+  tmux on the VM against the root daemon: status line (`home ● healthy · gpt-5.6-luna · root`),
+  activity lines, streamed markdown reply, sticky prompt, footer hints. OpenTUI facts found on
+  the way: `<diff>` needs an explicit height, `<input>` does not clear on submit, `usePaste`
+  delivers bytes not text, `<select>`'s `onChange` fires on cursor movement (so the choice prompt
+  is a highlighted row, not a select), and the `esc interrupt` hint has no protocol message
+  behind it yet.
+- **Run #4 (configured instance) — three real findings, all fixed (commit c4cf9fa).**
+  (1) Generated `diagnostics.ts` returned `[{ tool: {...} }]`; the host expects plain tools, so
+  the live probe died with `entry.tool.execute is not a function` three attempts in a row and the
+  learn agent gave up. `host-entry.ts` now shape-checks every element of `buildTools` /
+  `buildDiagnostics` / `buildOperations` and names the fix; the prompt says "plain object, never
+  wrapped". (2) Both agents asked the user for the admin password Miro itself had created in run
+  #3 — nothing listed the secret refs that exist. `listSecretRefs` now feeds a "Credentials on
+  file" section into the context block and the learn prompt (refs only, never values; only
+  `extension.*` refs, never Miro's own), and the learn prompt stores `admin_user` beside
+  `admin_password` so both go into `{{secret:…}}` placeholders later. (3) The recreate-container
+  operation rolled back with `bwrap: Can't find source path /home/miro: Permission denied` —
+  inside a user namespace, a file owned by an unmapped uid is "nobody" and not even root may
+  traverse another user's 0700 home. As real root the sandbox now runs without a user namespace
+  (explicit `--unshare-ipc/pid/uts/cgroup-try` and `--unshare-net` unless declared); reads keep
+  exactly `CAP_DAC_READ_SEARCH` (proven on the VM: `CapEff 0x4`, a 0600 file in the other user's
+  home readable, writes and remount refused, own pid namespace); `keepCapabilities` as root is
+  the named ceiling — a payload holding real `CAP_SYS_ADMIN` can remount, which a mount namespace
+  never contained against a root that also holds the docker socket; Landlock is the second lock.
+  Widening root reads to every home made a pre-existing hole matter: `grep -r x /root` never
+  names `.ssh`. The classifier now refuses tree-walking readers (`grep -r`, `rg`/`ag`/`ack`,
+  `tar c`, `find -exec`) rooted at or above `/`, `/home`, any home, `/root`, `/etc`, `/proc`,
+  `/var/lib/miro`, whatever their class; `/etc/ssl/private` joined the secret paths. Not caught:
+  `find /root -type f | xargs cat` — the pipe hands paths the classifier does not follow;
+  `redactSecretsInText` is the last line there, noted in the code.
+- **Run #5 (fresh install, the slice-1 bar) launched** against a recreated Jellyfin (empty
+  config, `StartupWizardCompleted:false`) with Miro's jellyfin secrets, memories, and extension
+  wiped first, so it starts cold.
 
 ### 5.9 Positioning (decided 2026-09-01)
 

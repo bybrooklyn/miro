@@ -124,12 +124,19 @@ describe("http.mutation", () => {
         if (url.pathname === "/value" && req.method === "GET") return new Response(state.value);
         if (url.pathname === "/value" && req.method === "PUT") { state.value = await req.text(); return new Response("ok"); }
         if (url.pathname === "/fail") return new Response("nope", { status: 500 });
+        if (url.pathname === "/no-content" && req.method === "POST") return new Response(null, { status: 204 });
+        if (url.pathname === "/exists" && req.method === "POST") return new Response("already there", { status: 409 });
         return new Response("?", { status: 404 });
       },
     });
     const base = `http://127.0.0.1:${server.port}`;
     try {
       const kind = httpMutationKind((ref) => (ref === "test.token" ? "s3cret" : null));
+      // A 2xx the plan did not predict is still an applied write (Jellyfin answers 204 where a
+      // plan said 200 — a false rollback, found live); expectStatus only widens success.
+      expect((await runOperation(ctx().ctx, kind, "no content", { method: "POST", url: `${base}/no-content`, expectStatus: [200] })).outcome).toBe("committed");
+      expect((await runOperation(ctx().ctx, kind, "exists ok", { method: "POST", url: `${base}/exists`, expectStatus: [409] })).outcome).toBe("committed");
+      expect((await runOperation(ctx().ctx, kind, "exists not ok", { method: "POST", url: `${base}/exists` })).outcome).toBe("rolledback");
       const { ctx: c, events } = ctx();
       const r = await runOperation(c, kind, "set value", {
         method: "PUT", url: `${base}/value`, body: "after", contentType: "text/plain",
