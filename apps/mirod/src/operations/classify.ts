@@ -313,8 +313,8 @@ const SENSITIVE_READ_PATHS: RegExp[] = [
   /(^|\/)\.aws\/credentials$/,
   /(^|\/)\.kube\/config$/,
   /(^|\/)\.docker\/config\.json$/,
-  /^\/proc\/(self|\d+)\/environ$/,
-  /^\/proc\/(self|\d+)\/(mem|maps)$/,
+  /^\/proc\/(self|thread-self|\d+)(\/task\/\d+)?\/environ$/,
+  /^\/proc\/(self|thread-self|\d+)(\/task\/\d+)?\/(mem|maps)$/,
   /^\/etc\/ssl\/private(\/|$)/,
 ];
 
@@ -351,7 +351,14 @@ function secretTreeWalk(name: string, argv: string[], paths: string[], home: str
  * kinds' job at apply time (realpath); this handles what a string can hide. */
 export function normalizePath(path: string, home = homedir()): string {
   let p = expandHome(path, home);
-  if (!p.startsWith("/")) return p;
+  if (!p.startsWith("/")) {
+    // A relative path's real base is the (unknown) working directory. Resolve it against "/" so a
+    // `..` traversal reaches its absolute target and the ^/-anchored sensitive rules can match it —
+    // `../../../../etc/shadow` becomes `/etc/shadow`. This can over-map a genuinely cwd-relative
+    // path onto an absolute sensitive path, which errs safe (refuse). Found live: relative `..`
+    // tokens bypassed every ^/-anchored secret rule (audit C1).
+    p = posix.resolve("/", p);
+  }
   // Aliases first, then textual normalisation: `/proc/self/root/../etc/shadow` must become
   // `/etc/shadow`, which normalising first would turn into `/proc/self/etc/shadow`. The cwd/fd
   // aliases cannot be resolved from a string; they are left in place for the sensitive-path rule.
@@ -386,10 +393,13 @@ export function isSensitivePath(path: string, home = homedir()): boolean {
  * secret-path reads are refused outright above; this catches the env dump and the JSON blob. */
 export function redactSecretsInText(text: string): string {
   return text
-    .replace(/("?(?:password|passwd|pw|token|api_?key|secret|authorization|x-emby-token|x-mediabrowser-token|x-api-key|access_?key|private_?key)"?\s*[:=]\s*"?)([^"&\s,}]+)/gi, "$1[redacted]")
+    .replace(/("?(?:password|passwd|pw|token|api_?key|secret|authorization|x-emby-token|x-mediabrowser-token|x-api-key|access_?key|private_?key|cookie|set-cookie|session(?:_?id)?|jwt|refresh_?token|client_?secret)"?\s*[:=]\s*"?)([^"&\s,}]+)/gi, "$1[redacted]")
+    .replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, "[redacted]")
     .replace(/(Authorization:\s*)(\S.*)/gi, "$1[redacted]")
     .replace(/(MediaBrowser[^"\n]*Token=")([^"]+)/gi, "$1[redacted]")
-    .replace(/\b(sk-[A-Za-z0-9]{8,}|ghp_[A-Za-z0-9]{8,}|xox[abp]-[A-Za-z0-9-]{8,}|AKIA[A-Z0-9]{16})\b/g, "[redacted]")
+    .replace(/\b(sk-[A-Za-z0-9]{8,}|ghp_[A-Za-z0-9]{8,}|xox[abp]-[A-Za-z0-9-]{8,}|AKIA[A-Z0-9]{16}|eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,})\b/g, "[redacted]")
+    // /etc/shadow and /etc/gshadow hash lines: `user:$6$…:…` — not keyword-shaped, so caught by structure.
+    .replace(/^([^\s:]+:)([$!*][^\s:]*)/gm, "$1[redacted]")
     .replace(/(-----BEGIN [A-Z ]*PRIVATE KEY-----)[\s\S]*?(-----END [A-Z ]*PRIVATE KEY-----)/g, "$1 [redacted] $2");
 }
 
@@ -959,14 +969,101 @@ function expandHome(p: string, home: string): string {
   return p === "~" ? home : p.startsWith("~/") ? join(home, p.slice(2)) : p;
 }
 
+/** A token is path-like if it is absolute/home/explicit-relative, OR it carries a `..` traversal
+ * segment anywhere (`foo/../../../etc/shadow`) — the latter can escape to any absolute path and
+ * must be normalized and checked, not skipped (audit C1). */
+function isPathLike(v: string): boolean {
+  return /^(\/|~|\.\/|\.\.\/)/.test(v) || /(^|\/)\.\.(\/|$)/.test(v);
+}
+
 function pathTokens(argv: string[], redirects: Redirect[], home: string): string[] {
   const out: string[] = [];
   for (const a of argv.slice(1)) {
     const v = a.includes("=") && !a.startsWith("/") ? a.slice(a.indexOf("=") + 1) : a;
-    if (/^(\/|~|\.\/|\.\.\/)/.test(v)) out.push(normalizePath(v, home));
+    if (isPathLike(v)) out.push(normalizePath(v, home));
   }
-  for (const r of redirects) if (/^(\/|~|\.\/|\.\.\/)/.test(r.target)) out.push(normalizePath(r.target, home));
+  for (const r of redirects) if (isPathLike(r.target)) out.push(normalizePath(r.target, home));
   return out;
+}
+
+/** A glob in a path argument that could expand into secret material. Returns the offending token
+ * or null. The glob can't be expanded without the filesystem, so the test is the literal prefix
+ * before the first metacharacter: if the directory it names holds secrets (or the prefix already
+ * starts a sensitive path), the expansion can reach a secret — `cat /etc/shado?`, `/etc/gshad*`,
+ * `/home/miro/.ss?/id_rsa`. Ordinary globbed reads under a non-secret dir stay reads (audit C2). */
+function pathWithinSecretArea(p: string, home: string): boolean {
+  if (p === "/" || p === "/home") return true;
+  if ([...SECRET_HOLDING_DIRS, home].some((d) => p === d || p.startsWith(d + "/"))) return true;
+  return /^\/home\/[^/]+(\/|$)/.test(p); // any user's home holds .ssh/.env/…
+}
+function globReadRisk(argv: string[], home: string): string | null {
+  for (const a of argv.slice(1)) {
+    const v = a.includes("=") && !a.startsWith("/") ? a.slice(a.indexOf("=") + 1) : a;
+    if (!isPathLike(v)) continue;
+    const g = v.search(/[*?[]/);
+    if (g < 0) continue;
+    // A glob does not cross "/", so its expansion stays in the directory literally containing the
+    // metacharacter. Forbid only when THAT directory is within a secret area (or the prefix itself
+    // starts a sensitive path) — not when some unrelated secret dir merely sits under an ancestor.
+    const prefix = normalizePath(v.slice(0, g), home);
+    const dir = prefix.slice(0, prefix.lastIndexOf("/")) || "/";
+    if (pathWithinSecretArea(dir, home) || SENSITIVE_READ_PATHS.some((re) => re.test(prefix))) return v;
+  }
+  return null;
+}
+
+/** Absolute path literals embedded inside a quoted string argument — an interpreter/awk/sed
+ * program can read a secret whose path lives inside its program text, not as a bare path token:
+ * `awk 'BEGIN{while((getline l < "/etc/shadow")>0)...}'`, `sed 'r /etc/shadow'` (audit C4).
+ * Scoped to program-bearing commands so a grep regex that merely contains a path string is not
+ * swept in. */
+function embeddedPathLiterals(argv: string[], home: string): string[] {
+  const out: string[] = [];
+  for (const a of argv.slice(1)) {
+    for (const m of a.matchAll(/(?:^|[\s"'(<>=,;|&])(\/[^\s"'()<>,;|&]+)/g)) {
+      if (isPathLike(m[1])) out.push(normalizePath(m[1], home));
+    }
+  }
+  return out;
+}
+
+/** git subcommands that run an arbitrary command while looking like a read: an `ext::`/`fd::`
+ * transport remote runs a helper program, and `-c <key>=<cmd>` for an exec-bearing config key
+ * (diff.external, *.textconv, core.sshCommand, aliases, filters, hooks) runs `<cmd>`. Both are
+ * code execution mislabeled `read` (audit C3). Returns a reason or null. */
+function gitInjection(argv: string[]): string | null {
+  const EXEC_CONFIG = /^(diff\.external|core\.(sshcommand|fsmonitor|gitproxy|pager|editor)|sequence\.editor|.*\.textconv|.*\.(clean|smudge|process)|alias\..+|protocol\.ext\.allow|uploadpack\.|receive\.|ssh\.variant)/i;
+  const args = argv.slice(1);
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (/(^|[=@:])(ext|fd)::/i.test(a) || /^(ext|fd)::/i.test(a)) return `git ${a} runs an external transport helper (arbitrary command)`;
+    const kv = a === "-c" || a === "--config-env" ? args[i + 1] : a.startsWith("-c") && a.length > 2 ? a.slice(2) : null;
+    if (kv && EXEC_CONFIG.test(kv.split("=")[0])) return `git -c ${kv.split("=")[0]} sets an exec-bearing config key`;
+    if (a.startsWith("--upload-pack=") || a.startsWith("--receive-pack=") || a === "--upload-pack" || a === "--receive-pack") return `git ${a} runs a named remote command`;
+  }
+  return null;
+}
+
+/** Network probes whose destination argument is attacker-controllable and carries data — a `read`
+ * that reaches a public host is DNS/ICMP exfiltration of any literal in context (audit C5). These
+ * stay reads for a local/private/LAN-name target and demote to a tracked `mutate` for a public one. */
+const EXFIL_NET_TOOLS = new Set(["dig", "host", "nslookup", "getent", "ping", "ping6", "traceroute", "tracepath", "mtr", "nc", "ncat"]);
+function isPublicHost(h: string): boolean {
+  const host = h.replace(/^@/, "").replace(/^\[|\]$/g, "");
+  if (!host || /^-/.test(host)) return false;
+  try {
+    return !isLocalOrPrivateUrl(`http://${host}`);
+  } catch {
+    return false;
+  }
+}
+function networkProbePublicTarget(argv: string[]): string | null {
+  for (const a of argv.slice(1)) {
+    if (a.startsWith("-") && !a.startsWith("@")) continue; // flag, not a host
+    if (/^\d+$/.test(a)) continue; // a port number
+    if ((a.startsWith("@") || a.includes(".") || a.includes(":")) && isPublicHost(a)) return a.replace(/^@/, "");
+  }
+  return null;
 }
 
 export function classifyCommand(command: string, opts: ClassifyOptions = {}): Classification {
@@ -1059,11 +1156,23 @@ function classifySegment(segment: Segment, env: Env): SegmentClassification {
   // Secret material is off limits for EVERY command, before any per-tool logic: `awk '{print}'
   // /etc/shadow` used to slip past because the awk branch returned before the path check
   // (adversarial review). Reading it leaks it; writing it corrupts Miro or locks the user out.
-  const earlyPaths = pathTokens(argv, segment.redirects, env.home);
+  const programBearing = SHELLS.has(name) || name in INTERPRETERS || /^(g|m)?awk$/.test(name) || name === "sed";
+  const earlyPaths = programBearing
+    ? [...pathTokens(argv, segment.redirects, env.home), ...embeddedPathLiterals(argv, env.home)]
+    : pathTokens(argv, segment.redirects, env.home);
   const secret = earlyPaths.find((p) => SENSITIVE_READ_PATHS.some((re) => re.test(p)));
   if (secret) return { segment, effectiveArgv: argv, class: "forbidden", reason: `touches secret material at ${secret}` };
   const walk = secretTreeWalk(name, argv, earlyPaths, env.home);
   if (walk) return { segment, effectiveArgv: argv, class: "forbidden", reason: walk };
+  // A glob metacharacter in a path argument dodges the literal sensitive match — `cat /etc/shado?`
+  // expands to /etc/shadow only at exec time (audit C2). Forbid a glob whose literal prefix lies
+  // in a secret-holding area; ordinary globbed reads (`ls /var/log/*.log`) are untouched.
+  const glob = globReadRisk(argv, env.home);
+  if (glob) return { segment, effectiveArgv: argv, class: "forbidden", reason: `glob ${glob} could expand into secret material` };
+  if (name === "git") {
+    const gi = gitInjection(argv);
+    if (gi) return { segment, effectiveArgv: argv, class: "forbidden", reason: gi };
+  }
 
   // Interpreters and shells.
   if (SHELLS.has(name)) {
@@ -1125,6 +1234,10 @@ function classifySegment(segment: Segment, env: Env): SegmentClassification {
     if (segment.background) { cls = "mutate"; reason = "backgrounded with &"; }
     else if (segment.hasExpansion) { cls = "mutate"; reason = "unresolved shell expansion"; }
     else if (segment.globInCommand) { cls = "mutate"; reason = "glob in command position"; }
+    else if (EXFIL_NET_TOOLS.has(name)) {
+      const pub = networkProbePublicTarget(argv);
+      if (pub) { cls = "mutate"; reason = `${name} to public host ${pub} — a read may not egress to the internet`; }
+    }
     else if (!HARMLESS_BUILTINS.has(name)) {
       const real = env.resolveBinary(argv[0]);
       if (!real) { cls = "mutate"; reason = `binary ${argv[0]} not found`; }
