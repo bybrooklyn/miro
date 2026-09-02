@@ -6,6 +6,7 @@ import { listContainers } from "../inventory/containers";
 import { listServices } from "../inventory/systemd";
 import { getMounts } from "../inventory/storage";
 import * as extensions from "../extensions/store";
+import { listSecretRefs } from "../secrets";
 import type { ExtensionManifest } from "../extensions/manifest";
 import { query as queryMemory } from "../memory/store";
 
@@ -105,6 +106,12 @@ export function buildContextBlock(db: Database, snapshot: ServerSnapshot): strin
     );
   } else {
     parts.push("You operate no learned systems yet — app_learn acquires one when a request needs it.");
+  }
+  const refs = listSecretRefs(db, "extension.");
+  if (refs.length > 0) {
+    parts.push(
+      `Credentials on file (references only — values are never shown; use secretHeader { name, ref } or {{secret:<ref>}} in a body/URL; never ask the user for one of these):\n- ${refs.join("\n- ")}`,
+    );
   }
   parts.push(REFUSALS);
   return parts.join("\n\n");

@@ -17,6 +17,7 @@ import { buildInteractionTools } from "../agent/interaction-tools";
 import { buildOperationTools } from "../agent/operation-tools";
 import type { OperationToolContext } from "../operations/engine";
 import { remember } from "../memory/store";
+import { listSecretRefs } from "../secrets";
 import type { ExtensionHostManager } from "./host";
 import { validateExtension } from "./validate";
 import { buildManifest } from "./manifest";
@@ -56,9 +57,12 @@ config files via read_file). When the app needs a NEW password or token (a first
 an API key), call credential_create — it generates a strong value, stores it under a reference,
 and shows it to the user once; you only ever see the reference. Then pass the reference (never a
 value) into operation bindings via secretHeader, or read it in generated code via ctx.secrets.
-Save credentials you discover with secret_store. NEVER ask the user to invent a password for an
-app on this machine. Ask the user (ask_user, secretRef) ONLY for a credential that lives outside
-this machine (a VPN provider login, an external account).
+When you create an account, secret_store its username too (extension.<app>.admin_user), so a
+later session can authenticate with {{secret:...}} placeholders for both.
+Save credentials you discover with secret_store. Credentials already on file are listed at the
+end of this prompt: use them, never ask the user for one of them. NEVER ask the user to invent a
+password for an app on this machine. Ask the user (ask_user, secretRef) ONLY for a credential
+that lives outside this machine (a VPN provider login, an external account).
 
 ASK ABOUT INTENT, INFER IMPLEMENTATION. Before asking anything, check whether the machine already
 answers it. Never ask about ports, networks, paths, or which component to use.
@@ -85,8 +89,10 @@ manager, a download client), call app_learn for it, let it finish, then continue
 
 WHEN YOU UNDERSTAND THE APP, call extension_write with:
 - toolsTs / diagnosticsTs: TypeScript exporting buildTools(ctx) / buildDiagnostics(ctx) returning
-  ExtensionTool[] (types from "@miro/sdk"). Read-only: ctx.http.get, ctx.exec (read-only shell,
-  refused otherwise), ctx.readFile, ctx.secrets. Never import anything but "@miro/sdk".
+  ExtensionTool[] (types from "@miro/sdk") — every element a plain { name, description,
+  parameters, execute } object, never wrapped (not { tool: ... }). Read-only: ctx.http.get,
+  ctx.exec (read-only shell, refused otherwise), ctx.readFile, ctx.secrets. Never import anything
+  but "@miro/sdk".
 - operationsTs: TypeScript exporting buildOperations(ctx) returning ExtensionOperation[] — the
   app's writes, as bindings. Empty string only if the app genuinely has nothing to configure.
 - browserTs: only if browser-based diagnostics are genuinely needed; empty string otherwise.
@@ -342,10 +348,12 @@ export async function spawnLearningAgent(o: LearnAgentOptions): Promise<{ text: 
 
   let turns = 0;
   const maxTurns = o.maxTurns ?? DEFAULT_MAX_TURNS;
+  const refs = listSecretRefs(o.db, "extension.");
+  const systemPrompt = `${LEARN_SYSTEM_PROMPT}\n\nCredentials on file (references only — values are never shown): ${refs.length > 0 ? refs.join(", ") : "none yet"}.`;
   const agent = new Agent({
     // Heterogeneous per-tool parameter schemas can't unify into one array type without erasure —
     // same cast agent/index.ts's own createMiroAgent uses for the exact same reason.
-    initialState: { systemPrompt: LEARN_SYSTEM_PROMPT, model: o.model, tools: tools as AgentTool<any>[] },
+    initialState: { systemPrompt, model: o.model, tools: tools as AgentTool<any>[] },
     streamFn: (m, context, options) => o.models.streamSimple(m, context, o.reasoning ? { ...options, reasoning: o.reasoning } : options),
     getApiKey: async (provider) => resolveApiKey(provider, o.getStoredKey),
     shouldStopAfterTurn: () => ++turns >= maxTurns,

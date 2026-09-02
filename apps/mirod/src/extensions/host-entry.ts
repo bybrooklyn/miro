@@ -157,20 +157,32 @@ interface LoadedExtension {
   operations: Map<string, { spec: HostToolSpec; op: ExtensionOperation }>;
 }
 
+/** Generated code returns whatever the model wrote, and `ctx: any` lets any shape typecheck. A
+ * diagnostics.ts returning [{ tool: {...} }] surfaced as "entry.tool.execute is not a function"
+ * at the live probe, three attempts in a row, because nothing named the actual mistake. */
+function checkShape(fn: string, entry: any, method: "execute" | "bind"): void {
+  if (!entry || typeof entry.name !== "string" || typeof entry[method] !== "function") {
+    throw new Error(`${fn}(ctx) must return plain objects { name, description, parameters, ${method} } — got an element with keys [${Object.keys(entry ?? {}).join(", ")}]; do not wrap it`);
+  }
+}
+
 async function loadExtension(ctx: ExtensionContext): Promise<LoadedExtension> {
   const toolsMod = await importGenerated("./tools.ts");
   const diagMod = await importGenerated("./diagnostics.ts");
   const tools = new Map<string, { spec: HostToolSpec; tool: ExtensionTool }>();
   for (const tool of toolsMod.buildTools(ctx) as ExtensionTool[]) {
+    checkShape("buildTools", tool, "execute");
     tools.set(tool.name, { tool, spec: { name: tool.name, kind: "tool", label: tool.label, description: tool.description, parameters: tool.parameters } });
   }
   for (const tool of diagMod.buildDiagnostics(ctx) as ExtensionTool[]) {
+    checkShape("buildDiagnostics", tool, "execute");
     tools.set(tool.name, { tool, spec: { name: tool.name, kind: "diagnostic", label: tool.label, description: tool.description, parameters: tool.parameters } });
   }
   const operations = new Map<string, { spec: HostToolSpec; op: ExtensionOperation }>();
   if (existsSync(join(process.cwd(), "operations.ts"))) {
     const opsMod = await importGenerated("./operations.ts");
     for (const op of opsMod.buildOperations(ctx) as ExtensionOperation[]) {
+      checkShape("buildOperations", op, "bind");
       operations.set(op.name, { op, spec: { name: op.name, kind: "operation", label: op.label, description: op.description, parameters: op.parameters } });
     }
   }

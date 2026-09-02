@@ -162,11 +162,13 @@ export function PromptArea({
     return <ChoicePrompt key={pending.id} state={state} pending={pending} onAnswer={onAnswer} />;
   }
   if (pending?.type === "question") {
+    // The question gets its own line rather than only the placeholder: a placeholder disappears the
+    // moment you start typing, and a free-text question is usually the thing you need to keep reading.
     return (
       <TextPrompt
         key={pending.id}
         question={pending.prompt}
-        placeholder={pending.prompt}
+        placeholder="Type your answer…"
         onSubmit={(v) => onAnswer(pending.id, v)}
       />
     );

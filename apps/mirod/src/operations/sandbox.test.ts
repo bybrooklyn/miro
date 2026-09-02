@@ -12,7 +12,9 @@ const available = await sandboxAvailable();
 
 describe("bwrapArgs (pure)", () => {
   test("read-only root, writable binds, scratch /tmp, every namespace unshared, caps dropped", () => {
-    const args = bwrapArgs({ writableRoots: ["/srv/media", "/var/run/docker.sock"], network: false });
+    // The unprivileged shape — pinned with root=false so the assertion holds when the suite itself
+    // runs as root on the VM.
+    const args = bwrapArgs({ writableRoots: ["/srv/media", "/var/run/docker.sock"], network: false }, false);
     expect(args.slice(0, 3)).toEqual(["bwrap", "--ro-bind", "/"]);
     expect(args).toContain("--unshare-all");
     expect(args).not.toContain("--share-net");
@@ -23,9 +25,22 @@ describe("bwrapArgs (pure)", () => {
     expect(args[args.length - 1]).toBe("--");
   });
   test("network on re-shares the host namespace; keepCapabilities keeps them", () => {
-    const args = bwrapArgs({ writableRoots: [], network: true, keepCapabilities: true });
+    const args = bwrapArgs({ writableRoots: [], network: true, keepCapabilities: true }, false);
     expect(args).toContain("--share-net");
     expect(args.join(" ")).not.toContain("--cap-drop");
+    expect(args.join(" ")).not.toContain("--cap-add");
+  });
+  test("as root: no user namespace, net unshared unless declared, reads keep only CAP_DAC_READ_SEARCH", () => {
+    const read = bwrapArgs({ writableRoots: [], network: false }, true);
+    expect(read).not.toContain("--unshare-all");
+    expect(read).not.toContain("--share-net");
+    for (const ns of ["--unshare-ipc", "--unshare-pid", "--unshare-uts", "--unshare-cgroup-try", "--unshare-net"]) expect(read).toContain(ns);
+    expect(read.join(" ")).toContain("--cap-drop ALL --cap-add CAP_DAC_READ_SEARCH");
+    const net = bwrapArgs({ writableRoots: [], network: true }, true);
+    expect(net).not.toContain("--unshare-net");
+    const apply = bwrapArgs({ writableRoots: ["/srv"], network: true, keepCapabilities: true }, true);
+    expect(apply.join(" ")).toContain("--cap-add ALL");
+    expect(apply.join(" ")).not.toContain("--cap-drop");
   });
   test("declaring / writable is refused", () => {
     expect(() => bwrapArgs({ writableRoots: ["/"], network: false })).toThrow();
@@ -72,7 +87,10 @@ describe.skipIf(!available)("runSandboxed (real bubblewrap)", () => {
   });
 
   test("a root payload cannot remount the root read-write and escape (adversarial review)", async () => {
-    for (const keepCapabilities of [false, true]) {
+    // As real root, keepCapabilities is the named ceiling (see bwrapArgs): a payload holding
+    // CAP_SYS_ADMIN outside a user namespace can remount. Every capability-dropped command holds.
+    const root = process.getuid?.() === 0;
+    for (const keepCapabilities of root ? [false] : [false, true]) {
       const r = await runSandboxed(["sh", "-c", "mount -o remount,rw / && touch /etc/sandbox-escape"], { writableRoots: [], network: false, keepCapabilities });
       expect(r.exitCode).not.toBe(0);
       expect(existsSync("/etc/sandbox-escape")).toBe(false);

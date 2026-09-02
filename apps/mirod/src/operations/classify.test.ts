@@ -24,7 +24,7 @@ beforeAll(() => {
   // compares realpaths against the trusted list, so the fixture must be a realpath too.
   binDir = realpathSync(mkdtempSync(join(tmpdir(), "classify-bin-")));
   untrustedDir = realpathSync(mkdtempSync(join(tmpdir(), "classify-untrusted-")));
-  for (const n of ["ls", "cat", "rm", "ip", "docker", "systemctl", "grep", "find", "sed", "curl", "git", "apt", "dig", "ss", "tail", "python3", "bash", "sqlite3", "tee", "dd", "echo", "jq", "env", "sudo", "xargs", "nsenter", "busybox", "nice", "timeout", "tcpdump", "iptables", "nft", "ufw", "passwd", "kill", "pkill", "truncate", "cp", "mv", "tar", "rsync", "crontab", "chmod", "chown", "sleep", "yes", "watch", "wget", "perl", "node", "awk", "stat", "df", "journalctl", "nmcli", "apt-get", "dpkg", "mount", "umount", "sysctl", "pip", "ln", "mkdir", "touch", "wg", "ssh", "npm", "printenv", "top", "less", "apt-cache", "wc", "nc", "flock", "runuser", "taskset", "chrt", "unshare", "script", "setpriv", "systemd-run", "at", "batch"]) {
+  for (const n of ["ls", "cat", "rm", "ip", "docker", "systemctl", "grep", "rg", "find", "sed", "curl", "git", "apt", "dig", "ss", "tail", "python3", "bash", "sqlite3", "tee", "dd", "echo", "jq", "env", "sudo", "xargs", "nsenter", "busybox", "nice", "timeout", "tcpdump", "iptables", "nft", "ufw", "passwd", "kill", "pkill", "truncate", "cp", "mv", "tar", "rsync", "crontab", "chmod", "chown", "sleep", "yes", "watch", "wget", "perl", "node", "awk", "stat", "df", "journalctl", "nmcli", "apt-get", "dpkg", "mount", "umount", "sysctl", "pip", "ln", "mkdir", "touch", "wg", "ssh", "npm", "printenv", "top", "less", "apt-cache", "wc", "nc", "flock", "runuser", "taskset", "chrt", "unshare", "script", "setpriv", "systemd-run", "at", "batch"]) {
     fakeExecutable(binDir, n);
   }
   // A symlink named `ls` that is really `rm` — the PATH-shadow bypass.
@@ -451,6 +451,34 @@ describe("forbidden", () => {
     const got = classifyCommand(`${untrustedDir}/shadow/ls x`, { resolveBinary: resolve, trustedBinDirs: [binDir, untrustedDir], home: "/home/miro" });
     expect(got.class).toBe("forbidden");
     expect(got.reasons[0]).toContain("really");
+  });
+});
+
+describe("tree-walking readers rooted where secrets live (root sandbox review)", () => {
+  test("a recursion from at or above a secret-holding directory is forbidden, whatever the class", () => {
+    expectAll("forbidden", [
+      "grep -r password /root",
+      "grep -Rn token /home",
+      "rg token /home/miro",
+      "grep -rn Port /etc",
+      "grep --recursive x /var/lib",
+      "sudo grep -r x /",
+      "tar cf - /home/miro",
+      "tar czf /tmp/keys.tgz /root",
+      "find /root -type f -exec cat {} \\;",
+      "grep -r x /proc",
+      "rg secret",
+    ]);
+  });
+  test("a narrower target, a non-recursive read, or a name-only walk stays a read", () => {
+    expectAll("read", [
+      "grep -rn Port /etc/ssh",
+      "rg foo /srv/media",
+      "grep -n x /etc/hostname",
+      "find /root -name '*.conf'",
+      "tar tzf /tmp/x.tgz",
+      "grep -r x /var/lib/docker",
+    ]);
   });
 });
 

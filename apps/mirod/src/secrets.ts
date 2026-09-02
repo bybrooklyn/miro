@@ -20,6 +20,18 @@ export interface SecretStore {
   getSecret(db: Database, ref: SecretRef): string | null;
 }
 
+export function ensureSecretsTable(db: Database): void {
+  db.run("CREATE TABLE IF NOT EXISTS secrets (ref TEXT PRIMARY KEY, ciphertext TEXT NOT NULL)");
+}
+
+/** Refs only, never values — what an agent is told it already holds ("credentials on file").
+ * Found live: with the admin password Miro itself had created sitting under
+ * extension.jellyfin.admin_password, both agents asked the user for it, because nothing listed it. */
+export function listSecretRefs(db: Database, prefix = ""): SecretRef[] {
+  const rows = db.query("SELECT ref FROM secrets WHERE ref LIKE ? ORDER BY ref").all(`${prefix}%`) as { ref: string }[];
+  return rows.map((r) => r.ref);
+}
+
 export function createSecretStore(keyPath: string): SecretStore {
   function loadOrCreateKey(): Buffer {
     if (existsSync(keyPath)) return readFileSync(keyPath);
@@ -50,9 +62,7 @@ export function createSecretStore(keyPath: string): SecretStore {
   return {
     encrypt,
     decrypt,
-    ensureTable(db) {
-      db.run("CREATE TABLE IF NOT EXISTS secrets (ref TEXT PRIMARY KEY, ciphertext TEXT NOT NULL)");
-    },
+    ensureTable: ensureSecretsTable,
     setSecret(db, ref, value) {
       db.run(
         "INSERT INTO secrets (ref, ciphertext) VALUES (?, ?) ON CONFLICT(ref) DO UPDATE SET ciphertext = excluded.ciphertext",

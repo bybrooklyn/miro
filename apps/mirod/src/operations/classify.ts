@@ -315,7 +315,36 @@ const SENSITIVE_READ_PATHS: RegExp[] = [
   /(^|\/)\.docker\/config\.json$/,
   /^\/proc\/(self|\d+)\/environ$/,
   /^\/proc\/(self|\d+)\/(mem|maps)$/,
+  /^\/etc\/ssl\/private(\/|$)/,
 ];
+
+/** Directories whose subtree holds secret material. Recursing from at or above one reads it
+ * without ever naming it: `grep -r . /root`, `rg token /home`, `tar cf - /etc`. Every home
+ * counts — the .ssh/.env/.netrc patterns above are home-relative. Found reviewing the root
+ * sandbox: uid 0 owns /root/.ssh outright, and reads as root hold CAP_DAC_READ_SEARCH. */
+const SECRET_HOLDING_DIRS = ["/root", "/etc", "/proc", "/var/lib/miro"];
+function holdsSecrets(dir: string, home: string): boolean {
+  if (dir === "/" || dir === "/home" || /^\/home\/[^/]+$/.test(dir)) return true;
+  return [...SECRET_HOLDING_DIRS, home].some((d) => d === dir || d.startsWith(dir + "/"));
+}
+
+/** A tree-walking content reader rooted where secrets live is forbidden whatever its class —
+ * `tar czf /tmp/x.tgz /home/miro` is a mutate that packs every key for a later read. Named
+ * targets only: a walker with no path walks the working directory, which is refused outright.
+ * ponytail: `find /root -type f | xargs cat` feeds paths through a pipe the classifier does not
+ * follow; there redactSecretsInText on the output is the last line. */
+function secretTreeWalk(name: string, argv: string[], paths: string[], home: string): string | null {
+  const rest = argv.slice(1);
+  const walks =
+    (["grep", "egrep", "fgrep"].includes(name) && rest.some((x) => /^-[a-zA-Z]*[rR][a-zA-Z]*$/.test(x) || x === "--recursive" || x === "--dereference-recursive" || x === "--directories=recurse")) ||
+    ["rg", "ag", "ack"].includes(name) ||
+    (name === "tar" && ((/^-?[a-zA-Z]*c/.test(rest[0] ?? "") && !(rest[0] ?? "").startsWith("--")) || rest.includes("-c") || rest.includes("--create"))) ||
+    (name === "find" && ["-exec", "-execdir", "-ok", "-okdir"].some((f) => rest.includes(f)));
+  if (!walks) return null;
+  if (paths.length === 0) return `${name} would walk the working directory — name an absolute path to search`;
+  const hit = paths.find((p) => holdsSecrets(p, home));
+  return hit ? `recursive read over ${hit}, which holds secret material — name a narrower directory` : null;
+}
 
 /** Canonical form for path matching: `~` expanded, `.`/`..`/`//` collapsed, the /proc back doors
  * (`/proc/self/root/etc/shadow`, `/proc/1/cwd/…`) stripped to what they alias. Symlinks are the
@@ -1033,6 +1062,8 @@ function classifySegment(segment: Segment, env: Env): SegmentClassification {
   const earlyPaths = pathTokens(argv, segment.redirects, env.home);
   const secret = earlyPaths.find((p) => SENSITIVE_READ_PATHS.some((re) => re.test(p)));
   if (secret) return { segment, effectiveArgv: argv, class: "forbidden", reason: `touches secret material at ${secret}` };
+  const walk = secretTreeWalk(name, argv, earlyPaths, env.home);
+  if (walk) return { segment, effectiveArgv: argv, class: "forbidden", reason: walk };
 
   // Interpreters and shells.
   if (SHELLS.has(name)) {

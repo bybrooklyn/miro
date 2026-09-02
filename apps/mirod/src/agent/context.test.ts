@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { buildContextBlock, buildCapabilitiesTool, type ServerSnapshot } from "./context";
 import { ensureExtensionsTable, promote } from "../extensions/store";
 import { ensureMemoryTable, remember } from "../memory/store";
+import { ensureSecretsTable } from "../secrets";
 
 // Real in-memory DB with a promoted extension and a capability document; a hand-made snapshot
 // (the inventory functions are live-verified on the VM, not re-tested here).
@@ -11,6 +12,7 @@ function db() {
   const d = new Database(":memory:");
   ensureExtensionsTable(d);
   ensureMemoryTable(d);
+  ensureSecretsTable(d);
   return d;
 }
 
@@ -42,6 +44,21 @@ test("context block: snapshot, no systems yet, refusals", () => {
   expect(block).toContain("You operate no learned systems yet");
   expect(block).toContain("file_delete (moves to trash, recoverable)");
   expect(block).toContain("credential_create");
+  expect(block).not.toContain("Credentials on file");
+});
+
+test("context block names stored extension credentials by reference only — never Miro's own refs", () => {
+  const d = db();
+  d.run("INSERT INTO secrets (ref, ciphertext) VALUES (?, ?), (?, ?), (?, ?)", [
+    "extension.jellyfin.admin_password", "cipher-a",
+    "extension.jellyfin.admin_user", "cipher-b",
+    "provider.anthropic", "cipher-c",
+  ]);
+  const block = buildContextBlock(d, snapshot);
+  expect(block).toContain("Credentials on file");
+  expect(block).toContain("- extension.jellyfin.admin_password\n- extension.jellyfin.admin_user");
+  expect(block).not.toContain("provider.anthropic");
+  expect(block).not.toContain("cipher-");
 });
 
 test("context block lists an operated system with its read and write tool names", () => {

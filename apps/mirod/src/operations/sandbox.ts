@@ -5,9 +5,10 @@ import { mkdirSync, existsSync } from "node:fs";
 // filesystem, with exactly the plan-declared paths bind-mounted writable and the network shared
 // only if the plan said so. A write outside the declared scope fails with EROFS/EACCES — the
 // operation's verify then fails and the engine rolls back. Proven live on the dev VM before this
-// file existed: in-scope write OK, /etc and $HOME writes refused, network blocked, and as root the
-// exact same constraints hold (Landlock as a second lock is the named upgrade path — ponytail: one
-// layer now, two when a tiny Landlock helper exists; bubblewrap is a CLI usable today).
+// file existed: in-scope write OK, /etc and $HOME writes refused, network blocked. As root the
+// same constraints hold for every capability-dropped command; see bwrapArgs for the one root
+// difference (no user namespace) and what it costs (Landlock as a second lock is the named
+// upgrade path — ponytail: one layer now, two when a tiny Landlock helper exists).
 //
 // Limits, stated: the sandbox cannot see past a socket. `docker run -v /:/host`, `systemctl`,
 // D-Bus and `apt`-via-`dpkg` do their work in another process, which is why the classifier's
@@ -48,10 +49,28 @@ export const DEFAULT_MAX_OUTPUT_BYTES = 256 * 1024;
 
 /** The bubblewrap argv for a given policy — exported so tests and the plan display can show the
  * exact containment a command will run under. */
-export function bwrapArgs(opts: SandboxOptions): string[] {
-  // --unshare-all puts the command in fresh user/pid/ipc/uts/cgroup/net namespaces; the mounts it
-  // sees are locked there, so even a root payload cannot `mount -o remount,rw /` its way out
-  // (adversarial review). --share-net re-shares the host network namespace when declared.
+export function bwrapArgs(opts: SandboxOptions, root = process.getuid?.() === 0): string[] {
+  // Unprivileged: --unshare-all. The fresh user namespace is what lets bwrap mount at all, and it
+  // locks the read-only root: even a root payload inside cannot `mount -o remount,rw /` its way
+  // out (adversarial review). --share-net re-shares the host network namespace when declared.
+  // As real root there is no user namespace: inside one every file owned by an unmapped uid is
+  // "nobody", and not even root may traverse another user's 0700 home — `bwrap: Can't find source
+  // path /home/miro: Permission denied` on a declared root rolled a real operation back (found
+  // live). Without it the read-only root still holds against any payload lacking CAP_SYS_ADMIN:
+  // every read, every command with capabilities dropped. keepCapabilities as root keeps the
+  // declared-roots fence for an honest command (EROFS elsewhere), not against a hostile one —
+  // which, holding real root and the docker socket, a mount namespace never contained anyway.
+  // ponytail: Landlock is the second lock (PLAN.md §5.7); a capable root cannot lift that one.
+  const namespaces = root
+    ? ["--unshare-ipc", "--unshare-pid", "--unshare-uts", "--unshare-cgroup-try", ...(opts.network ? [] : ["--unshare-net"])]
+    : ["--unshare-all", ...(opts.network ? ["--share-net"] : [])];
+  // bwrap hands a privileged caller's payload no capabilities unless asked. Reads as root get
+  // exactly one back — read anything: a manager must read app config in another user's home.
+  // Secret material stays behind the classifier's path and tree-walk rules, and /proc is the
+  // sandbox's own pid namespace, so no host process's environ is there to read.
+  const caps = opts.keepCapabilities
+    ? root ? ["--cap-add", "ALL"] : []
+    : ["--cap-drop", "ALL", ...(root ? ["--cap-add", "CAP_DAC_READ_SEARCH"] : [])];
   const args = [
     "bwrap",
     "--ro-bind", "/", "/",
@@ -59,9 +78,8 @@ export function bwrapArgs(opts: SandboxOptions): string[] {
     "--proc", "/proc",
     "--die-with-parent",
     "--new-session",
-    "--unshare-all",
-    ...(opts.network ? ["--share-net"] : []),
-    ...(opts.keepCapabilities ? [] : ["--cap-drop", "ALL"]),
+    ...namespaces,
+    ...caps,
   ];
   const roots = [...new Set(opts.writableRoots.map((p) => p.replace(/\/+$/, "") || "/"))];
   if (roots.includes("/")) throw new Error("a sandbox cannot declare / writable");
