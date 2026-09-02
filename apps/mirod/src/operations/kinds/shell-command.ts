@@ -69,7 +69,10 @@ export const shellCommandKind: OperationKind<ShellCommandParams, ShellCommandCap
   },
 
   async captureState(p) {
-    return { snapshot: await snapshotPaths(p.writes, `shell-${Date.now()}`) };
+    // A random suffix, not just Date.now(): two shell ops capturing in the same millisecond would
+    // otherwise write the same `shell-<ts>.tar` and one op's rollback would restore the other's
+    // bytes (audit E3). trash.ts adds the same for the same reason.
+    return { snapshot: await snapshotPaths(p.writes, `shell-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`) };
   },
 
   async apply(p) {

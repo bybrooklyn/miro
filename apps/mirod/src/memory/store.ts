@@ -212,9 +212,15 @@ export function recordIncident(
   return remember(db, "incident", `incident.${info.kind}.${slug}`, value, `mechanical:${info.kind}`);
 }
 
-/** Delete-only "editing" this slice — id or an id prefix (the /memory display shows short prefixes). */
+/** Delete-only "editing" this slice — id or an id prefix (the /memory display shows short prefixes).
+ * The prefix goes into a LIKE, so `%`/`_` must be escaped or `/memory forget %` (or an empty arg,
+ * building the pattern `%`) would wipe every memory — preferences, facts, and the learned
+ * capability documents — with no undo (audit D1). */
 export function forget(db: Database, idOrPrefix: string): number {
-  const result = db.run("DELETE FROM memories WHERE id = ? OR id LIKE ?", [idOrPrefix, `${idOrPrefix}%`]);
+  const trimmed = idOrPrefix.trim();
+  if (trimmed === "") return 0; // never match-all on an empty argument
+  const escaped = trimmed.replace(/[\\%_]/g, (c) => `\\${c}`);
+  const result = db.run(`DELETE FROM memories WHERE id = ? OR id LIKE ? ESCAPE '\\'`, [trimmed, `${escaped}%`]);
   return result.changes;
 }
 

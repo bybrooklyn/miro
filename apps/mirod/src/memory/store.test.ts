@@ -108,6 +108,18 @@ test("forget deletes by exact id or id prefix", () => {
   expect(getByKey(db, "preference", "reply_style")).toBeNull();
 });
 
+test("forget never wildcard-wipes: %, _, and empty match nothing (audit D1)", () => {
+  const db = freshDb();
+  remember(db, "preference", "reply_style", "terse", "agent_tool");
+  remember(db, "capability", "jellyfin", "operational model", "learn");
+  remember(db, "server_fact", "os", "Debian 13", "agent_tool");
+  expect(forget(db, "%")).toBe(0); // the LIKE-wildcard wipe that would delete everything
+  expect(forget(db, "")).toBe(0);
+  expect(forget(db, "   ")).toBe(0);
+  expect(forget(db, "_")).toBe(0);
+  expect(query(db, {}).length).toBe(3); // all three survive
+});
+
 test("formatForDisplay groups by category and includes short ids", () => {
   const db = freshDb();
   expect(formatForDisplay([])).toBe("Nothing remembered yet.");

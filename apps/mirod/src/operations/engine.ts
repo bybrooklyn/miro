@@ -233,6 +233,25 @@ export async function reconcileOperations(db: Database, kinds: Record<string, Op
 
   for (const op of store.listByPhases(db, ["applying", "verifying"])) {
     const kind = kinds[op.kind];
+    // The plan was persisted at confirm time (store.setPlan) but reconcile used to ignore it, so
+    // the crash path could not honour irreversible or lifeline — the exact guarantees the durable
+    // engine exists to keep (audit E1, E2).
+    let plan: OperationPlan | null = null;
+    try { plan = op.plan ? (JSON.parse(op.plan) as OperationPlan) : null; } catch { plan = null; }
+
+    // Irreversible (a completed wizard step, a create with no undo): the change may have applied
+    // before the crash and cannot be undone. Reporting "rolled back" is the false-rollback the
+    // applied_unverified outcome was built to kill — and this op often has no rollback data, so it
+    // used to fall into the rollback branch below. Mark it applied, never claim an undo (E1).
+    if (plan?.irreversible) {
+      let verified = false;
+      try { if (kind && op.params) verified = await kind.verify(JSON.parse(op.params)); } catch { /* inconclusive */ }
+      store.setPhase(db, op.id, "committed");
+      memory.recordIncident(db, { kind: op.kind, goal: op.goal, phase: "committed", error: null });
+      if (!verified) console.warn(`[mirod] reconciled ${op.kind} (${op.goal}) as applied-unverified — irreversible, could not confirm; inspect`);
+      continue;
+    }
+
     if (!kind || !op.capturedState || !op.rollback) {
       const error = "reconciled after crash: no known kind/recovery data";
       store.setPhase(db, op.id, "rolledback", error);
@@ -243,8 +262,18 @@ export async function reconcileOperations(db: Database, kinds: Record<string, Op
     const captured = JSON.parse(op.capturedState);
     try {
       if (await kind.verify(params)) {
-        store.setPhase(db, op.id, "committed");
-        memory.recordIncident(db, { kind: op.kind, goal: op.goal, phase: "committed", error: null });
+        // A lifeline change (a firewall/SSH edit that could lock the user out) is only committed
+        // once a human confirms they can still reach Miro. That handshake cannot happen at boot, so
+        // the contract-consistent action is to revert, never headless-commit a possible lockout (E2).
+        if (plan?.class === "lifeline") {
+          await kind.rollback(params, captured).catch(() => {});
+          const error = "reconciled after crash: lifeline reachability could not be confirmed";
+          store.setPhase(db, op.id, "rolledback", error);
+          memory.recordIncident(db, { kind: op.kind, goal: op.goal, phase: "rolledback", error });
+        } else {
+          store.setPhase(db, op.id, "committed");
+          memory.recordIncident(db, { kind: op.kind, goal: op.goal, phase: "committed", error: null });
+        }
       } else {
         await kind.rollback(params, captured).catch(() => {});
         const error = "reconciled after crash: verification failed";

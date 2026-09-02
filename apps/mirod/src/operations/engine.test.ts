@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import type { ServerEvent } from "@miro/protocol";
 import { runOperation, reconcileOperations, type OperationKind, type OperationToolContext, type ReflectionTrigger } from "./engine";
-import { createOperation, setCapturedAndApplying, ensureOperationsTable } from "./store";
+import { createOperation, setCapturedAndApplying, setPlan, getOperation, ensureOperationsTable } from "./store";
 import { ensureMemoryTable, listAll } from "../memory/store";
 
 function freshDb(): Database {
@@ -218,6 +218,47 @@ test("reconcileOperations: mid-flight + verify fails -> rollback called", async 
   await reconcileOperations(db, { "test.kind": kind });
 
   expect(kind.calls).toEqual(["verify", "rollback"]);
+});
+
+test("reconcileOperations: irreversible + verify fails -> committed, NOT a false rollback (audit E1)", async () => {
+  const db = freshDb();
+  createOperation(db, "op1", "test.kind", "create admin", JSON.stringify({ x: 1 }));
+  setPlan(db, "op1", JSON.stringify({ summary: "POST /Startup/User", autoApprove: false, irreversible: true }), false);
+  setCapturedAndApplying(db, "op1", JSON.stringify({ was: true }), JSON.stringify({ was: true }));
+  const kind = fakeKind({ verifyResult: false }); // the wizard-step case: applied but verify can't confirm
+
+  await reconcileOperations(db, { "test.kind": kind });
+
+  expect(kind.calls).not.toContain("rollback"); // never claim an undo that did not happen
+  expect(getOperation(db, "op1")!.phase).toBe("committed");
+});
+
+test("reconcileOperations: irreversible with no recovery data -> committed, not the old rollback branch (E1)", async () => {
+  const db = freshDb();
+  createOperation(db, "op1", "test.kind", "create admin", JSON.stringify({ x: 1 }));
+  setPlan(db, "op1", JSON.stringify({ summary: "POST", autoApprove: false, irreversible: true }), false);
+  // left in 'applying' with no captured_state/rollback (an http POST with no undo)
+  const db2 = db;
+  db2.run("UPDATE operations SET phase = 'applying' WHERE id = 'op1'");
+  const kind = fakeKind({ verifyResult: true });
+
+  await reconcileOperations(db, { "test.kind": kind });
+
+  expect(getOperation(db, "op1")!.phase).toBe("committed");
+});
+
+test("reconcileOperations: lifeline + verify passes -> rolled back, gate not bypassed (audit E2)", async () => {
+  const db = freshDb();
+  createOperation(db, "op1", "test.kind", "tighten firewall", JSON.stringify({ x: 1 }));
+  setPlan(db, "op1", JSON.stringify({ summary: "ufw deny", autoApprove: false, class: "lifeline" }), false);
+  setCapturedAndApplying(db, "op1", JSON.stringify({ was: true }), JSON.stringify({ was: true }));
+  const kind = fakeKind({ verifyResult: true });
+
+  await reconcileOperations(db, { "test.kind": kind });
+
+  // The reachability handshake cannot happen at boot, so a possible lockout is reverted, never committed.
+  expect(kind.calls).toContain("rollback");
+  expect(getOperation(db, "op1")!.phase).toBe("rolledback");
 });
 
 test("runOperation: committed -> mechanical incident memory written", async () => {
