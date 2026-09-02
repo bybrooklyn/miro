@@ -6,8 +6,17 @@ import { Type, type Static } from "@earendil-works/pi-ai";
 
 export { Type, type Static };
 
+/** What ctx.http.get resolves to — the actual HTTP response, not a pre-parsed body. A non-2xx is
+ * returned (never thrown), so a health check can read `status` directly; `json()` parses `body`. */
+export interface HttpResponse {
+  status: number;
+  ok: boolean;
+  body: string;
+  json<T = any>(): T;
+}
+
 export interface HttpClient {
-  get(path: string, opts?: { query?: Record<string, string> }): Promise<unknown>;
+  get(path: string, opts?: { query?: Record<string, string>; headers?: Record<string, string> }): Promise<HttpResponse>;
 }
 
 function withQuery(path: string, query?: Record<string, string>): string {
@@ -15,31 +24,36 @@ function withQuery(path: string, query?: Record<string, string>): string {
   return `${path}?${new URLSearchParams(query).toString()}`;
 }
 
-/** Real client — used by extensions/host-entry.ts's `init`/`learn_init` modes. */
+function response(status: number, body: string): HttpResponse {
+  return { status, ok: status >= 200 && status < 300, body, json: <T,>() => JSON.parse(body) as T };
+}
+
+/** Real client — used by extensions/host-entry.ts's `init`/`learn_init` modes. Per-call headers
+ * merge over the client's fixed auth headers. */
 export function createHttpClient(baseUrl: string, headers: Record<string, string>): HttpClient {
   return {
     async get(path, opts) {
-      const res = await fetch(new URL(withQuery(path, opts?.query), baseUrl), { headers });
-      const text = await res.text();
-      if (!res.ok) throw new Error(`GET ${path} -> ${res.status}: ${text.slice(0, 500)}`);
-      try {
-        return JSON.parse(text);
-      } catch {
-        return text;
-      }
+      const res = await fetch(new URL(withQuery(path, opts?.query), baseUrl), { headers: { ...headers, ...opts?.headers } });
+      return response(res.status, await res.text());
     },
   };
 }
 
 /** Fixture-based fake client — used by generated tests.ts (extensions/host-entry.ts's `test_init`
  * mode) so tests exercise the generated parsing/mapping logic deterministically, no real network.
- * Exact-path match only (query string ignored) — a fixture router, not a full HTTP mock. */
+ * A fixture value is the response body (an object is JSON-encoded, a string used verbatim); wrap
+ * it as `{ status, body }` to fix a non-200. Exact-path match only (query string ignored). */
 export function createFakeHttpClient(routes: Record<string, unknown> = {}): HttpClient {
   return {
     async get(path) {
       const key = path.split("?")[0];
       if (!(key in routes)) throw new Error(`No fixture for GET ${path}`);
-      return routes[key];
+      const v = routes[key];
+      if (v !== null && typeof v === "object" && "status" in v && "body" in v) {
+        const b = (v as { body: unknown }).body;
+        return response((v as { status: number }).status, typeof b === "string" ? b : JSON.stringify(b));
+      }
+      return response(200, typeof v === "string" ? v : JSON.stringify(v));
     },
   };
 }
@@ -73,7 +87,8 @@ export interface BrowserSession {
 
 export interface ExtensionTool<P = any> {
   name: string;
-  label: string;
+  /** Human label for the UI; defaults to `name` when omitted (generated code rarely sets it). */
+  label?: string;
   description: string;
   parameters: unknown; // a TSchema (Type.Object(...)) — kept as unknown here to avoid a hard TypeBox type dependency in generated code's own signatures
   execute: (args: P) => Promise<unknown>;
@@ -162,7 +177,8 @@ export interface OperationBinding {
  * generated tests read the result directly). */
 export interface ExtensionOperation<P = any> {
   name: string;
-  label: string;
+  /** Human label for the UI; defaults to `name` when omitted. */
+  label?: string;
   description: string;
   parameters: unknown;
   bind: (args: P) => OperationBinding;

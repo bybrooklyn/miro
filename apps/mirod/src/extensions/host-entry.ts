@@ -172,18 +172,18 @@ async function loadExtension(ctx: ExtensionContext): Promise<LoadedExtension> {
   const tools = new Map<string, { spec: HostToolSpec; tool: ExtensionTool }>();
   for (const tool of toolsMod.buildTools(ctx) as ExtensionTool[]) {
     checkShape("buildTools", tool, "execute");
-    tools.set(tool.name, { tool, spec: { name: tool.name, kind: "tool", label: tool.label, description: tool.description, parameters: tool.parameters } });
+    tools.set(tool.name, { tool, spec: { name: tool.name, kind: "tool", label: tool.label ?? tool.name, description: tool.description, parameters: tool.parameters } });
   }
   for (const tool of diagMod.buildDiagnostics(ctx) as ExtensionTool[]) {
     checkShape("buildDiagnostics", tool, "execute");
-    tools.set(tool.name, { tool, spec: { name: tool.name, kind: "diagnostic", label: tool.label, description: tool.description, parameters: tool.parameters } });
+    tools.set(tool.name, { tool, spec: { name: tool.name, kind: "diagnostic", label: tool.label ?? tool.name, description: tool.description, parameters: tool.parameters } });
   }
   const operations = new Map<string, { spec: HostToolSpec; op: ExtensionOperation }>();
   if (existsSync(join(process.cwd(), "operations.ts"))) {
     const opsMod = await importGenerated("./operations.ts");
     for (const op of opsMod.buildOperations(ctx) as ExtensionOperation[]) {
       checkShape("buildOperations", op, "bind");
-      operations.set(op.name, { op, spec: { name: op.name, kind: "operation", label: op.label, description: op.description, parameters: op.parameters } });
+      operations.set(op.name, { op, spec: { name: op.name, kind: "operation", label: op.label ?? op.name, description: op.description, parameters: op.parameters } });
     }
   }
   return { tools, operations };

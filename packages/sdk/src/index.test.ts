@@ -1,14 +1,23 @@
 import { test, expect } from "bun:test";
 import { createFakeHttpClient, Type } from "./index";
 
-test("createFakeHttpClient routes an exact path to its fixture", async () => {
+test("createFakeHttpClient wraps a fixture as a 200 HttpResponse with a json() body", async () => {
   const client = createFakeHttpClient({ "/health": { health: "green" } });
-  expect(await client.get("/health")).toEqual({ health: "green" });
+  const res = await client.get("/health");
+  expect(res.status).toBe(200);
+  expect(res.ok).toBe(true);
+  expect(res.json<{ health: string }>().health).toBe("green");
+  expect(JSON.parse(res.body).health).toBe("green");
 });
 
-test("createFakeHttpClient ignores query strings when matching", async () => {
-  const client = createFakeHttpClient({ "/message": { messages: [] } });
-  expect(await client.get("/message", { query: { limit: "10" } })).toEqual({ messages: [] });
+test("createFakeHttpClient ignores query strings and can fix a non-200", async () => {
+  const client = createFakeHttpClient({ "/message": { messages: [] }, "/down": { status: 503, body: "loading" } });
+  const msg = await client.get("/message", { query: { limit: "10" } });
+  expect(JSON.parse(msg.body).messages).toEqual([]);
+  const down = await client.get("/down");
+  expect(down.status).toBe(503);
+  expect(down.ok).toBe(false);
+  expect(down.body).toBe("loading");
 });
 
 test("createFakeHttpClient throws for an unfixtured path", async () => {

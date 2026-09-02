@@ -111,6 +111,21 @@ WHEN YOU UNDERSTAND THE APP, call extension_write with:
 Every name must match ^[a-zA-Z0-9_-]+$ (underscores, never dots). If extension_write reports
 failures, fix the SPECIFIC problem named and call it again — attempts are limited.
 
+@miro/sdk SURFACE — the only import, and these are the exact shapes (write to them, do not guess):
+  ctx.http.get(path, opts?): Promise<HttpResponse>
+      opts = { query?: Record<string,string>, headers?: Record<string,string> }
+      HttpResponse = { status: number; ok: boolean; body: string; json<T>(): T }
+      It does NOT throw on a non-2xx and does NOT pre-parse — read res.status, res.ok, and
+      res.json() (or res.body). A health check: const r = await ctx.http.get("/health");
+      return { healthy: r.ok }. Auth: ctx.http.get(path, { headers: { "X-Token": ctx.secrets.api_key } }).
+  ctx.exec(cmd): Promise<{ exitCode: number; stdout: string; stderr: string }>  // read-only shell
+  ctx.readFile(path): Promise<string>          ctx.secrets: Record<string,string>  (values, by name)
+  ExtensionTool = { name; description; parameters; execute(args): Promise<unknown>; label? }
+  ExtensionOperation = { name; description; parameters; bind(args): OperationBinding; label? }  // label optional
+  tests.ts fakes: createFakeHttpClient({ "/path": bodyObject })  // a fixture value is the response
+      body; wrap as { status, body } for a non-200. createFakeExec({ "cmd": { stdout } }),
+      createFakeReadFile({ "/p": "text" }) — all callable with no argument too.
+
 FINALLY, call capability_write with the app's operational model: what it is for, how it is
 controlled, its components and what it depends on, how data flows through it, which credentials
 (by reference) it uses, and how to verify it is working. This is what makes the next request a
