@@ -28,12 +28,18 @@ export function effectiveAutoApprove(plan: OperationPlan): boolean {
   return plan.autoApprove;
 }
 
+/** A tracked operation's terminal outcome. `applied_unverified` is the honest third state: the
+ * change reached the server (apply succeeded) but verify could not confirm it AND the operation
+ * is irreversible, so nothing was rolled back — reporting "rolledback" there is a lie that made
+ * the agent re-fight steps the server had already accepted (found live, run #6). */
+export type OperationOutcome = "committed" | "rolledback" | "applied_unverified";
+
 /** Fires when a repeated-failure pattern justifies a real (budgeted) LLM reflection pass, as
  * opposed to the cheap mechanical incident write that happens on every terminal operation. */
 export interface ReflectionTrigger {
   kind: string;
   goal: string;
-  outcome: "committed" | "rolledback";
+  outcome: OperationOutcome;
   message: string;
   repeatFailureCount: number;
 }
@@ -78,7 +84,7 @@ export async function runOperation<P, S>(
   kind: OperationKind<P, S>,
   goal: string,
   params: P,
-): Promise<{ outcome: "committed" | "rolledback"; message: string }> {
+): Promise<{ outcome: OperationOutcome; message: string }> {
   const { db, send, waitForAnswer, reflect } = ctx;
   const id = crypto.randomUUID();
   store.createOperation(db, id, kind.kind, goal, JSON.stringify(params));
@@ -188,12 +194,25 @@ export async function runOperation<P, S>(
     return { outcome: "committed", message };
   }
 
-  await kind.rollback(params, captured).catch((err) => console.error("[mirod] rollback failed", err));
-  store.setPhase(db, id, "rolledback", "verification failed");
-  const message = `Verification failed — ${goal}, rolled back.`;
-  onTerminal("rolledback", message);
-  send({ type: "operation_result", id, outcome: "rolledback", message });
-  return { outcome: "rolledback", message };
+  // Verify failed. A reversible op is restored to its captured state and honestly called
+  // "rolledback". An irreversible one (a POST with no undo, a completed wizard step) already
+  // changed the server and cannot be undone — its rollback() is a no-op, so "rolled back" would
+  // be a lie. Report applied_unverified so the agent re-inspects instead of blindly retrying a
+  // step the server may already have accepted (found live, run #6: the config and admin writes
+  // had landed, yet each was reported rolled back, and the agent fought them for minutes).
+  if (!plan.irreversible) {
+    await kind.rollback(params, captured).catch((err) => console.error("[mirod] rollback failed", err));
+    store.setPhase(db, id, "rolledback", "verification failed");
+    const message = `Verification failed — ${goal}, rolled back.`;
+    onTerminal("rolledback", message);
+    send({ type: "operation_result", id, outcome: "rolledback", message });
+    return { outcome: "rolledback", message };
+  }
+  store.setPhase(db, id, "committed"); // it did apply; there is nothing to reconcile back
+  const message = `Applied — ${goal}, but verification did not confirm it and it cannot be rolled back. Inspect the current state before retrying — the change may already be in effect.`;
+  onTerminal("committed", message); // recorded as applied, not a rollback; does not trip repeat-failure
+  send({ type: "operation_result", id, outcome: "applied_unverified", message });
+  return { outcome: "applied_unverified", message };
 }
 
 /** 90s: long enough to read the prompt and click, short enough that a lost connection does not

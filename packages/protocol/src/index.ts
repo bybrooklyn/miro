@@ -106,11 +106,13 @@ export interface OperationPlanEvent {
   details: Record<string, unknown> | null;
 }
 
-/** Final outcome of a tracked operation (plan §38). */
+/** Final outcome of a tracked operation (plan §38). `applied_unverified`: the change reached the
+ * server but verify could not confirm it and the operation is irreversible, so nothing was rolled
+ * back — distinct from both a clean commit and a true rollback. */
 export interface OperationResultEvent {
   type: "operation_result";
   id: string;
-  outcome: "committed" | "rolledback";
+  outcome: "committed" | "rolledback" | "applied_unverified";
   message: string;
 }
 

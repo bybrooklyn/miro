@@ -48,7 +48,7 @@ function render(state: UiState): string[] {
         const d = (block.plan.details ?? {}) as Record<string, unknown>;
         out.push(`operation  │ ${block.plan.summary}  [${String(d.class ?? "?")}]`);
         if (block.phase) out.push(`           │   … ${block.phase}`);
-        if (block.result) out.push(`           │   ${block.result.outcome === "committed" ? "✓" : "↩"} ${block.result.message}`);
+        if (block.result) out.push(`           │   ${block.result.outcome === "committed" ? "✓" : block.result.outcome === "applied_unverified" ? "⚠" : "↩"} ${block.result.message}`);
         break;
       }
       case "notice":

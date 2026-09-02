@@ -30,7 +30,7 @@ export type Block =
       id: string;
       plan: OperationPlanEvent;
       phase?: Phase;
-      result?: { outcome: "committed" | "rolledback"; message: string };
+      result?: { outcome: "committed" | "rolledback" | "applied_unverified"; message: string };
       at: number;
     }
   | { kind: "notice"; id: string; level: "info" | "warn" | "credential"; text: string; at: number };

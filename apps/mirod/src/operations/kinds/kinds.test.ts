@@ -127,6 +127,9 @@ describe("http.mutation", () => {
         if (url.pathname === "/no-content" && req.method === "POST") return new Response(null, { status: 204 });
         if (url.pathname === "/exists" && req.method === "POST") return new Response("already there", { status: 409 });
         if (url.pathname === "/login" && req.method === "POST") return Response.json({ AccessToken: "tok-123", User: { Id: "u1" } });
+        // POST applies (200), but a GET verify sees a body that never matches verifyExpect.
+        if (url.pathname === "/wizard" && req.method === "POST") { state.value = "applied"; return new Response(null, { status: 204 }); }
+        if (url.pathname === "/wizard" && req.method === "GET") return new Response("applied");
         return new Response("?", { status: 404 });
       },
     });
@@ -145,6 +148,17 @@ describe("http.mutation", () => {
       const missing = await runOperation(ctx().ctx, storing, "login", { method: "POST", url: `${base}/login`, storeResponseField: { field: "Nope", ref: "extension.app.x" } });
       expect(missing.outcome).toBe("committed");
       expect(stored.has("extension.app.x")).toBe(false);
+
+      // An irreversible POST whose verify fails is applied_unverified, NOT rolled back — the write
+      // reached the server (no rollback request, non-PUT), so claiming a rollback would be a lie.
+      const unver = await runOperation(ctx().ctx, storing, "wizard step", { method: "POST", url: `${base}/wizard`, verifyUrl: `${base}/wizard`, verifyExpect: "never-matches" });
+      expect(unver.outcome).toBe("applied_unverified");
+      expect(unver.message).toContain("cannot be rolled back");
+      // A reversible PUT with the same failing verify is genuinely rolled back.
+      state.value = "before";
+      const reverted = await runOperation(ctx().ctx, storing, "put step", { method: "PUT", url: `${base}/value`, body: "after", captureUrl: `${base}/value`, verifyUrl: `${base}/value`, verifyExpect: "never-matches" });
+      expect(reverted.outcome).toBe("rolledback");
+      expect(state.value).toBe("before");
       await expect(storing.describe({ method: "POST", url: `${base}/login`, storeResponseField: { field: "AccessToken", ref: "provider.anthropic" } })).rejects.toThrow(/extension\.<app>\.<name>/);
       const kind = httpMutationKind((ref) => (ref === "test.token" ? "s3cret" : null));
       // A 2xx the plan did not predict is still an applied write (Jellyfin answers 204 where a

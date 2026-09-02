@@ -33,7 +33,7 @@ export function OperationCard({
 }: {
   plan: OperationPlanEvent;
   phase?: Phase;
-  result?: { outcome: "committed" | "rolledback"; message: string };
+  result?: { outcome: "committed" | "rolledback" | "applied_unverified"; message: string };
 }) {
   const d = (plan.details ?? {}) as Record<string, unknown>;
   const cls = str(d.class);
@@ -105,7 +105,7 @@ export function OperationCard({
       ) : null}
       {result ? (
         <text fg={result.outcome === "committed" ? theme.success : theme.warning}>
-          {`${result.outcome === "committed" ? "✓" : "↩"} ${result.message}`}
+          {`${result.outcome === "committed" ? "✓" : result.outcome === "applied_unverified" ? "⚠" : "↩"} ${result.message}`}
         </text>
       ) : null}
     </box>
