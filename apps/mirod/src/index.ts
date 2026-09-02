@@ -36,6 +36,14 @@ import type { Model } from "@earendil-works/pi-ai";
 const OPERATION_KINDS = allOperationKinds((ref) => secretStore.getSecret(db, ref), (ref, value) => secretStore.setSecret(db, ref, value));
 
 mkdirSync(MIRO_DIR, { recursive: true });
+// The state dir and DB hold the encrypted secret store plus plaintext captured-state / incident
+// rows; lock them to the owner so a co-tenant can't browse them off disk (audit H2). Best-effort:
+// a filesystem that rejects chmod (rare) must not stop boot.
+try {
+  chmodSync(MIRO_DIR, 0o700);
+} catch {
+  // non-POSIX fs or already-restrictive — ignore
+}
 try {
   unlinkSync(SOCKET_PATH);
 } catch {
@@ -43,6 +51,11 @@ try {
 }
 
 const db = new Database(DB_PATH);
+try {
+  chmodSync(DB_PATH, 0o600);
+} catch {
+  // ignore
+}
 db.exec("PRAGMA journal_mode = WAL"); // required for durable operation phases (plan §47)
 db.run("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)");
 ensureTimelineTable(db);

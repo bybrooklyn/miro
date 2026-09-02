@@ -27,6 +27,15 @@ test("remember creates a new row with occurrence_count 1", () => {
   expect(rec.value).toBe("prefers short replies");
 });
 
+test("remember redacts a credential-shaped value but leaves a secret ref intact (audit L5)", () => {
+  const db = freshDb();
+  const leaked = remember(db, "server_fact", "jf", "the admin password=hunter2-very-secret works", "agent_tool");
+  expect(leaked.value).not.toContain("hunter2-very-secret");
+  expect(leaked.value).toContain("[redacted]");
+  const ref = remember(db, "capability", "jellyfin", "authenticates via {{secret:extension.jellyfin.admin_password}}", "learn");
+  expect(ref.value).toContain("extension.jellyfin.admin_password"); // a ref is not a value
+});
+
 test("remember on the same (category, key) reinforces instead of duplicating", () => {
   const db = freshDb();
   const first = remember(db, "preference", "reply_style", "prefers short replies", "agent_tool");

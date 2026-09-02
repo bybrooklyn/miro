@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { redactSecretsInText } from "../operations/classify";
 
 // Durable memory (plan §37). Structured facts Miro learns about the user and the server, written
 // mechanically (incidents, straight from operation records) or via a real LLM reflection pass
@@ -109,6 +110,10 @@ export function remember(
   versionApplicability: string | null = null,
 ): MemoryRecord {
   const now = Date.now();
+  // Redaction choke point: every writer routes through here, so a credential-shaped value can
+  // never be persisted as a fact and re-injected into every future turn's context (audit L5).
+  // Refs like `extension.jellyfin.admin_password` carry no value and pass through untouched.
+  const safeValue = redactSecretsInText(value);
   db.run(
     `INSERT INTO memories (id, category, key, value, source, version_applicability, occurrence_count, created_at, last_seen_at, last_verified_at)
      VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
@@ -119,7 +124,7 @@ export function remember(
        occurrence_count = occurrence_count + 1,
        last_seen_at = excluded.last_seen_at,
        last_verified_at = excluded.last_verified_at`,
-    [crypto.randomUUID(), category, key, value, source, versionApplicability, now, now, now],
+    [crypto.randomUUID(), category, key, safeValue, source, versionApplicability, now, now, now],
   );
   return getByKey(db, category, key)!;
 }

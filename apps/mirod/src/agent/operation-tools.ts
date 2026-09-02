@@ -104,7 +104,9 @@ export function buildOperationTools(ctx: OperationToolContext) {
         const { reason, ...p } = params;
         const result = await runOperation(ctx, shellCommandKind, reason, p);
         const out = takeShellOutput(p);
-        return textResult({ ...result, class: c.class, stdout: out?.stdout ?? null, stderr: out?.stderr ?? null, exitCode: out?.exitCode ?? null });
+        // Redact the write path's output too — an installer or `curl -u` echoes credentials to
+        // stdout, and this branch (unlike the read branch above) had no scrub (audit L2).
+        return textResult({ ...result, class: c.class, stdout: out ? redactSecretsInText(out.stdout) : null, stderr: out ? redactSecretsInText(out.stderr) : null, exitCode: out?.exitCode ?? null });
       },
     },
     {

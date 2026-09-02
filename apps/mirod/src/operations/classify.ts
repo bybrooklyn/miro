@@ -392,7 +392,11 @@ export function isSensitivePath(path: string, home = homedir()): boolean {
  * ponytail: regex over common shapes, not a full parser — the structural defence is that
  * secret-path reads are refused outright above; this catches the env dump and the JSON blob. */
 export function redactSecretsInText(text: string): string {
-  return text
+  // Protect `{{secret:<ref>}}` placeholders first — a reference is not a value, and the `secret:`
+  // keyword rule below would otherwise redact the ref name out of a plan or a capability doc.
+  const refs: string[] = [];
+  const guarded = text.replace(/\{\{secret:[^}]+\}\}/g, (m) => "\u0000" + (refs.push(m) - 1) + "\u0000");
+  const redacted = guarded
     .replace(/("?(?:password|passwd|pw|token|api_?key|secret|authorization|x-emby-token|x-mediabrowser-token|x-api-key|access_?key|private_?key|cookie|set-cookie|session(?:_?id)?|jwt|refresh_?token|client_?secret)"?\s*[:=]\s*"?)([^"&\s,}]+)/gi, "$1[redacted]")
     .replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, "[redacted]")
     .replace(/(Authorization:\s*)(\S.*)/gi, "$1[redacted]")
@@ -401,6 +405,7 @@ export function redactSecretsInText(text: string): string {
     // /etc/shadow and /etc/gshadow hash lines: `user:$6$…:…` — not keyword-shaped, so caught by structure.
     .replace(/^([^\s:]+:)([$!*][^\s:]*)/gm, "$1[redacted]")
     .replace(/(-----BEGIN [A-Z ]*PRIVATE KEY-----)[\s\S]*?(-----END [A-Z ]*PRIVATE KEY-----)/g, "$1 [redacted] $2");
+  return redacted.replace(/ (\d+) /g, (_, i) => refs[Number(i)] ?? "");
 }
 
 /** Binaries whose read-only use needs the host network namespace (routes, sockets, DNS, local

@@ -1,5 +1,5 @@
 import type { OperationKind } from "../engine";
-import { isLocalOrPrivateUrl } from "../classify";
+import { isLocalOrPrivateUrl, redactSecretsInText } from "../classify";
 
 // The generic HTTP write (PLAN.md §5.4 B). This is how a learned extension's declarative write
 // bindings, and the main agent directly, change an app's state through its API: the plan shows
@@ -172,7 +172,9 @@ export function httpMutationKind(
       // created (found live, run #5). expectStatus can only widen success (a 409 "already
       // exists" counts), never turn a 2xx into a false rollback.
       const ok = (r.status >= 200 && r.status < 300) || (p.expectStatus?.includes(r.status) ?? false);
-      if (!ok) throw new Error(`${p.method} ${p.url} → ${r.status}: ${r.body.slice(0, 500)}`);
+      // Redact: this message reaches the model, operations.error, an incident row, and a reflection
+      // prompt sent to a provider; an auth endpoint's error body can echo the credential (audit L1).
+      if (!ok) throw new Error(`${p.method} ${p.url} → ${r.status}: ${redactSecretsInText(r.body.slice(0, 500))}`);
       if (p.storeResponseField) {
         // A missing field is reported, not thrown: the write happened (a login did log in), and
         // a false rollback is the worse outcome — the agent reads the keys and asks again.

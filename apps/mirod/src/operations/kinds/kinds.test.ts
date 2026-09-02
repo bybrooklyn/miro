@@ -124,6 +124,7 @@ describe("http.mutation", () => {
         if (url.pathname === "/value" && req.method === "GET") return new Response(state.value);
         if (url.pathname === "/value" && req.method === "PUT") { state.value = await req.text(); return new Response("ok"); }
         if (url.pathname === "/fail") return new Response("nope", { status: 500 });
+        if (url.pathname === "/autherr") return new Response('{"error":"bad","token":"leaked-token-abc123"}', { status: 401 });
         if (url.pathname === "/no-content" && req.method === "POST") return new Response(null, { status: 204 });
         if (url.pathname === "/exists" && req.method === "POST") return new Response("already there", { status: 409 });
         if (url.pathname === "/login" && req.method === "POST") return Response.json({ AccessToken: "tok-123", User: { Id: "u1" } });
@@ -166,6 +167,12 @@ describe("http.mutation", () => {
       expect((await runOperation(ctx().ctx, kind, "no content", { method: "POST", url: `${base}/no-content`, expectStatus: [200] })).outcome).toBe("committed");
       expect((await runOperation(ctx().ctx, kind, "exists ok", { method: "POST", url: `${base}/exists`, expectStatus: [409] })).outcome).toBe("committed");
       expect((await runOperation(ctx().ctx, kind, "exists not ok", { method: "POST", url: `${base}/exists` })).outcome).toBe("rolledback");
+      // A failing apply's error body is redacted before it reaches the model / logs / a reflection
+      // prompt (audit L1).
+      const autherr = await runOperation(ctx().ctx, kind, "auth", { method: "POST", url: `${base}/autherr` });
+      expect(autherr.outcome).toBe("rolledback");
+      expect(autherr.message).not.toContain("leaked-token-abc123");
+      expect(autherr.message).toContain("[redacted]");
       const { ctx: c, events } = ctx();
       const r = await runOperation(c, kind, "set value", {
         method: "PUT", url: `${base}/value`, body: "after", contentType: "text/plain",

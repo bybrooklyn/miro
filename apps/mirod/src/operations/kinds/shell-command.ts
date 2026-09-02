@@ -1,5 +1,5 @@
 import type { OperationKind } from "../engine";
-import { classifyCommand, normalizePath, isSensitivePath, isLifelinePath, maxClass } from "../classify";
+import { classifyCommand, normalizePath, isSensitivePath, isLifelinePath, maxClass, redactSecretsInText } from "../classify";
 import { runSandboxed, type SandboxResult } from "../sandbox";
 import { snapshotPaths, restoreSnapshot, type Snapshot } from "../snapshot";
 
@@ -78,7 +78,9 @@ export const shellCommandKind: OperationKind<ShellCommandParams, ShellCommandCap
     const r = await runSandboxed(["sh", "-c", p.command], { writableRoots: p.writes, network: p.network, cwd: p.cwd, timeoutMs: p.timeoutMs, keepCapabilities: true });
     outputs.set(p, r);
     if (r.exitCode !== 0) {
-      throw new Error(`exit ${r.exitCode}${r.timedOut ? " (timed out)" : ""}: ${(r.stderr || r.stdout).trim().slice(0, 2000)}`);
+      // Redact: this message flows to the model, to operations.error, to an incident memory row,
+      // and into a Dreaming reflection prompt sent to a real provider (audit L1).
+      throw new Error(`exit ${r.exitCode}${r.timedOut ? " (timed out)" : ""}: ${redactSecretsInText((r.stderr || r.stdout).trim().slice(0, 2000))}`);
     }
   },
 
