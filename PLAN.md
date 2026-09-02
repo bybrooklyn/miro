@@ -1793,8 +1793,31 @@ main-agent loop → live proof. Each step tested; each OS-touching step live-ver
   `applied_unverified` does not bump an extension's `successful_runs`. Also: `typecheckExtension`
   now quotes the offending source line (the retry never sees the discarded staging dir, and a
   bare "',' expected" cost attempts).
-- **Run #7 (fresh install, every finding above fixed before the learn session even starts)
-  launched** — the first clean-room test of the whole loop.
+- **Run #7 (fresh install, every finding above fixed before the learn session even starts)** —
+  setup succeeded through the honest `applied_unverified` path (each wizard step correctly reported
+  "applied, verification did not confirm, not rolled back" instead of the old false rollback), but
+  the extension still did not promote and the run thrashed on a 404.
+- **Runs #7-#8 root cause — a real Jellyfin wizard quirk, now fixed in the golden hint.** Every
+  run's setup thrash traced to one thing, verified by hand against a cold Jellyfin: **`POST
+  /Startup/User` returns 404 unless a `GET /Startup/User` was issued first in the session** — the
+  GET primes the route. POST-first 404s for 20s+ and never recovers; GET-then-POST returns 204 and
+  creates the admin. The old hint's config→user order silently lost the admin, yet
+  `/Startup/Complete` finalized the wizard anyway, so `AuthenticateByName` 401'd and the agent
+  panic-asked the user for the credential it had just created. Also confirmed: every wizard POST
+  needs `Content-Type: application/json` (else 415), the endpoints 404/503 while the server loads
+  or just after a container restart, and the agent recreating the container mid-wizard (to add the
+  media mount) is what re-triggered the load window. The golden hint now carries the exact ordered
+  204 sequence, the GET-prime rule (set `captureUrl:"/Startup/User"` so the engine's pre-apply GET
+  primes it), the content-type requirement, and "do container changes before the wizard". Verified
+  end to end by hand: GET-prime → config → GET-prime → POST user (204) → RemoteAccess → Complete →
+  AuthenticateByName (token) → authorized `/Library/VirtualFolders` (200), `StartupWizardCompleted:
+  true`. This is the concrete instance of the "finicky app = a new navigation problem" critique:
+  the fix was a verified golden hint, not more autonomy.
+- **Audit + plan pass (2026-09-02).** After eight live runs the user called for a broad audit and
+  an improvement plan, fanning out subagents. Six read-only auditors (opus on classifier/sandbox
+  security, engine correctness, self-extension robustness; sonnet on secret-leak paths,
+  protocol/ui-model/TUI, general code quality) sweep the codebase in parallel; findings synthesised
+  into a prioritised plan. See §5.11 (below, once written).
 
 ### 5.9 Positioning (decided 2026-09-01)
 
