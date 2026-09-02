@@ -1697,6 +1697,18 @@ main-agent loop → live proof. Each step tested; each OS-touching step live-ver
   put that value literally in a request body, which the plan displayed — the kind guarded headers
   only. Now `{{secret:<ref>}}` placeholders in bodies/URLs/headers resolve at request time only,
   a literal credential in a body is refused, and the plan shows the placeholder.
+- **Run #3 outcome, verified independently:** Jellyfin's own `/System/Info/Public` reports
+  `StartupWizardCompleted: true`. Miro completed the first-run setup from a plain chat message
+  with no user command — locale, first administrator (two wrong endpoint guesses each failed
+  cleanly and rolled back before `POST /Startup/User` succeeded), remote access (a bad verify URL
+  rolled back, then passed), `Startup/Complete` — every attempt a confirmed, verified operation
+  in the operations table. It stalled minting an API key: `AuthenticateByName` needs Jellyfin's
+  token-less `MediaBrowser Client=…` identification header (400 without it), the guard refused a
+  literal `Authorization` header (correctly), and the browser fallback hung inside `navigate` on
+  the SPA with no timeout on host calls. Fixed: host RPCs time out (120s, browser 60s), navigate
+  settles or fails in 30s, the identification header is recognised as credential-free, and the
+  Jellyfin golden hint now carries the whole auth sequence. `web_search` was unavailable the
+  whole time — it needs `BRAVE_API_KEY`, an external credential the owner provides.
 - **Client (in progress).** Protocol: structured `activity` (id/parent/status — a real tree),
   `reply_delta` streaming, `operation_progress`, `notice`, `question.timeoutMs`, `status.model`/
   `privilege`. `packages/ui-model`: the headless view-model (blocks, pending prompt, keymap,
