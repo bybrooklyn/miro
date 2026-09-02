@@ -56,7 +56,7 @@ export function buildToolsForExtension(
   const manifest: ExtensionManifest = JSON.parse(row.manifest);
   const dir = extensionDir(manifest.app);
   const prefix = `ext_${sanitizeNamePart(manifest.app)}_`;
-  const kinds: Record<string, OperationKind<any, any>> = allOperationKinds(getSecret);
+  const kinds: Record<string, OperationKind<any, any>> = allOperationKinds(getSecret, operationCtx?.setSecret);
 
   const readTools = [...manifest.tools, ...manifest.diagnostics].map((spec) => ({
     name: `${prefix}${sanitizeNamePart(spec.name)}`,

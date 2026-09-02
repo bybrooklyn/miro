@@ -126,11 +126,26 @@ describe("http.mutation", () => {
         if (url.pathname === "/fail") return new Response("nope", { status: 500 });
         if (url.pathname === "/no-content" && req.method === "POST") return new Response(null, { status: 204 });
         if (url.pathname === "/exists" && req.method === "POST") return new Response("already there", { status: 409 });
+        if (url.pathname === "/login" && req.method === "POST") return Response.json({ AccessToken: "tok-123", User: { Id: "u1" } });
         return new Response("?", { status: 404 });
       },
     });
     const base = `http://127.0.0.1:${server.port}`;
     try {
+      // storeResponseField keeps a response value in the store by ref; the model-visible side
+      // (plan details, output) carries the ref only. A missing field reports, never rolls back.
+      const stored = new Map<string, string>();
+      const storing = httpMutationKind(() => null, (ref, value) => stored.set(ref, value));
+      const { ctx: sc, events: se } = ctx();
+      const login = await runOperation(sc, storing, "login", { method: "POST", url: `${base}/login`, storeResponseField: { field: "AccessToken", ref: "extension.app.session_token" } });
+      expect(login.outcome).toBe("committed");
+      expect(stored.get("extension.app.session_token")).toBe("tok-123");
+      expect(planOf(se).details?.stores).toBe("AccessToken → extension.app.session_token");
+      expect(JSON.stringify(se)).not.toContain("tok-123");
+      const missing = await runOperation(ctx().ctx, storing, "login", { method: "POST", url: `${base}/login`, storeResponseField: { field: "Nope", ref: "extension.app.x" } });
+      expect(missing.outcome).toBe("committed");
+      expect(stored.has("extension.app.x")).toBe(false);
+      await expect(storing.describe({ method: "POST", url: `${base}/login`, storeResponseField: { field: "AccessToken", ref: "provider.anthropic" } })).rejects.toThrow(/extension\.<app>\.<name>/);
       const kind = httpMutationKind((ref) => (ref === "test.token" ? "s3cret" : null));
       // A 2xx the plan did not predict is still an applied write (Jellyfin answers 204 where a
       // plan said 200 — a false rollback, found live); expectStatus only widens success.

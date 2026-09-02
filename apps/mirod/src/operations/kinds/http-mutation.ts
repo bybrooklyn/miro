@@ -26,6 +26,11 @@ export interface HttpMutationParams {
   /** Explicit undo request. Without it, only PUT-with-captureUrl is reversible. */
   rollback?: { method: "POST" | "PUT" | "PATCH" | "DELETE"; url: string; body?: string; contentType?: string };
   timeoutMs?: number;
+  /** Keep a field of the JSON response (dotted path) in the secret store under `ref` — the way
+   * a login's AccessToken or a minted API key is retained. The value never reaches the model:
+   * found live, the raw auth response body in tool output was how a session token got into a
+   * transcript. Only `extension.<app>.<name>` refs; Miro's own refs are not writable this way. */
+  storeResponseField?: { field: string; ref: string };
 }
 
 export interface HttpMutationCaptured {
@@ -35,6 +40,15 @@ export interface HttpMutationCaptured {
 export interface HttpMutationOutput {
   status: number;
   body: string;
+  /** The ref a response field was stored under, or the reason it was not. */
+  stored?: string | null;
+  storeError?: string;
+}
+
+const STORABLE_REF = /^extension\.[a-z0-9][a-z0-9-]*\.[a-z0-9_][a-z0-9_-]*$/i;
+
+function fieldAt(json: unknown, path: string): unknown {
+  return path.split(".").reduce<unknown>((v, k) => (v !== null && typeof v === "object" ? (v as Record<string, unknown>)[k] : undefined), json);
 }
 
 const outputs = new WeakMap<object, HttpMutationOutput>();
@@ -86,7 +100,10 @@ export function isCredentialFreeHeader(value: string): boolean {
  * it would sit in the plan, the transcript, and the model's context. */
 const LITERAL_CREDENTIAL = /"(password|passwd|pw|token|api_?key|secret)"\s*:\s*"(?!\{\{secret:)[^"]{4,}"/i;
 
-export function httpMutationKind(getSecret: (ref: string) => string | null): OperationKind<HttpMutationParams, HttpMutationCaptured> {
+export function httpMutationKind(
+  getSecret: (ref: string) => string | null,
+  setSecret: (ref: string, value: string) => void = () => { throw new Error("secret store unavailable — storeResponseField needs the daemon's store"); },
+): OperationKind<HttpMutationParams, HttpMutationCaptured> {
   const authHeaders = (p: HttpMutationParams): Record<string, string> => {
     const h: Record<string, string> = {};
     for (const [k, v] of Object.entries(p.headers ?? {})) h[k] = substituteSecrets(v, getSecret);
@@ -114,6 +131,9 @@ export function httpMutationKind(getSecret: (ref: string) => string | null): Ope
       if (p.body && LITERAL_CREDENTIAL.test(p.body)) {
         throw new Error("refused: the body contains a literal credential — write {{secret:<ref>}} in its place (create one with credential_create if needed)");
       }
+      if (p.storeResponseField && !STORABLE_REF.test(p.storeResponseField.ref)) {
+        throw new Error(`refused: storeResponseField.ref must be extension.<app>.<name>, got ${p.storeResponseField.ref}`);
+      }
       for (const m of `${p.body ?? ""} ${p.url} ${Object.values(p.headers ?? {}).join(" ")}`.matchAll(SECRET_PLACEHOLDER)) {
         if (getSecret(m[1]) === null) throw new Error(`refused: placeholder references secret ${m[1]}, which is not set`);
       }
@@ -134,6 +154,7 @@ export function httpMutationKind(getSecret: (ref: string) => string | null): Ope
           auth: p.secretHeader ? `${p.secretHeader.name} ← ${p.secretHeader.ref}` : null,
           verify: p.verifyUrl ?? null,
           rollback: p.rollback ? `${p.rollback.method} ${p.rollback.url}` : null,
+          stores: p.storeResponseField ? `${p.storeResponseField.field} → ${p.storeResponseField.ref}` : null,
         },
       };
     },
@@ -152,6 +173,21 @@ export function httpMutationKind(getSecret: (ref: string) => string | null): Ope
       // exists" counts), never turn a 2xx into a false rollback.
       const ok = (r.status >= 200 && r.status < 300) || (p.expectStatus?.includes(r.status) ?? false);
       if (!ok) throw new Error(`${p.method} ${p.url} → ${r.status}: ${r.body.slice(0, 500)}`);
+      if (p.storeResponseField) {
+        // A missing field is reported, not thrown: the write happened (a login did log in), and
+        // a false rollback is the worse outcome — the agent reads the keys and asks again.
+        const { field, ref } = p.storeResponseField;
+        let json: unknown = null;
+        try { json = JSON.parse(r.body); } catch { /* not JSON */ }
+        const value = fieldAt(json, field);
+        if (typeof value === "string" || typeof value === "number") {
+          setSecret(ref, String(value));
+          outputs.set(p, { status: r.status, body: r.body, stored: ref });
+        } else {
+          const keys = json !== null && typeof json === "object" ? Object.keys(json as object).slice(0, 20).join(", ") : "not a JSON object";
+          outputs.set(p, { status: r.status, body: r.body, stored: null, storeError: `response has no string field ${field} (top-level keys: ${keys})` });
+        }
+      }
     },
 
     async verify(p) {

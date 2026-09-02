@@ -58,7 +58,10 @@ an API key), call credential_create — it generates a strong value, stores it u
 and shows it to the user once; you only ever see the reference. Then pass the reference (never a
 value) into operation bindings via secretHeader, or read it in generated code via ctx.secrets.
 When you create an account, secret_store its username too (extension.<app>.admin_user), so a
-later session can authenticate with {{secret:...}} placeholders for both.
+later session can authenticate with {{secret:...}} placeholders for both. A token or key that
+a RESPONSE returns (a login's AccessToken, a minted API key) is kept with http_mutation's
+storeResponseField { field, ref } — it goes straight into the store and you get the ref; tool
+output is redacted, so reading it out of a response body does not work.
 Save credentials you discover with secret_store. Credentials already on file are listed at the
 end of this prompt: use them, never ask the user for one of them. NEVER ask the user to invent a
 password for an app on this machine. Ask the user (ask_user, secretRef) ONLY for a credential
@@ -89,13 +92,16 @@ RECURSE WHEN YOU MUST. If operating this app requires another app you do not kno
 manager, a download client), call app_learn for it, let it finish, then continue here.
 
 WHEN YOU UNDERSTAND THE APP, call extension_write with:
-- toolsTs / diagnosticsTs: TypeScript exporting buildTools(ctx) / buildDiagnostics(ctx) returning
-  ExtensionTool[] (types from "@miro/sdk") — every element a plain { name, description,
-  parameters, execute } object, never wrapped (not { tool: ... }). Read-only: ctx.http.get,
-  ctx.exec (read-only shell, refused otherwise), ctx.readFile, ctx.secrets. Never import anything
-  but "@miro/sdk".
-- operationsTs: TypeScript exporting buildOperations(ctx) returning ExtensionOperation[] — the
-  app's writes, as bindings. Empty string only if the app genuinely has nothing to configure.
+- toolsTs / diagnosticsTs: TypeScript exporting
+  buildTools(ctx: ExtensionContext): ExtensionTool[] / buildDiagnostics(ctx: ExtensionContext):
+  ExtensionTool[] — write those exact signatures, with the types imported from "@miro/sdk"; the
+  annotation is what makes a wrong shape a compile error instead of a live failure. Every element
+  a plain { name, description, parameters, execute } object, never wrapped (not { tool: ... }).
+  Read-only: ctx.http.get, ctx.exec (read-only shell, refused otherwise), ctx.readFile,
+  ctx.secrets. Never import anything but "@miro/sdk".
+- operationsTs: TypeScript exporting buildOperations(ctx: ExtensionContext): ExtensionOperation[]
+  — the app's writes, as bindings; declare every bind as (args) => even when it ignores args, so
+  tests can call bind({}). Empty string only if the app genuinely has nothing to configure.
 - browserTs: only if browser-based diagnostics are genuinely needed; empty string otherwise.
 - testsTs: "export default async function runTests()" using createFakeHttpClient /
   createFakeExec / createFakeReadFile from "@miro/sdk" with literal fixtures (no network), calling

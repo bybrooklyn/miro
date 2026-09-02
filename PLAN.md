@@ -1746,9 +1746,18 @@ main-agent loop → live proof. Each step tested; each OS-touching step live-ver
   `/var/lib/miro`, whatever their class; `/etc/ssl/private` joined the secret paths. Not caught:
   `find /root -type f | xargs cat` — the pipe hands paths the classifier does not follow;
   `redactSecretsInText` is the last line there, noted in the code.
-- **Run #5 (fresh install, the slice-1 bar) launched** against a recreated Jellyfin (empty
-  config, `StartupWizardCompleted:false`) with Miro's jellyfin secrets, memories, and extension
-  wiped first, so it starts cold.
+- **Run #5 (fresh install, the slice-1 bar)** against a recreated Jellyfin (empty config,
+  `StartupWizardCompleted:false`) with Miro's jellyfin secrets, memories, and extension wiped
+  first. No user prompt at all before the system plan — correct. Two more real findings (commit
+  938dafe): (1) the learn agent wrote `bind: async (args) => ({...})` — natural next to an async
+  `execute` — and the host did not await it, so every operation's dry run saw `{}` and failed
+  with "binding must include kind and goal" on a file that plainly had both; three attempts
+  gone, no extension. The host now awaits `bind`, and the prompt/SDK say it is synchronous data.
+  (2) The main agent's own `http_mutation` for `POST /Startup/User` declared `expectStatus:
+  [200]`; Jellyfin answered 204 and the kind reported "failed to apply" and rolled back — a
+  false rollback of an admin account the server had in fact created. Any 2xx is now an applied
+  write; `expectStatus` can only widen success (a 409 "already exists"), never narrow it. The
+  golden hint records the 204s.
 
 ### 5.9 Positioning (decided 2026-09-01)
 

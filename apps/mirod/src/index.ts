@@ -33,7 +33,7 @@ import { createCodexCredentialStore, importCodexCredentialFromCli } from "./agen
 import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
 import type { Model } from "@earendil-works/pi-ai";
 
-const OPERATION_KINDS = allOperationKinds((ref) => secretStore.getSecret(db, ref));
+const OPERATION_KINDS = allOperationKinds((ref) => secretStore.getSecret(db, ref), (ref, value) => secretStore.setSecret(db, ref, value));
 
 mkdirSync(MIRO_DIR, { recursive: true });
 try {
@@ -307,7 +307,7 @@ async function handleChat(text: string, send: (event: ServerEvent) => void, stat
     state.lastExtensionVersion !== extensionVersions ||
     state.lastContextBlock !== contextBlock
   ) {
-    const operationCtx: OperationToolContext = { db, send, waitForAnswer: (id) => waitForAnswer(state, id), reflect, getSecret: (ref) => secretStore.getSecret(db, ref) };
+    const operationCtx: OperationToolContext = { db, send, waitForAnswer: (id) => waitForAnswer(state, id), reflect, getSecret: (ref) => secretStore.getSecret(db, ref), setSecret: (ref, value) => secretStore.setSecret(db, ref, value) };
     state.agent = createMiroAgent(models, defaultModel, getStoredKey, personality(), operationCtx, {
       hostMgr,
       setSecret: (ref, value) => secretStore.setSecret(db, ref, value),

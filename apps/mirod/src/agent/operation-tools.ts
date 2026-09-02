@@ -62,13 +62,19 @@ const httpMutationParams = Type.Object({
       contentType: Type.Optional(Type.String()),
     }),
   ),
+  storeResponseField: Type.Optional(
+    Type.Object({
+      field: Type.String({ description: "JSON field of the response to keep, dotted path allowed (e.g. AccessToken, data.token)." }),
+      ref: Type.String({ description: "Where to store it: extension.<app>.<name>. You get the ref back, never the value — use it via secretHeader or {{secret:<ref>}}." }),
+    }, { description: "Retain a token or key the response returns (a login's AccessToken, a minted API key) directly in the secret store." }),
+  ),
 });
 
 /** Mutating tools go through the operation engine (plan §38, §54 Stage B; PLAN.md §5.4 B) —
  * tracked, confirmed, sandboxed, verified, rolled back on failure. Kept separate from
  * agent/tools.ts's read-only AGENT_TOOLS so subagents spawned via worker.ts never see these. */
 export function buildOperationTools(ctx: OperationToolContext) {
-  const httpKind = httpMutationKind(ctx.getSecret ?? (() => null));
+  const httpKind = httpMutationKind(ctx.getSecret ?? (() => null), ctx.setSecret);
   return [
     {
       name: "service_restart",
@@ -133,15 +139,18 @@ export function buildOperationTools(ctx: OperationToolContext) {
         const { reason, ...p } = params;
         const result = await runOperation(ctx, httpKind, reason, p);
         const out = takeHttpOutput(p);
-        return textResult({ ...result, status: out?.status ?? null, body: out?.body ?? null });
+        // Redacted: a raw login response ({"AccessToken": …}) here is how a session token got
+        // into a transcript (found live, run #5). A value worth keeping goes through
+        // storeResponseField, and only its ref comes back.
+        return textResult({ ...result, status: out?.status ?? null, body: out ? redactSecretsInText(out.body) : null, ...(out?.stored !== undefined ? { stored: out.stored, storeError: out.storeError } : {}) });
       },
     },
   ];
 }
 
 /** Every kind the engine must know at boot for crash reconciliation (index.ts's OPERATION_KINDS). */
-export function allOperationKinds(getSecret: (ref: string) => string | null) {
-  const http = httpMutationKind(getSecret);
+export function allOperationKinds(getSecret: (ref: string) => string | null, setSecret?: (ref: string, value: string) => void) {
+  const http = httpMutationKind(getSecret, setSecret);
   return {
     [systemdRestartKind.kind]: systemdRestartKind,
     [shellCommandKind.kind]: shellCommandKind,

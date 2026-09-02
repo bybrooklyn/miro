@@ -62,6 +62,9 @@ export interface OperationToolContext {
   /** Secret resolution for kinds that inject a credential by reference at apply time (never in a
    * plan, never in model-visible output) — e.g. http_mutation's auth header. */
   getSecret?: (ref: string) => string | null;
+  /** Secret retention for kinds that keep a value a response returns (http_mutation's
+   * storeResponseField) — the value goes store-ward only, never into model-visible output. */
+  setSecret?: (ref: string, value: string) => void;
   /** How long a `lifeline` operation waits for the user to confirm they are still reachable
    * before rolling itself back. Injectable for tests; defaults to LIFELINE_CONFIRM_MS. */
   lifelineConfirmMs?: number;

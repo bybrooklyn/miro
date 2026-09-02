@@ -34,7 +34,7 @@ export function createHttpClient(baseUrl: string, headers: Record<string, string
 /** Fixture-based fake client — used by generated tests.ts (extensions/host-entry.ts's `test_init`
  * mode) so tests exercise the generated parsing/mapping logic deterministically, no real network.
  * Exact-path match only (query string ignored) — a fixture router, not a full HTTP mock. */
-export function createFakeHttpClient(routes: Record<string, unknown>): HttpClient {
+export function createFakeHttpClient(routes: Record<string, unknown> = {}): HttpClient {
   return {
     async get(path) {
       const key = path.split("?")[0];
@@ -117,6 +117,9 @@ export interface HttpMutationBinding {
   verifyUrl?: string;
   verifyExpect?: string;
   rollback?: { method: "POST" | "PUT" | "PATCH" | "DELETE"; url: string; body?: string; contentType?: string };
+  /** Keep a field of the JSON response in the secret store (a login's AccessToken, a minted API
+   * key) under extension.<app>.<name>; the caller gets the ref back, never the value. */
+  storeResponseField?: { field: string; ref: string };
 }
 
 /** Params for the daemon's shell.command kind. `writes` is the exact sandbox scope. */
@@ -166,7 +169,7 @@ export interface ExtensionOperation<P = any> {
 }
 
 /** Fixture-based fake for generated tests.ts: exact-command match. */
-export function createFakeExec(routes: Record<string, Partial<ExecResult>>): ExtensionContext["exec"] {
+export function createFakeExec(routes: Record<string, Partial<ExecResult>> = {}): ExtensionContext["exec"] {
   return async (command) => {
     if (!(command in routes)) throw new Error(`No fixture for exec ${JSON.stringify(command)}`);
     const r = routes[command];
@@ -174,7 +177,7 @@ export function createFakeExec(routes: Record<string, Partial<ExecResult>>): Ext
   };
 }
 
-export function createFakeReadFile(files: Record<string, string>): ExtensionContext["readFile"] {
+export function createFakeReadFile(files: Record<string, string> = {}): ExtensionContext["readFile"] {
   return async (path) => {
     if (!(path in files)) throw new Error(`No fixture for file ${path}`);
     return files[path];
