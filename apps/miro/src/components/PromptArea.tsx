@@ -173,5 +173,15 @@ export function PromptArea({
       />
     );
   }
+  // While a turn is in flight, don't offer an active chat input — a second message would race the
+  // running turn on the daemon (audit U2). Show a muted status line instead; the footer advertises
+  // scroll/interrupt in this state.
+  if (state.working) {
+    return (
+      <box paddingLeft={1}>
+        <text fg={theme.textMuted}>working… (one request at a time)</text>
+      </box>
+    );
+  }
   return <TextPrompt placeholder="Ask for an outcome…" onSubmit={onChat} />;
 }

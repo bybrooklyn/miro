@@ -24,7 +24,9 @@ export function resolveSocketPath(): string {
 export interface StatusEvent {
   type: "status";
   server: string;
-  health: "healthy" | "degraded";
+  /** "connecting" is a client-only state the TUI sets when the socket drops (audit U4); the daemon
+   * only ever sends "healthy"/"degraded". */
+  health: "healthy" | "degraded" | "connecting";
   /** The chat model in use, for the client's status line. Absent until a provider is connected. */
   model?: string;
   /** Whether the daemon runs as root (the system-service layout) or unprivileged. */

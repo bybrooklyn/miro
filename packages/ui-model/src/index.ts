@@ -59,6 +59,10 @@ export interface UiState {
   privilege?: "root" | "user";
   blocks: Block[];
   pending: Pending | null;
+  /** Questions that arrived while another was still open (e.g. a lifeline countdown running when a
+   * new op_confirm arrives). Shown one at a time, never dropped — the daemon can have several
+   * outstanding at once (audit U1). */
+  pendingQueue: Pending[];
   /** A turn is in flight (from the user's message until the final reply). */
   working: boolean;
   /** Monotonic id source for client-originated blocks. */
@@ -66,7 +70,22 @@ export interface UiState {
 }
 
 export function initialState(server = "home"): UiState {
-  return { server, health: "connecting", blocks: [], pending: null, working: false, seq: 0 };
+  return { server, health: "connecting", blocks: [], pending: null, pendingQueue: [], working: false, seq: 0 };
+}
+
+/** Show a new prompt now if none is open, else hold it behind the current one — never overwrite an
+ * outstanding question (audit U1). A re-ask of the same id replaces in place. */
+function enqueuePending(state: UiState, p: Pending): UiState {
+  const s = closeStreaming(state);
+  if (!s.pending || s.pending.id === p.id) return { ...s, pending: p };
+  if (s.pendingQueue.some((q) => q.id === p.id)) return s;
+  return { ...s, pendingQueue: [...s.pendingQueue, p] };
+}
+
+/** Drop the current pending and promote the next queued one (if any). */
+function advancePending(state: UiState): UiState {
+  const [next, ...rest] = state.pendingQueue;
+  return { ...state, pending: next ?? null, pendingQueue: rest };
 }
 
 export function questionKind(id: string): QuestionKind {
@@ -127,7 +146,9 @@ export function reduce(state: UiState, event: ServerEvent, now = Date.now()): Ui
     case "reply_delta": {
       const l = last(state);
       if (l && l.kind === "assistant" && l.streaming) return replaceLast(state, { ...l, text: l.text + event.text });
-      return push({ ...state, working: true }, { kind: "assistant", id: `a${state.seq + 1}`, text: event.text, streaming: true, at: now });
+      // Bump seq: a later narration segment (after a tool call) must get a fresh id, or two
+      // assistant blocks share one and the renderer collides on the React key (audit U3).
+      return push({ ...state, working: true, seq: state.seq + 1 }, { kind: "assistant", id: `a${state.seq + 1}`, text: event.text, streaming: true, at: now });
     }
 
     case "reply": {
@@ -179,24 +200,26 @@ export function reduce(state: UiState, event: ServerEvent, now = Date.now()): Ui
     case "operation_progress":
       return { ...state, blocks: state.blocks.map((b) => (b.kind === "operation" && b.id === event.id ? { ...b, phase: event.phase } : b)) };
 
-    case "operation_result":
-      return {
+    case "operation_result": {
+      const s = {
         ...state,
         blocks: state.blocks.map((b) => (b.kind === "operation" && b.id === event.id ? { ...b, phase: undefined, result: { outcome: event.outcome, message: event.message } } : b)),
       };
+      // A lifeline that auto-resolved (timeout/revert) leaves its prompt open with nothing behind
+      // it — clear it so the user can't answer a question the daemon already forgot (audit U7).
+      if (s.pending?.type === "question" && s.pending.blockId === event.id) return advancePending(s);
+      return s;
+    }
 
     case "question": {
       const kind = questionKind(event.id);
       const target = event.id.slice(event.id.indexOf(":") + 1);
       const blockId = kind === "plan_confirm" || kind === "plan_change" || kind === "op_confirm" || kind === "lifeline_confirm" ? target : undefined;
-      return {
-        ...closeStreaming(state),
-        pending: { type: "question", id: event.id, prompt: event.prompt, options: event.options, kind, askedAt: now, deadlineAt: event.timeoutMs ? now + event.timeoutMs : undefined, blockId },
-      };
+      return enqueuePending(state, { type: "question", id: event.id, prompt: event.prompt, options: event.options, kind, askedAt: now, deadlineAt: event.timeoutMs ? now + event.timeoutMs : undefined, blockId });
     }
 
     case "secret_prompt":
-      return { ...closeStreaming(state), pending: { type: "secret", id: event.id, prompt: event.prompt, askedAt: now } };
+      return enqueuePending(state, { type: "secret", id: event.id, prompt: event.prompt, askedAt: now });
 
     default:
       return state;
@@ -218,7 +241,7 @@ export function answered(state: UiState, id: string, value: string): UiState {
     const decision = value === "approve" ? "approved" : value === "change" ? "changed" : "cancelled";
     blocks = blocks.map((b) => (b.kind === "plan" && b.id === p.blockId ? { ...b, decision } : b));
   }
-  return { ...state, blocks, pending: null };
+  return advancePending({ ...state, blocks }); // promote the next queued prompt, if any (audit U1)
 }
 
 /** Maps a single key press to an answer for the pending prompt, or null if the key means nothing

@@ -74,6 +74,28 @@ test("a tool call closes a streaming assistant block; the next delta opens a new
   ]);
   expect(s.blocks.map((b) => b.kind)).toEqual(["assistant", "activity", "assistant"]);
   expect((s.blocks[0] as Extract<Block, { kind: "assistant" }>).streaming).toBe(false);
+  // The two assistant blocks must have distinct ids (audit U3 — a reused key collides in React).
+  const ids = s.blocks.filter((b) => b.kind === "assistant").map((b) => b.id);
+  expect(new Set(ids).size).toBe(ids.length);
+});
+
+test("a second question does not drop the first; both are answered in turn (audit U1)", () => {
+  let s = reduce(initialState(), { type: "question", id: "lifeline_confirm:o1", prompt: "still there?", options: [{ label: "keep", value: "keep" }, { label: "roll back", value: "rollback" }], timeoutMs: 90_000 }, T);
+  s = reduce(s, { type: "question", id: "op_confirm:o2", prompt: "approve?", options: [{ label: "approve", value: "approve" }, { label: "cancel", value: "cancel" }] }, T);
+  expect(s.pending?.id).toBe("lifeline_confirm:o1"); // the first still shows
+  expect(s.pendingQueue.map((p) => p.id)).toEqual(["op_confirm:o2"]);
+  s = answered(s, "lifeline_confirm:o1", "keep");
+  expect(s.pending?.id).toBe("op_confirm:o2"); // the queued one is promoted
+  expect(s.pendingQueue).toEqual([]);
+  s = answered(s, "op_confirm:o2", "approve");
+  expect(s.pending).toBeNull();
+});
+
+test("an operation result clears a still-open prompt that decided it (audit U7)", () => {
+  let s = reduce(initialState(), { type: "question", id: "lifeline_confirm:o9", prompt: "still there?", options: [{ label: "keep", value: "keep" }, { label: "roll back", value: "rollback" }], timeoutMs: 90_000 }, T);
+  s = reduce(s, { type: "operation_plan", id: "o9", plan: { summary: "ufw" } } as unknown as ServerEvent, T);
+  s = reduce(s, { type: "operation_result", id: "o9", outcome: "rolledback", message: "reverted on timeout" }, T);
+  expect(s.pending).toBeNull(); // the auto-resolved lifeline prompt is gone
 });
 
 test("system plan → question → answer records the decision on the plan block", () => {
