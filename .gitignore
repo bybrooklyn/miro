@@ -5,3 +5,5 @@ tools/dev-vm/state/
 # macOS AppleDouble sidecars and Finder metadata — Bun's test runner tries to run ._*.test.ts files.
 ._*
 .DS_Store
+# Claude Code subagent worktrees (their branches are pushed; the checkouts are scratch).
+.claude/worktrees/
