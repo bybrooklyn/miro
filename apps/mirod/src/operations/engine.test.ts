@@ -126,7 +126,31 @@ test("runOperation: scope (writes/network/class) rides in the plan event's detai
   await runOperation(ctx, kind, "s", { x: 1 });
   const planEvent = events.find((e) => e.type === "operation_plan") as Extract<ServerEvent, { type: "operation_plan" }>;
   expect(planEvent.autoApprove).toBe(true);
-  expect(planEvent.details).toEqual({ class: "mutate", writes: ["/opt/x"], network: false });
+  // A kind that declares no dryRunFidelity is shown as "none" — effect unknown — never as exact.
+  expect(planEvent.details).toEqual({ class: "mutate", writes: ["/opt/x"], network: false, dryRunFidelity: "none" });
+});
+
+test("repair contract: expects/rollbackWhen/scopeEvidence/dryRunFidelity ride in the plan event's details", async () => {
+  const db = freshDb();
+  const { ctx, events } = fakeCtx(db);
+  const kind = fakeKind();
+  kind.describe = async () => ({
+    summary: "restart nginx",
+    autoApprove: true,
+    writes: ["/run/systemd"],
+    expects: "nginx is active after the restart",
+    rollbackWhen: "the unit is not active afterwards",
+    scopeEvidence: "systemd's runtime directories only",
+    dryRunFidelity: "exact",
+  });
+  await runOperation(ctx, kind, "restart nginx", { x: 1 });
+  const planEvent = events.find((e) => e.type === "operation_plan") as Extract<ServerEvent, { type: "operation_plan" }>;
+  expect(planEvent.details).toMatchObject({
+    expects: "nginx is active after the restart",
+    rollbackWhen: "the unit is not active afterwards",
+    scopeEvidence: "systemd's runtime directories only",
+    dryRunFidelity: "exact",
+  });
 });
 
 test("runOperation: auto-approved, verify succeeds -> committed, no rollback called", async () => {

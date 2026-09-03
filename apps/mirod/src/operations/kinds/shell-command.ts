@@ -64,6 +64,14 @@ export const shellCommandKind: OperationKind<ShellCommandParams, ShellCommandCap
       writes,
       network: p.network,
       warning,
+      expects: p.verify ? `the verify command (${p.verify}) exits 0 afterwards` : "no verify command declared — the outcome cannot be confirmed",
+      rollbackWhen: p.rollback
+        ? "verify fails or the command fails — the declared roots are restored from snapshot, then the undo command runs"
+        : "verify fails or the command fails — the declared roots are restored from snapshot",
+      scopeEvidence: "the roots the command itself declared writable",
+      // An arbitrary command's effect cannot be predicted from its text (the classifier judges risk,
+      // not outcome) — honestly "none", shown as "effect unknown" rather than a false "no changes".
+      dryRunFidelity: "none",
       details: { command: p.command, reasons: c.reasons, verify: p.verify ?? null, rollback: p.rollback ?? null, cwd: p.cwd ?? null },
     };
   },

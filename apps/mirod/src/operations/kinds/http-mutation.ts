@@ -146,6 +146,15 @@ export function httpMutationKind(
         network: true,
         irreversible,
         warning: irreversible ? "no undo request declared" : undefined,
+        expects: p.verifyUrl ? `GET ${p.verifyUrl} confirms the change afterwards` : "no verify URL declared — the outcome cannot be confirmed",
+        rollbackWhen: irreversible
+          ? "never — no undo request declared"
+          : p.rollback
+            ? "verify fails — the declared rollback request runs"
+            : "verify fails — the state captured from captureUrl is PUT back",
+        scopeEvidence: "the app's own local or private-network endpoint only; no files change",
+        // The request is known exactly; the server's side effects are not.
+        dryRunFidelity: "partial",
         details: {
           method: p.method,
           url: p.url,

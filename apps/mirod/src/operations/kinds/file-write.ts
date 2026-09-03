@@ -70,6 +70,10 @@ export const fileWriteKind: OperationKind<FileWriteParams, FileWriteCaptured> = 
       writes: [dirname(real)],
       network: false,
       warning: lifeline ? "this file can affect SSH, networking, or Miro itself" : undefined,
+      expects: `${p.path} contains exactly the proposed content`,
+      rollbackWhen: existed ? "verify fails or the write throws — the previous content is restored" : "verify fails or the write throws — the new file is removed",
+      scopeEvidence: `the target's real parent directory (${dirname(real)})`,
+      dryRunFidelity: "exact",
       details: {
         path: p.path,
         existed,

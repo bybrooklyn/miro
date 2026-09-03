@@ -18,6 +18,18 @@ export interface OperationPlan {
   /** No rollback is possible (e.g. completing a setup wizard). Always confirmed, with a warning. */
   irreversible?: boolean;
   warning?: string;
+  /** The repair contract (PLAN.md §5.15 A, after DBA-Bench: 80% of unsafe repairs were unscoped
+   * or unsafeguarded, not deletions). Declared BEFORE apply, shown in the plan:
+   * - `expects`: the state transition verify() will check.
+   * - `rollbackWhen`: the condition under which rollback fires (or "never" for the irreversible).
+   * - `scopeEvidence`: why exactly these writable roots.
+   * - `dryRunFidelity`: how faithfully describe() predicts the effect. The Ansible lesson — a
+   *   dry-run that says "no changes" when it means "unknown" is worse than none — so a kind that
+   *   does not declare one is shown as "none" (effect unknown), never silently as exact. */
+  expects?: string;
+  rollbackWhen?: string;
+  scopeEvidence?: string;
+  dryRunFidelity?: "exact" | "partial" | "none";
 }
 
 /** The engine's own rule, independent of what a kind says: anything that destroys data, can lock
@@ -126,7 +138,12 @@ export async function runOperation<P, S>(
   if (plan.network !== undefined) details.network = plan.network;
   if (plan.irreversible) details.irreversible = true;
   if (plan.warning) details.warning = plan.warning;
-  send({ type: "operation_plan", id, goal, summary: plan.summary, autoApprove, details: Object.keys(details).length > 0 ? details : null });
+  // The repair contract rides along; an undeclared fidelity is "none" — effect unknown — on purpose.
+  if (plan.expects) details.expects = plan.expects;
+  if (plan.rollbackWhen) details.rollbackWhen = plan.rollbackWhen;
+  if (plan.scopeEvidence) details.scopeEvidence = plan.scopeEvidence;
+  details.dryRunFidelity = plan.dryRunFidelity ?? "none";
+  send({ type: "operation_plan", id, goal, summary: plan.summary, autoApprove, details });
 
   if (!autoApprove) {
     const notes = [plan.warning, plan.irreversible ? "cannot be rolled back" : undefined, downgraded ? `${gate} — a human must approve` : undefined]

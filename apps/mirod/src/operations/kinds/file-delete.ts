@@ -43,6 +43,10 @@ export const fileDeleteKind: OperationKind<FileDeleteParams, FileDeleteCaptured>
       writes: [dirname(p.path), TRASH_DIR],
       network: false,
       warning: lifeline ? "this path can affect SSH, networking, or Miro itself" : "recoverable from Miro's trash",
+      expects: `${p.path} is gone from its path and present in Miro's trash`,
+      rollbackWhen: "verify fails or the move throws — restored from the trash",
+      scopeEvidence: "the path's parent directory and the trash directory, nothing else",
+      dryRunFidelity: "exact",
       details: { path: p.path, type: st.isDirectory() ? "directory" : "file", bytes: sizeOf(p.path) },
     };
   },
