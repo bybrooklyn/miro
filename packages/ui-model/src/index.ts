@@ -348,3 +348,8 @@ export function isQuiet(node: ActivityNode): boolean {
   if (node.status === "running" || node.status === "failed") return false;
   return node.children.every(isQuiet);
 }
+
+/** Total descendant count under a node — the "(+N steps)" a collapsed activity block shows. */
+export function countSteps(node: ActivityNode): number {
+  return node.children.reduce((n, c) => n + 1 + countSteps(c), 0);
+}

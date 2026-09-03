@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
 import type { OperationPlanEvent, ServerEvent } from "@miro/protocol";
-import { initialState, reduce, userSent, answered, keyToAnswer, footerHints, secondsLeft, isQuiet, slashCommand, operationDetails, PHASE_LABEL, type Block } from "./index";
+import { initialState, reduce, userSent, answered, keyToAnswer, footerHints, secondsLeft, isQuiet, countSteps, slashCommand, operationDetails, PHASE_LABEL, type ActivityNode, type Block } from "./index";
 
 // Drives the reducer with the event sequence a real "set up jellyfin" turn produces (shape taken
 // from the live acceptance run on the dev VM), asserting the transcript a renderer would draw.
@@ -210,4 +210,13 @@ test("PHASE_LABEL covers every operation_progress phase", () => {
     verifying: "verifying",
     awaiting_reachability: "awaiting reachability",
   });
+});
+
+test("countSteps totals the descendants under a node, recursively", () => {
+  const leaf: ActivityNode = { id: "c", label: "leaf", status: "done", children: [], startedAt: 0 };
+  const mid: ActivityNode = { id: "b", label: "mid", status: "done", children: [leaf, leaf], startedAt: 0 };
+  const root: ActivityNode = { id: "a", label: "root", status: "done", children: [mid], startedAt: 0 };
+  expect(countSteps(leaf)).toBe(0);
+  expect(countSteps(mid)).toBe(2);
+  expect(countSteps(root)).toBe(3); // mid + its two leaves
 });
