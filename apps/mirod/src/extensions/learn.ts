@@ -5,7 +5,7 @@ import type { ServerEvent } from "@miro/protocol";
 import type { ExtensionHostManager } from "./host";
 import type { OperationToolContext } from "../operations/engine";
 import { spawnLearningAgent } from "./learn-agent";
-import { loadGoldenHint, formatGoldenHint } from "./golden-hints";
+import { discoverAppOnBox, formatPresence } from "../discovery";
 
 /** What the codegen model resolver picked, and any reasoning-effort override to apply for it —
  * e.g. Codex logins always resolve to gpt-5.6-luna at "medium" reasoning (confirmed preference),
@@ -63,8 +63,12 @@ export async function runLearnFlow(opts: LearnFlowOptions): Promise<{ text: stri
   }
   inProgress.add(app);
   try {
-    const golden = loadGoldenHint(app);
-    const combinedHint = [opts.hint, golden ? formatGoldenHint(golden) : undefined].filter(Boolean).join(" | ");
+    // Discovery replaces the hand-written golden hint (PLAN.md §5.13): inspect the live box for the
+    // app's own container/service and its published port, and hand THAT to the learning agent as its
+    // starting context. Nothing hand-authored — the box tells Miro where the app is; the agent's
+    // discovery ladder + docs research take it from there.
+    const presence = await discoverAppOnBox(app);
+    const combinedHint = [opts.hint, formatPresence(app, presence)].filter(Boolean).join(" | ");
     const goal = `Learn the self-hosted app "${app}"${combinedHint ? ` (hint: ${combinedHint})` : ""}: identify what it is and how it is best controlled, generate a local extension for it (read tools, diagnostics, and write bindings), and record its operational model.`;
     return await spawnLearningAgent({
       goal,

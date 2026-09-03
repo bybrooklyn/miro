@@ -70,7 +70,7 @@ the original plan called Stage 4 (Jellyfin) with the media slice of the original
 | **A. Remote access** | Iroh P2P transport only — no hosted control plane, no Cloudflare/passkeys yet | **Shipped** (see Part 2) |
 | **B. Safe action** | Operation engine w/ visible plan-diffs, recovery points, rollback, lifelines, reboot recovery, SecretRef secrets | **Slice 1 shipped** (operation engine core, live-verified); lifelines/reboot recovery not started |
 | **C. Memory & Learning** | §37 Memory, communication-style personality adaptation, personalized quiet-competence thresholds — unified with self-extension/Dreaming foundations | **Slice 1 shipped** (Memory + Reflexion-shaped Dreaming reflection, live-verified). **Slice 2 shipped, both phases** (self-extension: learn→generate→validate→promote, AND Dreaming's repair loop — a real induced failure was detected, self-repaired, and re-verified working, all live on the VM — see Part 4). Personalized quiet-competence thresholds not started. |
-| **D. Media flagship** | Full acquisition+playback stack set up end-to-end (Sonarr/Radarr/Prowlarr/qBittorrent/Jellyfin/Portainer) | **Slice 1 in progress** (Jellyfin, adopt-existing, golden hints — see Part 5) |
+| **D. Media flagship** | Full acquisition+playback stack set up end-to-end (Sonarr/Radarr/Prowlarr/qBittorrent/Jellyfin/Portainer) | **Slice 1 in progress** (Jellyfin, adopt-existing, live discovery — see Part 5 / §5.13) |
 | **E. Capstone** | Immich, remaining self-hoster stack, notification bus (ntfy-first), GitHub config backup, power/UPS | Not started |
 
 Why this order, confirmed explicitly: remote reachability matters enough to front-load ahead of
@@ -1334,10 +1334,12 @@ tools, the worker, Codex routing.
    composition, VPN/network verification, packet capture when documentation runs out). The golden
    proof is this architecture's acceptance test, not its first slice.
 
-Earlier decisions that still stand: **golden hints, not golden extensions**
+Earlier decisions that still stand: ~~**golden hints, not golden extensions**
 (`apps/mirod/golden-hints/<app>.json` — `docsUrl`, `defaultPort`, `authScheme` — read straight from
 the repo tree by `extensions/golden-hints.ts`, merged into `runLearnFlow`'s existing `hint`
-parameter; a research shortcut, never a substitute for learning); the **same validation pipeline
+parameter; a research shortcut, never a substitute for learning)~~ — **SUPERSEDED 2026-09-03 by §5.13
+Slice 2:** golden hints deleted entirely; `runLearnFlow` now derives the app's presence from live
+discovery (`src/discovery.ts`) instead of a hand-authored file. The **same validation pipeline
 for every extension** regardless of provenance; a **Miro-creatable credential is generated, stored
 encrypted and reported once, never asked for** (the Jellyfin admin password); the user is asked only
 for credentials that genuinely live outside the machine. Superseded: "read-only only" for slice 1.
@@ -2151,3 +2153,41 @@ tsc or unit tests):
 Local: 4 packages `tsc --noEmit` clean; `bun test` 256 pass / 14 skip / 0 fail (new
 `declarative.test.ts` interpreter+schema tests, `annotateFailures` teacher-mapper test, single-file
 `reference.test.ts`). Slice 1 met; unblocks Slice 2 (discovery + persistent knowledge).
+
+**Slice 2, first cut — discovery replaces the golden hint (2026-09-03).** Grilled direction: wedge =
+unattended persistent autonomy (the pitch), operation-engine safety (the enabler); build on a feature
+branch with frequent commits + a PR to merge; a parallel subagent track drafts positioning/TUI. Scope
+chosen: A (discovery + persistence) + D (provider genericize, folded in later) + context self-assembly
+— "learn-your-server"; Stage D real-apps comes after. **Reframe found by reading the code first (it
+changed the slice):** the substrate the plan assumed we would build already exists — `memory/store.ts`
+already has both a `server_fact` and a `capability` (app-recipe) category with reinforcement + a
+redaction choke point, and `agent/context.ts` is already self-assembling (per-turn live snapshot +
+operated-systems summary + refusals, bounded, + a `capabilities` depth tool, wired at `index.ts`'s
+`buildContextBlock(db, await takeSnapshot())`). So Q3's "context self-assembly" is largely built
+already. The genuine gaps were narrower: (1) the live snapshot is ephemeral — never persisted; (2) the
+learn agent was blind to the box, fed a hand-written `golden-hints/<app>.json` instead of live
+inventory. This cut closes both (user chose "both in this slice"):
+- **`src/discovery.ts`** (new): pure `hostPorts` / `presenceFrom` / `factsFrom` + thin
+  `discoverAppOnBox` / `runDiscovery` wrappers over the existing inventory tools (containers, systemd),
+  writing only through `memory/store`'s `remember`. Split pure-vs-shell like `parseDockerPs` /
+  `listContainers`, so it is unit-tested with no mocks (`discovery.test.ts`, 8 tests).
+- **Persist (commit `c7f5dc1`):** `runDiscovery(db)` runs at boot and on the 24h interval, persisting a
+  bounded, deduped set of `server_fact`s (container roster + notable active services), reinforced each
+  sweep, surfaced into every turn by `buildSummary`. Deliberately high-level — raw per-container detail
+  already reaches the agent via the live snapshot, so this is the durable, cross-restart summary, not a
+  copy. `ponytail:` no staleness prune yet (a removed container's fact lingers until re-derived).
+- **Kill the golden hint (this commit):** `runLearnFlow` now derives the app's presence from the live
+  box (`discoverAppOnBox` → container/image/service + published port → likely baseUrl) and hands THAT
+  to the learning agent as its starting context, in place of `golden-hints/<app>.json`. Deleted
+  `golden-hints.ts`, `golden-hints.test.ts`, `golden-hints/jellyfin.json`. The learn agent's own system
+  prompt already has the discovery ladder (rung 1 = `container_list`/`container_inspect`), so it takes
+  over from the discovered baseUrl; docs/probe research fill in auth + endpoints. AGENTS.md updated
+  (also fixed a Slice-1 leftover there: the Extensions bullet still described the old five-file format).
+- **The bar this raises:** deleting `jellyfin.json` also deletes a hard-won, live-verified auth-flow
+  blob (the `/Startup/User` 404-priming quirk, the `MediaBrowser` client header). The cold-learn proof
+  — learn Jellyfin with the hint gone, using only what the box reveals + the agent's research — is a
+  real test of whether discovery + the ladder suffice on the hardest case; a successful run retains the
+  flow via the existing `capability_write` (learned-once, not hand-authored). Needs `BRAVE_API_KEY` in
+  the daemon env or `web_search` probes blind.
+- Local: `apps/mirod` `tsc --noEmit` clean; `discovery.test.ts` 8/8. **Live verification on the dev VM:
+  pending.**
