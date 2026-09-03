@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
-import type { ServerEvent } from "@miro/protocol";
-import { initialState, reduce, userSent, answered, keyToAnswer, footerHints, secondsLeft, isQuiet, slashCommand, type Block } from "./index";
+import type { OperationPlanEvent, ServerEvent } from "@miro/protocol";
+import { initialState, reduce, userSent, answered, keyToAnswer, footerHints, secondsLeft, isQuiet, slashCommand, operationDetails, PHASE_LABEL, type Block } from "./index";
 
 // Drives the reducer with the event sequence a real "set up jellyfin" turn produces (shape taken
 // from the live acceptance run on the dev VM), asserting the transcript a renderer would draw.
@@ -168,4 +168,46 @@ test("slashCommand maps recognized commands, and passes through anything else", 
   expect(slashCommand("/memory forget  abc123  ")).toEqual({ type: "memory_forget", id: "abc123" }); // trims
   expect(slashCommand("hello")).toBeNull();
   expect(slashCommand("/unknown")).toBeNull();
+});
+
+test("operationDetails decodes the untyped details bag, defaulting a missing one to empty", () => {
+  const plan: OperationPlanEvent = {
+    type: "operation_plan",
+    id: "o1",
+    goal: "write config",
+    summary: "Overwrite /opt/x",
+    autoApprove: false,
+    details: { class: "mutate", writes: ["/opt", "/etc"], network: false, warning: "will restart the service", command: "systemctl restart x", irreversible: true },
+  };
+  expect(operationDetails(plan)).toEqual({
+    class: "mutate",
+    writes: ["/opt", "/etc"],
+    network: false,
+    warning: "will restart the service",
+    command: "systemctl restart x",
+    diff: undefined,
+    proposed: undefined,
+    irreversible: true,
+  });
+
+  const bare: OperationPlanEvent = { type: "operation_plan", id: "o2", goal: "noop", summary: "nothing", autoApprove: true, details: null };
+  expect(operationDetails(bare)).toEqual({
+    class: undefined,
+    writes: null,
+    network: undefined,
+    warning: undefined,
+    command: undefined,
+    diff: undefined,
+    proposed: undefined,
+    irreversible: false,
+  });
+});
+
+test("PHASE_LABEL covers every operation_progress phase", () => {
+  expect(PHASE_LABEL).toEqual({
+    capturing: "capturing state",
+    applying: "applying",
+    verifying: "verifying",
+    awaiting_reachability: "awaiting reachability",
+  });
 });

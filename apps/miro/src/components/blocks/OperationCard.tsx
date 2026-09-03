@@ -1,5 +1,5 @@
 import type { OperationPlanEvent } from "@miro/protocol";
-import type { Phase } from "@miro/ui-model";
+import { operationDetails, PHASE_LABEL, type Phase } from "@miro/ui-model";
 import { theme } from "../../theme";
 import { Spinner } from "../Spinner";
 
@@ -8,15 +8,6 @@ const CLASS_FG: Record<string, string> = {
   destructive: theme.warning,
   lifeline: theme.error,
 };
-
-const PHASE_LABEL: Record<Phase, string> = {
-  capturing: "capturing state",
-  applying: "applying",
-  verifying: "verifying",
-  awaiting_reachability: "awaiting reachability",
-};
-
-const str = (v: unknown) => (typeof v === "string" ? v : undefined);
 
 /** The diff is drawn by a real <diff>, whose sides are laid out at height 100% — so it needs an
  * explicit height or it collapses to nothing. Count the hunk body lines and cap the card.
@@ -35,14 +26,7 @@ export function OperationCard({
   phase?: Phase;
   result?: { outcome: "committed" | "rolledback" | "applied_unverified"; message: string };
 }) {
-  const d = (plan.details ?? {}) as Record<string, unknown>;
-  const cls = str(d.class);
-  const writes = Array.isArray(d.writes) ? d.writes.map(String) : null;
-  const network = typeof d.network === "boolean" ? d.network : undefined;
-  const warning = str(d.warning);
-  const command = str(d.command);
-  const diff = str(d.diff);
-  const proposed = str(d.proposed);
+  const { class: cls, writes, network, warning, command, diff, proposed, irreversible } = operationDetails(plan);
 
   return (
     <box
@@ -60,7 +44,7 @@ export function OperationCard({
           <text fg={theme.background} bg={CLASS_FG[cls] ?? theme.textMuted}>{` ${cls} `}</text>
         ) : null}
         {plan.autoApprove ? null : <text fg={theme.textMuted}>needs approval</text>}
-        {d.irreversible === true ? <text fg={theme.error}>cannot be rolled back</text> : null}
+        {irreversible ? <text fg={theme.error}>cannot be rolled back</text> : null}
       </box>
       {writes ? (
         <text fg={theme.textMuted}>

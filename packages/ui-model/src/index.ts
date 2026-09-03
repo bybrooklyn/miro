@@ -19,6 +19,42 @@ export interface ActivityNode {
 
 export type Phase = OperationProgressEvent["phase"];
 
+export const PHASE_LABEL: Record<Phase, string> = {
+  capturing: "capturing state",
+  applying: "applying",
+  verifying: "verifying",
+  awaiting_reachability: "awaiting reachability",
+};
+
+/** The typed shape of an operation plan's untyped `details` bag, once decoded. */
+export interface OperationDetails {
+  class?: string;
+  writes: string[] | null;
+  network?: boolean;
+  warning?: string;
+  command?: string;
+  diff?: string;
+  proposed?: string;
+  irreversible: boolean;
+}
+
+/** Decodes an `OperationPlanEvent`'s untyped `details` bag into typed fields a renderer can draw
+ * directly, with no knowledge of the wire shape. */
+export function operationDetails(plan: OperationPlanEvent): OperationDetails {
+  const d = (plan.details ?? {}) as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+  return {
+    class: str(d.class),
+    writes: Array.isArray(d.writes) ? d.writes.map(String) : null,
+    network: typeof d.network === "boolean" ? d.network : undefined,
+    warning: str(d.warning),
+    command: str(d.command),
+    diff: str(d.diff),
+    proposed: str(d.proposed),
+    irreversible: d.irreversible === true,
+  };
+}
+
 export type Block =
   | { kind: "user"; id: string; text: string; at: number }
   | { kind: "assistant"; id: string; text: string; streaming: boolean; at: number }
