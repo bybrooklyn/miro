@@ -1,8 +1,8 @@
 import { useRef, useState } from "react";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type { ScrollBoxRenderable } from "@opentui/core";
-import type { ClientMessage, ServerEvent } from "@miro/protocol";
-import { answered, initialState, reduce, userSent } from "@miro/ui-model";
+import type { ServerEvent } from "@miro/protocol";
+import { answered, initialState, reduce, slashCommand, userSent } from "@miro/ui-model";
 import { useMiroConnection } from "./connection";
 import { theme } from "./theme";
 import { StatusLine } from "./components/StatusLine";
@@ -11,14 +11,6 @@ import { PromptArea } from "./components/PromptArea";
 import { Footer } from "./components/Footer";
 
 const SCROLL_STEP = 2;
-
-function slashCommand(text: string): ClientMessage | null {
-  if (text === "/provider") return { type: "provider_setup" };
-  if (text === "/pair") return { type: "pair_request" };
-  if (text === "/memory") return { type: "memory_list" };
-  if (text.startsWith("/memory forget ")) return { type: "memory_forget", id: text.slice("/memory forget ".length).trim() };
-  return null;
-}
 
 export function App() {
   const [state, setState] = useState(initialState);

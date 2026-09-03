@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
 import type { ServerEvent } from "@miro/protocol";
-import { initialState, reduce, userSent, answered, keyToAnswer, footerHints, secondsLeft, isQuiet, type Block } from "./index";
+import { initialState, reduce, userSent, answered, keyToAnswer, footerHints, secondsLeft, isQuiet, slashCommand, type Block } from "./index";
 
 // Drives the reducer with the event sequence a real "set up jellyfin" turn produces (shape taken
 // from the live acceptance run on the dev VM), asserting the transcript a renderer would draw.
@@ -158,4 +158,14 @@ test("free-text and secret prompts, notices", () => {
 test("an activity for an unknown parent still shows, at top level", () => {
   const s = reduce(initialState(), { type: "activity", id: "z", parentId: "missing", label: "Late join", status: "running" }, T);
   expect(s.blocks[0]).toMatchObject({ kind: "activity", node: { label: "Late join" } });
+});
+
+test("slashCommand maps recognized commands, and passes through anything else", () => {
+  expect(slashCommand("/provider")).toEqual({ type: "provider_setup" });
+  expect(slashCommand("/pair")).toEqual({ type: "pair_request" });
+  expect(slashCommand("/memory")).toEqual({ type: "memory_list" });
+  expect(slashCommand("/memory forget abc123")).toEqual({ type: "memory_forget", id: "abc123" });
+  expect(slashCommand("/memory forget  abc123  ")).toEqual({ type: "memory_forget", id: "abc123" }); // trims
+  expect(slashCommand("hello")).toBeNull();
+  expect(slashCommand("/unknown")).toBeNull();
 });

@@ -1,4 +1,4 @@
-import type { ServerEvent, SystemPlanEvent, OperationPlanEvent, QuestionOption, OperationProgressEvent } from "@miro/protocol";
+import type { ClientMessage, ServerEvent, SystemPlanEvent, OperationPlanEvent, QuestionOption, OperationProgressEvent } from "@miro/protocol";
 
 // The headless view-model (PLAN.md §5.9 client decision: "one view-model, two thin renderers").
 // A pure reducer from protocol events to what a client shows: a transcript of blocks, the one
@@ -242,6 +242,16 @@ export function answered(state: UiState, id: string, value: string): UiState {
     blocks = blocks.map((b) => (b.kind === "plan" && b.id === p.blockId ? { ...b, decision } : b));
   }
   return advancePending({ ...state, blocks }); // promote the next queued prompt, if any (audit U1)
+}
+
+/** Maps a chat-input line starting with `/` to the `ClientMessage` it triggers, or null if it's
+ * not a recognized slash command (plain chat text). */
+export function slashCommand(text: string): ClientMessage | null {
+  if (text === "/provider") return { type: "provider_setup" };
+  if (text === "/pair") return { type: "pair_request" };
+  if (text === "/memory") return { type: "memory_list" };
+  if (text.startsWith("/memory forget ")) return { type: "memory_forget", id: text.slice("/memory forget ".length).trim() };
+  return null;
 }
 
 /** Maps a single key press to an answer for the pending prompt, or null if the key means nothing
