@@ -2189,5 +2189,21 @@ inventory. This cut closes both (user chose "both in this slice"):
   real test of whether discovery + the ladder suffice on the hardest case; a successful run retains the
   flow via the existing `capability_write` (learned-once, not hand-authored). Needs `BRAVE_API_KEY` in
   the daemon env or `web_search` probes blind.
-- Local: `apps/mirod` `tsc --noEmit` clean; `discovery.test.ts` 8/8. **Live verification on the dev VM:
-  pending.**
+- Local: `apps/mirod` `tsc --noEmit` clean; `discovery.test.ts` 8/8; full suite 258 pass / 0 fail.
+- **Live verification (dev VM, 2026-09-03) — the discovery mechanism is MET.** An independent script
+  ran `discoverAppOnBox`/`runDiscovery` against the VM's REAL docker: it found the real `jellyfin`
+  container (`jellyfin/jellyfin:latest`, running), parsed host port 8096 from live `docker ps`, and
+  derived `http://localhost:8096` — the exact context now fed to the learn goal in place of the golden
+  hint; `sonarr` (absent) returned `found:false` (the honest fallback). `runDiscovery` persisted 2
+  server_facts, reinforced not duplicated on a second sweep. The live root daemon, restarted with this
+  code, logged `[mirod] discovery: 2 server fact(s) refreshed` at boot, and an independent
+  `bun:sqlite` read (as root) of the real on-disk `/var/lib/miro/miro.db` showed
+  `server.containers`/`server.services` rows with source `discovery` — so they reach every turn via
+  `buildSummary`.
+- **Not run — the full autonomous Jellyfin cold-learn (stretch bar):** blocked by no `BRAVE_API_KEY`
+  in the VM daemon env (`web_search` probes blind — a known env gotcha, not a code issue), and it
+  would need the existing jellyfin capability/extension wiped first; it tests the learn agent's
+  blind-probing more than the discovery change this slice makes. Deferred until a Brave key is around.
+- Follow-up noted (not this slice): `NOISE_UNIT` (shared with the live snapshot in `agent/context.ts`)
+  lets a few low-value units through (`kmod-static-nodes`, `user-runtime-dir@`, `upower`); tighten it
+  in a later pass if the persisted `server.services` fact reads noisy.
