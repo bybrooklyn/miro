@@ -12,7 +12,7 @@ import { runSandboxed } from "../operations/sandbox";
 
 function textResult(details: unknown): AgentToolResult<unknown> {
   // details ?? null: JSON.stringify(undefined) returns the value undefined (not a string),
-  // producing a malformed {text: undefined} block — see agent/extension-tools.ts's textResult.
+  // producing a malformed {text: undefined} block - see agent/extension-tools.ts's textResult.
   return { content: [{ type: "text", text: JSON.stringify(details ?? null, null, 2) }], details };
 }
 
@@ -22,9 +22,9 @@ const serviceRestartParams = Type.Object({
 
 const shellCommandParams = Type.Object({
   command: Type.String({ description: "The shell command. It is classified first: forbidden commands (rm, mkfs, reboot, interactive shells, ...) are refused with the safe alternative; read-only commands run immediately; anything else becomes a confirmed, sandboxed, rollback-able operation." }),
-  writes: Type.Array(Type.String(), { description: "Every path this command may write (files, directories, sockets). The kernel sandbox refuses writes anywhere else — declare exactly what is needed, nothing more." }),
+  writes: Type.Array(Type.String(), { description: "Every path this command may write (files, directories, sockets). The kernel sandbox refuses writes anywhere else - declare exactly what is needed, nothing more." }),
   network: Type.Boolean({ description: "Whether the command needs network access. Off means no network at all, not even localhost." }),
-  reason: Type.String({ description: "Why this change is needed, in one line — shown to the user as the goal." }),
+  reason: Type.String({ description: "Why this change is needed, in one line - shown to the user as the goal." }),
   verify: Type.Optional(Type.String({ description: "A read-only command whose exit code 0 proves the change worked (e.g. 'test -f /opt/app/config.ini')." })),
   rollback: Type.Optional(Type.String({ description: "A command that undoes the change. The declared roots are also snapshotted and restored automatically on failure." })),
   cwd: Type.Optional(Type.String()),
@@ -33,19 +33,19 @@ const shellCommandParams = Type.Object({
 const fileWriteParams = Type.Object({
   path: Type.String({ description: "Absolute path to write." }),
   content: Type.String({ description: "Full new file content. The user sees it before approving." }),
-  reason: Type.String({ description: "Why, in one line — shown to the user as the goal." }),
+  reason: Type.String({ description: "Why, in one line - shown to the user as the goal." }),
   mode: Type.Optional(Type.Integer({ description: "Octal file mode as a number, e.g. 420 for 0644." })),
 });
 
 const fileDeleteParams = Type.Object({
   path: Type.String({ description: "Absolute path to move to Miro's trash. Recoverable; never a permanent delete." }),
-  reason: Type.String({ description: "Why, in one line — shown to the user as the goal." }),
+  reason: Type.String({ description: "Why, in one line - shown to the user as the goal." }),
 });
 
 const httpMutationParams = Type.Object({
   method: Type.Unsafe<"POST" | "PUT" | "PATCH" | "DELETE">({ type: "string", enum: ["POST", "PUT", "PATCH", "DELETE"] }),
   url: Type.String({ description: "Local or private-network URL only." }),
-  reason: Type.String({ description: "Why, in one line — shown to the user as the goal." }),
+  reason: Type.String({ description: "Why, in one line - shown to the user as the goal." }),
   body: Type.Optional(Type.String({ description: "Request body. Never a literal credential: write {{secret:<ref>}} where a password or token belongs (create one with credential_create); the daemon substitutes it at request time and the user sees only the placeholder." })),
   contentType: Type.Optional(Type.String({ description: "e.g. application/json" })),
   headers: Type.Optional(Type.Record(Type.String(), Type.String(), { description: "Non-credential headers only, or {{secret:<ref>}} placeholders. Credentials go in secretHeader by reference." })),
@@ -65,12 +65,12 @@ const httpMutationParams = Type.Object({
   storeResponseField: Type.Optional(
     Type.Object({
       field: Type.String({ description: "JSON field of the response to keep, dotted path allowed (e.g. AccessToken, data.token)." }),
-      ref: Type.String({ description: "Where to store it: extension.<app>.<name>. You get the ref back, never the value — use it via secretHeader or {{secret:<ref>}}." }),
+      ref: Type.String({ description: "Where to store it: extension.<app>.<name>. You get the ref back, never the value - use it via secretHeader or {{secret:<ref>}}." }),
     }, { description: "Retain a token or key the response returns (a login's AccessToken, a minted API key) directly in the secret store." }),
   ),
 });
 
-/** Mutating tools go through the operation engine (plan §38, §54 Stage B; PLAN.md §5.4 B) —
+/** Mutating tools go through the operation engine (plan §38, §54 Stage B; PLAN.md §5.4 B) -
  * tracked, confirmed, sandboxed, verified, rolled back on failure. Kept separate from
  * agent/tools.ts's read-only AGENT_TOOLS so subagents spawned via worker.ts never see these. */
 export function buildOperationTools(ctx: OperationToolContext) {
@@ -80,7 +80,7 @@ export function buildOperationTools(ctx: OperationToolContext) {
       name: "service_restart",
       label: "Restart service",
       description:
-        "Restart a systemd service as a tracked, reversible operation — captures state first, verifies afterward, rolls back on failure. Use this instead of any raw shell command.",
+        "Restart a systemd service as a tracked, reversible operation - captures state first, verifies afterward, rolls back on failure. Use this instead of any raw shell command.",
       parameters: serviceRestartParams,
       execute: async (_id: string, params: { unit: string }) =>
         textResult(await runOperation(ctx, systemdRestartKind, `restart ${params.unit}`, { unit: params.unit })),
@@ -89,7 +89,7 @@ export function buildOperationTools(ctx: OperationToolContext) {
       name: "shell_command",
       label: "Run command",
       description:
-        "Run a shell command on the server. Read-only commands run immediately in a read-only sandbox and return their output. Anything that changes state becomes a tracked operation: the user sees the command and its declared scope, approves, the declared paths are snapshotted, the command runs in a kernel sandbox limited to that scope, and it is rolled back if verification fails. rm and other destructive primitives are refused — use file_delete (trash) instead.",
+        "Run a shell command on the server. Read-only commands run immediately in a read-only sandbox and return their output. Anything that changes state becomes a tracked operation: the user sees the command and its declared scope, approves, the declared paths are snapshotted, the command runs in a kernel sandbox limited to that scope, and it is rolled back if verification fails. rm and other destructive primitives are refused - use file_delete (trash) instead.",
       parameters: shellCommandParams,
       execute: async (_id: string, params: ShellCommandParams & { reason: string }) => {
         const c = classifyCommand(params.command);
@@ -104,7 +104,7 @@ export function buildOperationTools(ctx: OperationToolContext) {
         const { reason, ...p } = params;
         const result = await runOperation(ctx, shellCommandKind, reason, p);
         const out = takeShellOutput(p);
-        // Redact the write path's output too — an installer or `curl -u` echoes credentials to
+        // Redact the write path's output too - an installer or `curl -u` echoes credentials to
         // stdout, and this branch (unlike the read branch above) had no scrub (audit L2).
         return textResult({ ...result, class: c.class, stdout: out ? redactSecretsInText(out.stdout) : null, stderr: out ? redactSecretsInText(out.stderr) : null, exitCode: out?.exitCode ?? null });
       },

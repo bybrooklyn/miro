@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // Extension-host subprocess bootstrap (plan §34). Spawned by extensions/host.ts via Bun.spawn,
 // one process per app, communicating over stdin/stdout via @miro/protocol's encodeLine/
-// createLineBuffer JSON-line framing. This file is fixed and hand-written — never generated — and
+// createLineBuffer JSON-line framing. This file is fixed and hand-written - never generated - and
 // deliberately has no import path to bun:sqlite/secrets.ts/operations/engine.ts, so nothing
 // generated code does can reach those, regardless of what it tries to import. (The second layer
 // of the same boundary is extensions/validate.ts's forbidden-import allowlist scan, run before
@@ -13,7 +13,7 @@ import { encodeLine, createLineBuffer } from "@miro/protocol";
 import { createHttpClient, type ExtensionContext, type ExtensionModule, type BrowserSession, type SnapshotNode, type ReadResult } from "@miro/sdk";
 import type { HostRequest, HostResponse, HostToolSpec } from "./host-protocol";
 import { runRead, entrySpec, validateEntry } from "./declarative";
-// Pure / CLI-backed modules with no path to the DB or secrets — safe to import into this process.
+// Pure / CLI-backed modules with no path to the DB or secrets - safe to import into this process.
 // They let generated code's ctx.exec/ctx.readFile be gated by the same classifier and sandbox the
 // daemon uses (PLAN.md §5.7), without a reverse RPC.
 import { classifyCommand, isSensitivePath, redactSecretsInText } from "../operations/classify";
@@ -24,14 +24,14 @@ function send(res: HostResponse): void {
 }
 
 // --- BrowserSession, backed by Bun.WebView (research finding: Playwright doesn't work under
-// Bun; Bun.WebView is the confirmed-working native replacement — live-verified against real
+// Bun; Bun.WebView is the confirmed-working native replacement - live-verified against real
 // Chromium on the real dev VM before this file was written: navigate/evaluate both work).
-// Built lazily on first real use — an extension whose tools are pure HTTP never pays for a
+// Built lazily on first real use - an extension whose tools are pure HTTP never pays for a
 // Chromium launch. Chrome discovery is left to Bun.WebView's own built-in fallback chain
 // (BUN_CHROME_PATH -> $PATH -> standard install dirs) rather than a hardcoded path, so this
 // works across whatever server Miro is actually managing, not just this dev VM. ---
 
-// Bun.WebView has no accessibility-tree/snapshot API and no stable selector scheme of its own —
+// Bun.WebView has no accessibility-tree/snapshot API and no stable selector scheme of its own -
 // this tags every snapshotted element with a data-miro-ref marker so a later click/fill/read can
 // reliably re-select the exact element the snapshot returned, without relying on the page having
 // usable ids/classes of its own.
@@ -71,7 +71,7 @@ function createBrowserSession(): BrowserSession {
       await Promise.race([
         ensure().navigate(url),
         Bun.sleep(30_000).then(() => {
-          throw new Error(`navigate to ${url} did not settle within 30s — snapshot the page as it is`);
+          throw new Error(`navigate to ${url} did not settle within 30s - snapshot the page as it is`);
         }),
       ]);
     },
@@ -137,14 +137,14 @@ function createBrowserSession(): BrowserSession {
 
 // --- Generated-extension loading (init mode) ---
 
-// extension.ts doesn't exist in the source tree — it's written per-extension at runtime under
+// extension.ts doesn't exist in the source tree - it's written per-extension at runtime under
 // ~/.miro/extensions/<app>/. Two issues, both handled here:
 // 1. A plain string-literal import() would make TS try (and fail) to statically resolve it;
 //    routing the specifier through a non-literal `string` parameter opts out of that resolution
 //    attempt entirely (standard TS behavior: only literal import() specifiers get statically
 //    resolved).
 // 2. A relative import() specifier resolves against the IMPORTING MODULE'S OWN location (this
-//    file, in apps/mirod/src/extensions/), never against process.cwd() — cwd only affects
+//    file, in apps/mirod/src/extensions/), never against process.cwd() - cwd only affects
 //    process.cwd() calls and Node-style path resolution, not ESM import resolution. Bun.spawn's
 //    cwd option (set by extensions/host.ts) still correctly sets process.cwd() inside this
 //    process, so building an absolute path from it here works. (Found live: an isolated RPC
@@ -161,7 +161,7 @@ interface LoadedExtension {
 // The declarative-read interpreter + entry validation live in ./declarative (pure, unit-tested).
 async function loadExtension(ctx: ExtensionContext): Promise<LoadedExtension> {
   const mod = (await importGenerated("./extension.ts")).default as ExtensionModule;
-  if (!mod || !Array.isArray(mod.entries)) throw new Error(`extension.ts must \`export default { auth?, entries } satisfies ExtensionModule\` — entries missing`);
+  if (!mod || !Array.isArray(mod.entries)) throw new Error(`extension.ts must \`export default { auth?, entries } satisfies ExtensionModule\` - entries missing`);
   const tools: LoadedExtension["tools"] = new Map();
   const operations: LoadedExtension["operations"] = new Map();
   for (const entry of mod.entries) {
@@ -184,9 +184,9 @@ function createReadPrimitives(): Pick<ExtensionContext, "exec" | "readFile"> {
   return {
     async exec(command) {
       const c = classifyCommand(command);
-      if (c.class !== "read") throw new Error(`refused: ${command} is ${c.class} (${c.reasons.join("; ")}) — extension code may only read; writes are operation bindings`);
+      if (c.class !== "read") throw new Error(`refused: ${command} is ${c.class} (${c.reasons.join("; ")}) - extension code may only read; writes are operation bindings`);
       if (!(await sandboxAvailable())) throw new Error("refused: sandbox unavailable");
-      // Network only for network-inspecting commands, like shell_inspect — generated code holding
+      // Network only for network-inspecting commands, like shell_inspect - generated code holding
       // ctx.secrets must not be able to curl them anywhere (adversarial review).
       const r = await runSandboxed(["sh", "-c", command], { writableRoots: [], network: c.needsNetwork, timeoutMs: 60_000 });
       return { exitCode: r.exitCode, stdout: redactSecretsInText(r.stdout), stderr: redactSecretsInText(r.stderr) };
@@ -208,7 +208,7 @@ const feed = createLineBuffer((line) => {
   handle(JSON.parse(line) as HostRequest).catch((err) => {
     send({ type: "log", level: "error", message: String(err?.stack ?? err) });
     // A failure during init (a generated file that fails to even import) means this process can
-    // never usefully respond to anything — exiting lets host.ts's spawn-time race (waitReady vs.
+    // never usefully respond to anything - exiting lets host.ts's spawn-time race (waitReady vs.
     // proc.exited) reject promptly instead of hanging forever waiting for a "ready" that will
     // never come. Found live: an isolated RPC smoke test hung indefinitely before this fix.
     process.exit(1);
@@ -245,7 +245,7 @@ async function handle(req: HostRequest): Promise<void> {
     const entry = loaded?.tools.get(req.tool);
     if (!entry) {
       const isOp = loaded?.operations.has(req.tool);
-      send({ type: "result", id: req.id, ok: false, error: isOp ? `${req.tool} is an operation — it runs through the daemon's engine, never here` : `Unknown tool: ${req.tool}` });
+      send({ type: "result", id: req.id, ok: false, error: isOp ? `${req.tool} is an operation - it runs through the daemon's engine, never here` : `Unknown tool: ${req.tool}` });
       return;
     }
     try {
@@ -264,7 +264,7 @@ async function handle(req: HostRequest): Promise<void> {
     }
     try {
       // await: a generated `bind: async (args) => ({...})` is natural next to an async execute,
-      // and unawaited it serialised as {} — "binding must include kind and goal" on a file that
+      // and unawaited it serialised as {} - "binding must include kind and goal" on a file that
       // plainly had both (found live, run #5).
       const value = await entry.bind(req.args);
       send({ type: "result", id: req.id, ok: true, value });

@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import type { ServerEvent } from "@miro/protocol";
 import { buildInteractionTools } from "./interaction-tools";
 
-// Real tool objects driven end to end with injected send/waitForAnswer — the same DI shape
+// Real tool objects driven end to end with injected send/waitForAnswer - the same DI shape
 // engine.test.ts uses for operation confirmations. No mocks: these ARE the functions the daemon
 // hands in, just backed by arrays instead of a socket.
 

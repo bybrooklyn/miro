@@ -4,7 +4,7 @@ import { spawnWorker } from "./worker";
 
 // spawnWorker is thin wiring around Agent + runTurn (same shape as createMiroAgent, proven in
 // index.test.ts) around a real builtinModels() registry that needs a real provider key. This
-// proves the part that's actually non-trivial — the turn budget and tool scoping it sets up —
+// proves the part that's actually non-trivial - the turn budget and tool scoping it sets up -
 // the same way: a local Agent built with the identical options, backed by the faux provider.
 import { Agent, type AgentTool } from "@earendil-works/pi-agent-core";
 import { AGENT_TOOLS } from "./tools";
@@ -17,7 +17,7 @@ test("a worker with a turn budget stops after maxTurns even if the model keeps c
   const model = faux.getModel();
   const maxTurns = 2;
 
-  // The model never produces final text — it just keeps calling host_info. If the budget didn't
+  // The model never produces final text - it just keeps calling host_info. If the budget didn't
   // work, the loop would ask for a 3rd response that was never scripted.
   faux.setResponses([
     fauxAssistantMessage([fauxToolCall("host_info", {})], { stopReason: "toolUse" }),

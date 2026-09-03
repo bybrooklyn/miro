@@ -7,7 +7,7 @@ import { commandExists, run } from "../inventory/exec";
 
 // Read-only primitives that need a little context (PLAN.md §5.4 B): a sandboxed shell for
 // inspection, a file reader with the secret-path guard, an HTTP GET with credentials by reference,
-// and packet capture — the last rung of the learn agent's discovery ladder. Kept out of
+// and packet capture - the last rung of the learn agent's discovery ladder. Kept out of
 // agent/tools.ts's static AGENT_TOOLS only because http_get needs getSecret; everything here is
 // read-only and safe for the narrow investigation workers too.
 
@@ -16,7 +16,7 @@ function textResult(details: unknown): AgentToolResult<unknown> {
 }
 
 const shellInspectParams = Type.Object({
-  command: Type.String({ description: "A read-only inspection command (ip route, docker inspect, ss -tlnp, cat /etc/x, journalctl -u x, ...). Anything that would change state is refused — use shell_command for that. Use absolute paths." }),
+  command: Type.String({ description: "A read-only inspection command (ip route, docker inspect, ss -tlnp, cat /etc/x, journalctl -u x, ...). Anything that would change state is refused - use shell_command for that. Use absolute paths." }),
 });
 
 const readFileParams = Type.Object({
@@ -33,7 +33,7 @@ const httpGetParams = Type.Object({
 
 const netCaptureParams = Type.Object({
   durationSeconds: Type.Integer({ description: "How long to capture (1-60). Perform the action you want to observe while it runs." }),
-  filter: Type.Optional(Type.String({ description: "BPF capture filter, e.g. 'tcp port 8096' or 'host 172.17.0.2'. Strongly recommended — unfiltered captures are noisy." })),
+  filter: Type.Optional(Type.String({ description: "BPF capture filter, e.g. 'tcp port 8096' or 'host 172.17.0.2'. Strongly recommended - unfiltered captures are noisy." })),
   interface: Type.Optional(Type.String({ description: "Interface name (default 'any')." })),
   mode: Type.Optional(Type.Unsafe<"summary" | "http">({ type: "string", enum: ["summary", "http"], description: "summary = one line per packet (time, src→dst, protocol, info). http = decoded plaintext HTTP requests/responses only (method, URI, status, body). Default summary." })),
 });
@@ -42,7 +42,7 @@ export interface ReadToolContext {
   getSecret: (ref: string) => string | null;
 }
 
-/** Reads at most `max` bytes from `offset` without loading the whole file — `read_file /dev/zero`
+/** Reads at most `max` bytes from `offset` without loading the whole file - `read_file /dev/zero`
  * or a multi-GB log must not take the daemon down (adversarial review). */
 function readCapped(path: string, offset: number, max: number): Buffer {
   const fd = openSync(path, "r");
@@ -64,12 +64,12 @@ export function buildReadTools(ctx: ReadToolContext) {
       name: "shell_inspect",
       label: "Inspect (shell)",
       description:
-        "Run a read-only shell command in a read-only filesystem sandbox and return its output. Use for ad-hoc inspection: routes, sockets, container internals, config files, logs. Commands that would change state are refused with the reason — use shell_command for those. Secret material (keys, Miro's own state, credential files) is refused.",
+        "Run a read-only shell command in a read-only filesystem sandbox and return its output. Use for ad-hoc inspection: routes, sockets, container internals, config files, logs. Commands that would change state are refused with the reason - use shell_command for those. Secret material (keys, Miro's own state, credential files) is refused.",
       parameters: shellInspectParams,
       execute: async (_id: string, params: Static<typeof shellInspectParams>) => {
         const c = classifyCommand(params.command);
         if (c.class !== "read") {
-          return textResult({ refused: true, class: c.class, reasons: c.reasons, hint: c.class === "forbidden" ? c.alternative : "This changes state — run it with shell_command instead, declaring what it writes." });
+          return textResult({ refused: true, class: c.class, reasons: c.reasons, hint: c.class === "forbidden" ? c.alternative : "This changes state - run it with shell_command instead, declaring what it writes." });
         }
         if (!(await sandbox())) return textResult({ unavailable: true, reason: "bubblewrap is not installed; refusing to run unsandboxed" });
         // Host network namespace only for commands that inspect the network (ip, ss, dig, local
@@ -81,7 +81,7 @@ export function buildReadTools(ctx: ReadToolContext) {
     {
       name: "read_file",
       label: "Read file",
-      description: "Read a file's contents (capped). Secret material — private keys, /etc/shadow, Miro's own key and database, credential files — is refused.",
+      description: "Read a file's contents (capped). Secret material - private keys, /etc/shadow, Miro's own key and database, credential files - is refused.",
       parameters: readFileParams,
       execute: async (_id: string, params: Static<typeof readFileParams>) => {
         if (isSensitivePath(params.path)) return textResult({ refused: true, reason: `${params.path} is secret material` });
@@ -106,7 +106,7 @@ export function buildReadTools(ctx: ReadToolContext) {
     {
       name: "http_get",
       label: "HTTP GET",
-      description: "GET a local or private-network URL and return status, headers, and body (capped). Credentials only as a secretHeader reference — never pasted literally. Redirects are reported, not followed.",
+      description: "GET a local or private-network URL and return status, headers, and body (capped). Credentials only as a secretHeader reference - never pasted literally. Redirects are reported, not followed.",
       parameters: httpGetParams,
       execute: async (_id: string, params: Static<typeof httpGetParams>) => {
         if (!isLocalOrPrivateUrl(params.url)) return textResult({ refused: true, reason: `${params.url} is not a local or private-network address` });
@@ -134,7 +134,7 @@ export function buildReadTools(ctx: ReadToolContext) {
       name: "net_capture",
       label: "Capture packets",
       description:
-        "Capture network traffic for a few seconds and return a machine-readable summary — the last resort of discovery, for when docs, API probing, config files and the CLI have not explained how an app is controlled: watch what a web UI sends to its backend, find undocumented local calls, confirm which port/protocol a component speaks, or check that traffic takes the intended path (VPN, DNS). Always filter. Run the action you want to observe while the capture is open (start the capture, then trigger the action from another tool).",
+        "Capture network traffic for a few seconds and return a machine-readable summary - the last resort of discovery, for when docs, API probing, config files and the CLI have not explained how an app is controlled: watch what a web UI sends to its backend, find undocumented local calls, confirm which port/protocol a component speaks, or check that traffic takes the intended path (VPN, DNS). Always filter. Run the action you want to observe while the capture is open (start the capture, then trigger the action from another tool).",
       parameters: netCaptureParams,
       execute: async (_id: string, params: Static<typeof netCaptureParams>) => {
         if (!(await commandExists("tshark"))) return textResult({ unavailable: true, reason: "tshark is not installed" });

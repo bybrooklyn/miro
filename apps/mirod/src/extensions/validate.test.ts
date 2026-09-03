@@ -19,7 +19,7 @@ test("binding URLs may be app-relative; they resolve against baseUrl before the 
 });
 
 // Real filesystem, real TypeScript compiler API, real @miro/sdk resolution through the exact
-// node_modules-symlink mechanism extensions actually use — not mocked, since this is the whole
+// node_modules-symlink mechanism extensions actually use - not mocked, since this is the whole
 // point of the check (does the TS compiler API actually resolve @miro/sdk given how extension
 // directories are wired up).
 function tempExtDir(): string {
@@ -28,7 +28,7 @@ function tempExtDir(): string {
   return dir;
 }
 
-// ts.createProgram() does a real, full compilation (parsing lib.d.ts + @miro/sdk + its deps) —
+// ts.createProgram() does a real, full compilation (parsing lib.d.ts + @miro/sdk + its deps) -
 // live-verified on the QEMU dev VM to take 3-6s on constrained ARM64 hardware, well over Bun's
 // default 5s test timeout. Not a bug, just genuinely slow; a real characteristic of every
 // extension_write validation call too (see PLAN.md), not just these tests.
@@ -132,14 +132,14 @@ test("scanForbiddenImports denies an arbitrary npm package (dynamic import)", ()
 // Compiler-as-teacher (PLAN.md §5.13): a raw failure names the symptom; annotateFailures appends the
 // fix so a weak learn model converges instead of looping. Unit-tested so the hints can't silently rot.
 test("annotateFailures appends the concrete fix for known failure shapes", () => {
-  const [postFix] = annotateFailures([`extension.ts:5: Property 'post' does not exist — in: ctx.http.post("/x")`]);
+  const [postFix] = annotateFailures([`extension.ts:5: Property 'post' does not exist - in: ctx.http.post("/x")`]);
   expect(postFix).toMatch(/GET-only/);
   expect(postFix).toMatch(/bind\(args\)/);
 
   const [importFix] = annotateFailures([`extension.ts: forbidden import "node:fs"`]);
   expect(importFix).toMatch(/@miro\/sdk/);
 
-  const [schemaFix] = annotateFailures([`tool list: parameters has type "string" — must be "object"`]);
+  const [schemaFix] = annotateFailures([`tool list: parameters has type "string" - must be "object"`]);
   expect(schemaFix).toMatch(/OMIT `parameters`|Type\.Object/);
 
   // An unrecognised failure is passed through unchanged (no false hint).

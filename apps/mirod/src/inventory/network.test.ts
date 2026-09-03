@@ -29,7 +29,7 @@ test(
   async () => {
     expect(await getTailscaleStatus()).toEqual({ available: false, connected: false, ip: null, hostname: null });
   },
-  // Spawns a real child process (`which tailscale`) — under bun test's own multi-file concurrency,
+  // Spawns a real child process (`which tailscale`) - under bun test's own multi-file concurrency,
   // real subprocess spawns occasionally stall well past their normal ~20ms (investigated: isolated
   // and direct calls are always fast; only many test files spawning child processes at once via
   // `bun test` shows this). retry rather than a longer timeout, since a longer timeout alone

@@ -1,5 +1,5 @@
 // A unified diff for the plan the user approves (PLAN.md client decision: file changes render as
-// a real diff). Line-based LCS — O(n·m) memory on the two files' line counts, fine for config
+// a real diff). Line-based LCS - O(n·m) memory on the two files' line counts, fine for config
 // files; a config file that is not fine here is not something to eyeball-approve anyway.
 // ponytail: no Myers, no word-level; upgrade if a real plan ever hits the cap below.
 

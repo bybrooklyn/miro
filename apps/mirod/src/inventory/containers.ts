@@ -1,7 +1,7 @@
 import { commandExists, run } from "./exec";
 
 // Read-only slice of plan §8's ContainerRuntime interface (listContainers/inspectContainer/logs).
-// ponytail: pull/deploy/events are mutation/streaming operations for Stage 3+ (Safe action) —
+// ponytail: pull/deploy/events are mutation/streaming operations for Stage 3+ (Safe action) -
 // skipped here rather than stubbed, since there's nothing to verify against without a live daemon.
 
 export interface ContainerSummary {

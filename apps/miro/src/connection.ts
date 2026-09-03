@@ -8,7 +8,7 @@ import {
 } from "@miro/protocol";
 import { dialIrohTicket } from "./iroh-connect";
 
-/** Only `.write()`/`.end()` are ever called on the connection — satisfied by both Bun.connect's
+/** Only `.write()`/`.end()` are ever called on the connection - satisfied by both Bun.connect's
  * unix-socket result and dialIrohTicket's remote Iroh result. */
 interface MiroTransport {
   write(data: string): unknown;
@@ -47,7 +47,7 @@ async function connectWithRetry(
 
 /** Connects to mirod and returns a `send` function. Calls onEvent for each server event.
  * Set MIRO_TICKET to dial a remote daemon via Iroh instead of the local unix socket.
- * Reconnects automatically when the daemon restarts (routine: hot-load, deploy) — otherwise a
+ * Reconnects automatically when the daemon restarts (routine: hot-load, deploy) - otherwise a
  * dropped socket would leave the TUI showing a stale "healthy" forever (audit U4). */
 export function useMiroConnection(onEvent: (event: ServerEvent) => void) {
   const socketRef = useRef<MiroTransport | null>(null);
@@ -88,7 +88,7 @@ export function useMiroConnection(onEvent: (event: ServerEvent) => void) {
         .catch((err) => {
           if (cancelled) return;
           console.error("[miro]", err.message);
-          onClose(); // exhausted retries — flag disconnected and try the whole cycle again
+          onClose(); // exhausted retries - flag disconnected and try the whole cycle again
         });
     };
 

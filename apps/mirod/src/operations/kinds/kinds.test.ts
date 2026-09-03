@@ -14,7 +14,7 @@ import { shellCommandKind } from "./shell-command";
 import { sandboxAvailable } from "../sandbox";
 import { listTrash } from "../trash";
 
-// Real engine, real filesystem, a real HTTP server — the kinds are exercised end to end through
+// Real engine, real filesystem, a real HTTP server - the kinds are exercised end to end through
 // runOperation with an injected answer, exactly as engine.test.ts drives its fake kind.
 
 const sandboxOk = await sandboxAvailable();
@@ -150,7 +150,7 @@ describe("http.mutation", () => {
       expect(missing.outcome).toBe("committed");
       expect(stored.has("extension.app.x")).toBe(false);
 
-      // An irreversible POST whose verify fails is applied_unverified, NOT rolled back — the write
+      // An irreversible POST whose verify fails is applied_unverified, NOT rolled back - the write
       // reached the server (no rollback request, non-PUT), so claiming a rollback would be a lie.
       const unver = await runOperation(ctx().ctx, storing, "wizard step", { method: "POST", url: `${base}/wizard`, verifyUrl: `${base}/wizard`, verifyExpect: "never-matches" });
       expect(unver.outcome).toBe("applied_unverified");
@@ -163,7 +163,7 @@ describe("http.mutation", () => {
       await expect(storing.describe({ method: "POST", url: `${base}/login`, storeResponseField: { field: "AccessToken", ref: "provider.anthropic" } })).rejects.toThrow(/extension\.<app>\.<name>/);
       const kind = httpMutationKind((ref) => (ref === "test.token" ? "s3cret" : null));
       // A 2xx the plan did not predict is still an applied write (Jellyfin answers 204 where a
-      // plan said 200 — a false rollback, found live); expectStatus only widens success.
+      // plan said 200 - a false rollback, found live); expectStatus only widens success.
       expect((await runOperation(ctx().ctx, kind, "no content", { method: "POST", url: `${base}/no-content`, expectStatus: [200] })).outcome).toBe("committed");
       expect((await runOperation(ctx().ctx, kind, "exists ok", { method: "POST", url: `${base}/exists`, expectStatus: [409] })).outcome).toBe("committed");
       expect((await runOperation(ctx().ctx, kind, "exists not ok", { method: "POST", url: `${base}/exists` })).outcome).toBe("rolledback");
@@ -264,7 +264,7 @@ describe("shell.command", () => {
     });
     expect(ok.outcome).toBe("committed");
 
-    // Under /tmp an undeclared write lands in the sandbox's throwaway tmpfs (never the host) —
+    // Under /tmp an undeclared write lands in the sandbox's throwaway tmpfs (never the host) -
     // so to see the read-only refusal itself, escape to a real filesystem path.
     const escapeDir = existsSync("/var/tmp") ? mkdtempSync(join("/var/tmp", "kinds-escape-")) : work;
     try {

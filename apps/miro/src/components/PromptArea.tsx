@@ -4,7 +4,7 @@ import { decodePasteBytes, type InputRenderable } from "@opentui/core";
 import { footerHints, keyToAnswer, secondsLeft, type Pending, type UiState } from "@miro/ui-model";
 import { theme } from "../theme";
 
-/** Anything a terminal would actually print — used to tell a typed/pasted character apart from a
+/** Anything a terminal would actually print - used to tell a typed/pasted character apart from a
  * control sequence in the hand-rolled secret field. */
 const PRINTABLE = /^[^\x00-\x1f\x7f]+$/;
 
@@ -86,7 +86,7 @@ function SecretField({ prompt, onSubmit }: { prompt: string; onSubmit: (value: s
     if (key.name === "escape") return onSubmit("");
     if (key.name === "backspace") return setValue((v) => v.slice(0, -1));
     if (key.ctrl || key.meta) return;
-    // An unbracketed paste lands as one long sequence — take it whole so a pasted key survives.
+    // An unbracketed paste lands as one long sequence - take it whole so a pasted key survives.
     if (key.sequence && PRINTABLE.test(key.sequence)) setValue((v) => v + key.sequence);
   });
   usePaste((event) => {
@@ -143,7 +143,7 @@ function TextPrompt({
   );
 }
 
-/** The prompt area is the pending question when there is one, else the chat input — so exactly one
+/** The prompt area is the pending question when there is one, else the chat input - so exactly one
  * thing is focused, and a choice question never leaves a text field waiting for a keystroke. */
 export function PromptArea({
   state,
@@ -173,7 +173,7 @@ export function PromptArea({
       />
     );
   }
-  // While a turn is in flight, don't offer an active chat input — a second message would race the
+  // While a turn is in flight, don't offer an active chat input - a second message would race the
   // running turn on the daemon (audit U2). Show a muted status line instead; the footer advertises
   // scroll/interrupt in this state.
   if (state.working) {

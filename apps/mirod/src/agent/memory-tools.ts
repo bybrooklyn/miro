@@ -5,14 +5,14 @@ import { remember, query, confidenceLabel } from "../memory/store";
 
 function textResult(details: unknown): AgentToolResult<unknown> {
   // details ?? null: JSON.stringify(undefined) returns the value undefined (not a string),
-  // producing a malformed {text: undefined} block — see agent/extension-tools.ts's textResult.
+  // producing a malformed {text: undefined} block - see agent/extension-tools.ts's textResult.
   return { content: [{ type: "text", text: JSON.stringify(details ?? null, null, 2) }], details };
 }
 
 // Plain JSON-Schema `enum` (via Type.Unsafe), not Type.Union-of-Type.Literal's `anyOf`-of-`const`.
 // Live-tested against a real tool-calling model (Ollama gemma4:31b-cloud): the anyOf/const form
 // made the model repeatedly fail to produce a valid category and give up on calling the tool at
-// all — a plain `enum` is the far more universally-supported function-calling schema shape.
+// all - a plain `enum` is the far more universally-supported function-calling schema shape.
 const writableCategoryEnum = Type.Unsafe<"preference" | "server_fact" | "incident" | "capability">({
   type: "string",
   enum: ["preference", "server_fact", "incident", "capability"],
@@ -31,7 +31,7 @@ const rememberParams = Type.Object({
     description:
       "Short stable slug for the fact's subject, e.g. 'reply_style', 'backup_schedule.postgres', or for a capability the system's name ('jellyfin', 'media_acquisition'). Reuse the same key when this exact fact recurs.",
   }),
-  value: Type.String({ description: "The fact itself, one sentence, human-readable — or for a capability, a JSON document with summary, components, dataFlow, credentials (secret refs only, never values), verify." }),
+  value: Type.String({ description: "The fact itself, one sentence, human-readable - or for a capability, a JSON document with summary, components, dataFlow, credentials (secret refs only, never values), verify." }),
 });
 
 const queryParams = Type.Object({
@@ -39,9 +39,9 @@ const queryParams = Type.Object({
   keyword: Type.Optional(Type.String({ description: "Filter by text in the key or value." })),
 });
 
-/** Memory tools (plan §37) — mutating but not tracked operations: no plan/confirm/rollback
+/** Memory tools (plan §37) - mutating but not tracked operations: no plan/confirm/rollback
  * semantics apply to Miro's own notes about the user/server, so these don't go through
- * runOperation. Not added to agent/tools.ts's AGENT_TOOLS (spawnWorker's read-only set) — same
+ * runOperation. Not added to agent/tools.ts's AGENT_TOOLS (spawnWorker's read-only set) - same
  * "authority stays separate" boundary already drawn for operation-tools.ts. */
 export function buildMemoryTools(db: Database) {
   return [
@@ -49,7 +49,7 @@ export function buildMemoryTools(db: Database) {
       name: "memory_remember",
       label: "Remember",
       description:
-        "Save a durable fact about this user or server — a preference, a server fact, or an incident. Calling this again with the same category+key reinforces the existing fact instead of duplicating it.",
+        "Save a durable fact about this user or server - a preference, a server fact, or an incident. Calling this again with the same category+key reinforces the existing fact instead of duplicating it.",
       parameters: rememberParams,
       execute: async (_id: string, params: { category: "preference" | "server_fact" | "incident" | "capability"; key: string; value: string }) => {
         const rec = remember(db, params.category, params.key, params.value, "agent_tool");

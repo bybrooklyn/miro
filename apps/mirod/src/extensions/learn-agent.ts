@@ -6,11 +6,11 @@ import type { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import type { Database } from "bun:sqlite";
 import type { ServerEvent } from "@miro/protocol";
 import { AGENT_TOOLS } from "../agent/tools";
-// Deliberately from model-utils.ts, NOT "../agent/index" — importing from agent/index.ts here
+// Deliberately from model-utils.ts, NOT "../agent/index" - importing from agent/index.ts here
 // would recreate agent/index.ts -> agent/learn-tools.ts -> extensions/learn.ts ->
 // extensions/learn-agent.ts -> agent/index.ts, the exact circular import model-utils.ts exists to
 // avoid (see its own comment). It happened to still work via ESM's lazy live-binding resolution
-// when tried, but that's fragile luck, not a real fix — this is the correct, leaf-module import.
+// when tried, but that's fragile luck, not a real fix - this is the correct, leaf-module import.
 import { resolveApiKey, runTurn } from "../agent/model-utils";
 import { buildReadTools } from "../agent/read-tools";
 import { buildInteractionTools } from "../agent/interaction-tools";
@@ -25,7 +25,7 @@ import * as store from "./store";
 import { stagingDir, extensionDir, ensureNodeModulesSymlink, promoteStagingToLive, discardStaging, MIROD_NODE_MODULES } from "./paths";
 import type { CodegenSelection } from "./learn";
 
-// The learning agent (PLAN.md §5.2 C) — the mechanism underneath "Miro autonomously expands its
+// The learning agent (PLAN.md §5.2 C) - the mechanism underneath "Miro autonomously expands its
 // own capabilities in pursuit of a goal". Spawned by app_learn (from the main agent, or from
 // another learning agent recursing), never by a user command. It inspects, researches, chooses
 // the app's best control method, generates an extension (read tools as code, writes as
@@ -34,7 +34,7 @@ import type { CodegenSelection } from "./learn";
 const LEARN_SYSTEM_PROMPT = `You are Miro, learning to operate a self-hosted app you do not know yet, so that from now on you
 can manage it with direct tools instead of research. Narrate briefly as you go.
 
-DISCOVERY LADDER — cheapest first, escalate only when the rung below did not explain enough:
+DISCOVERY LADDER - cheapest first, escalate only when the rung below did not explain enough:
 1. Inspect what is already here: container_list / container_inspect (image, env, volumes, ports),
    shell_inspect (processes, config directories, CLI binaries), read_file on its config. Facts on
    the machine beat documentation.
@@ -43,10 +43,10 @@ DISCOVERY LADDER — cheapest first, escalate only when the rung below did not e
 4. The app's CLI or configuration files, if it has no usable API (shell_inspect / read_file).
 5. Packet capture (net_capture) when nothing above shows how the app is really controlled: watch
    what its web UI sends to its backend, find undocumented local calls, confirm ports and paths.
-6. Browser automation (browser_*) last — for bootstrapping something only the UI can do.
+6. Browser automation (browser_*) last - for bootstrapping something only the UI can do.
 
-CONTROL METHOD IS ADAPTIVE. Decide what the best interface actually is — REST, CLI, config file,
-socket — and hide that choice inside the tools you generate. The caller of download_movie(...)
+CONTROL METHOD IS ADAPTIVE. Decide what the best interface actually is - REST, CLI, config file,
+socket - and hide that choice inside the tools you generate. The caller of download_movie(...)
 must not care whether it is an HTTP POST or a CLI call underneath.
 
 TOOLS ARE OUTCOMES, NOT ENDPOINTS. Name and shape them around what an operator wants
@@ -54,14 +54,14 @@ TOOLS ARE OUTCOMES, NOT ENDPOINTS. Name and shape them around what an operator w
 
 CREDENTIALS ARE YOUR JOB. Discover existing ones where you legitimately can (container env,
 config files via read_file). When the app needs a NEW password or token (a first admin account,
-an API key), call credential_create — it generates a strong value, stores it under a reference,
+an API key), call credential_create - it generates a strong value, stores it under a reference,
 and shows it to the user once; you only ever see the reference. Then pass the reference (never a
 value) into operation bindings via secretHeader, or read it in generated code via ctx.secrets.
 When you create an account, secret_store its username too (pass the short name "admin_user", not a
-full reference — the tool adds the extension.<app>. prefix), so a later session can authenticate
+full reference - the tool adds the extension.<app>. prefix), so a later session can authenticate
 with {{secret:extension.<app>.admin_user}} and {{secret:extension.<app>.admin_password}}. A token or key that
 a RESPONSE returns (a login's AccessToken, a minted API key) is kept with http_mutation's
-storeResponseField { field, ref } — it goes straight into the store and you get the ref; tool
+storeResponseField { field, ref } - it goes straight into the store and you get the ref; tool
 output is redacted, so reading it out of a response body does not work.
 Save credentials you discover with secret_store. Credentials already on file are listed at the
 end of this prompt: use them, never ask the user for one of them. NEVER ask the user to invent a
@@ -71,16 +71,16 @@ that lives outside this machine (a VPN provider login, an external account).
 ASK ABOUT INTENT, INFER IMPLEMENTATION. Before asking anything, check whether the machine already
 answers it. Never ask about ports, networks, paths, or which component to use.
 
-DECLARATIVE FIRST — write DATA, not code. The extension is ONE file, extension.ts, that
+DECLARATIVE FIRST - write DATA, not code. The extension is ONE file, extension.ts, that
 \`export default { auth?, entries } satisfies ExtensionModule\`. Each entry is one capability:
 - A READ (kind "tool" or "diagnostic") is declarative data: { name, kind, description,
   read: { path, method?, query?, pick?, expectStatus? } }. The daemon GETs read.path (app-relative,
   e.g. "/Library/VirtualFolders"), substituting {placeholders} in the path from the tool's args,
-  applies the module's auth, and — if you give pick — keeps only those fields (mapping over an
+  applies the module's auth, and - if you give pick - keeps only those fields (mapping over an
   array). No code runs. Prefer this for everything a GET can answer.
 - A WRITE (kind "operation") is a binding: { name, kind: "operation", parameters, bind: (args) => ({
-  kind: "http_mutation" | "shell_command" | "file_write", goal, ...params }) }. bind is synchronous —
-  it returns plain data, never fetches — and the daemon runs it through its engine (confirmation,
+  kind: "http_mutation" | "shell_command" | "file_write", goal, ...params }) }. bind is synchronous -
+  it returns plain data, never fetches - and the daemon runs it through its engine (confirmation,
   sandbox, verification, rollback). URLs may be app-relative. Give every binding a verify
   (verifyUrl/verifyExpect, or a verify command) and a rollback where the app allows one.
 - CODE is the escape hatch, ONLY when a read needs logic a \`read\` cannot express (pagination,
@@ -91,40 +91,40 @@ AUTH is declarative: set the module's auth: { header, secret } (e.g. { header: "
 secret: "api_key" }) and every read sends it automatically; a code entry reads ctx.secrets.
 Credentials never appear as values: in a write header use secretHeader: { name, ref }; anywhere in a
 body or URL write the placeholder {{secret:<ref>}} (e.g.
-{"Name":"admin","Password":"{{secret:extension.jellyfin.admin_password}}"}) — the daemon
+{"Name":"admin","Password":"{{secret:extension.jellyfin.admin_password}}"}) - the daemon
 substitutes the real value at request time and the plan shows only the placeholder. The same
 placeholder works when you call http_mutation yourself during learning.
 
-SCHEMAS: for a declarative read, OMIT parameters — it is DERIVED from the {placeholders} in read.path
+SCHEMAS: for a declarative read, OMIT parameters - it is DERIVED from the {placeholders} in read.path
 (each a required string). For a code entry that takes structured args, set parameters to a real JSON
-Schema built with Type from "@miro/sdk" — parameters: Type.Object({ id: Type.String() }) — or
+Schema built with Type from "@miro/sdk" - parameters: Type.Object({ id: Type.String() }) - or
 Type.Object({}) for none. Never a plain object like { id: "string" }; validation rejects it.
 
 RECURSE WHEN YOU MUST. If operating this app requires another app you do not know (an indexer
 manager, a download client), call app_learn for it, let it finish, then continue here.
 
-WHEN YOU UNDERSTAND THE APP, call extension_write with a single extensionTs. There is no test file —
+WHEN YOU UNDERSTAND THE APP, call extension_write with a single extensionTs. There is no test file -
 the daemon validates by typechecking it, then probing every no-arg diagnostic against the live app
 and dry-running every no-arg operation binding through its real engine kind, so it is tested against
 the real thing. Rules:
-- extensionTs does \`export default { auth?, entries } satisfies ExtensionModule\` — import the types
+- extensionTs does \`export default { auth?, entries } satisfies ExtensionModule\` - import the types
   from "@miro/sdk", import nothing else.
 - Prefer declarative read entries; use bind for writes; use code only where a read cannot express it.
 - Every name matches ^[a-zA-Z0-9_-]+$ (underscores, never dots).
-extension_write reports ALL problems at once, each with a concrete fix — apply each and call again;
+extension_write reports ALL problems at once, each with a concrete fix - apply each and call again;
 attempts are limited.
 
-@miro/sdk SURFACE — the only import, exact shapes (write to them, do not guess):
+@miro/sdk SURFACE - the only import, exact shapes (write to them, do not guess):
   ExtensionModule = { auth?: { header: string; secret: string }; entries: ExtensionEntry[] }
   ExtensionEntry  = { name; kind: "tool"|"diagnostic"|"operation"; description; label?; parameters?;
-                      read?; bind?; code? } — exactly ONE of read / bind / code.
+                      read?; bind?; code? } - exactly ONE of read / bind / code.
   read (ReadBinding) = { path; method?: "GET"; query?; headers?; pick?: string[]; expectStatus?: number[] }
   bind(args) => { kind: "http_mutation"|"shell_command"|"file_write"; goal; ...params }
   code(ctx, args) => Promise<unknown>; ctx = { http.get(path, {query?,headers?}), exec(cmd),
-      readFile(path), secrets } — http.get returns { status; ok; body; json<T>() }, never throws on non-2xx.
+      readFile(path), secrets } - http.get returns { status; ok; body; json<T>() }, never throws on non-2xx.
   Type from "@miro/sdk" for any hand-written schema.
 
-WORKED EXAMPLE — a complete, correct extension for a token-auth HTTP app (copy this shape exactly):
+WORKED EXAMPLE - a complete, correct extension for a token-auth HTTP app (copy this shape exactly):
   import { Type, type ExtensionModule, type ExtensionContext } from "@miro/sdk";
   export default {
     auth: { header: "X-Api-Key", secret: "api_key" },
@@ -201,8 +201,8 @@ function buildSecretStoreTool(app: string, setSecret: (ref: string, value: strin
   return {
     name: "secret_store",
     label: "Store credential",
-    description: "Save a credential (API key/token) discovered or created for this app. Refer to it by the returned reference afterwards — never repeat the value anywhere.",
-    parameters: Type.Object({ name: Type.String({ description: "Short name only, e.g. 'api_key' or 'admin_user' — NOT a full reference." }), value: Type.String() }),
+    description: "Save a credential (API key/token) discovered or created for this app. Refer to it by the returned reference afterwards - never repeat the value anywhere.",
+    parameters: Type.Object({ name: Type.String({ description: "Short name only, e.g. 'api_key' or 'admin_user' - NOT a full reference." }), value: Type.String() }),
     execute: async (_id: string, args: { name: string; value: string }) => {
       // Defensive: the model sometimes passes a whole ref ("extension.jellyfin.admin_user") as the
       // name, which used to double the prefix into extension.jellyfin.extension.jellyfin.admin_user
@@ -259,12 +259,12 @@ function buildExtensionWriteTool(
     name: "extension_write",
     label: "Write extension",
     description:
-      "Write and validate the local extension for this app. Call once you understand the app well enough. If it reports failures, fix the specific problem and call again — limited attempts.",
+      "Write and validate the local extension for this app. Call once you understand the app well enough. If it reports failures, fix the specific problem and call again - limited attempts.",
     parameters: extensionWriteParams,
     execute: async (_id: string, args: Static<typeof extensionWriteParams>) => {
       attempts++;
       if (attempts > MAX_WRITE_ATTEMPTS) {
-        return textResult({ ok: false, failures: [`Too many attempts (${MAX_WRITE_ATTEMPTS}) — stop and report what's blocking this.`] });
+        return textResult({ ok: false, failures: [`Too many attempts (${MAX_WRITE_ATTEMPTS}) - stop and report what's blocking this.`] });
       }
 
       const dir = stagingDir(app);
@@ -326,14 +326,14 @@ export interface LearnAgentOptions {
   send: (event: ServerEvent) => void;
   waitForAnswer?: (id: string) => Promise<string>;
   operationCtx?: OperationToolContext;
-  /** Needed for recursion — a nested app_learn resolves its own codegen model the same way. */
+  /** Needed for recursion - a nested app_learn resolves its own codegen model the same way. */
   resolveCodegenModel: () => Promise<CodegenSelection | null>;
   /** This session's tool calls render nested under this activity node (the app_learn call). */
   parentActivityId?: string;
   maxTurns?: number;
 }
 
-const DEFAULT_MAX_TURNS = 40; // ponytail: a guess, tuned by live runs — research + codegen + operations need more than the old 24
+const DEFAULT_MAX_TURNS = 40; // ponytail: a guess, tuned by live runs - research + codegen + operations need more than the old 24
 
 export async function spawnLearningAgent(o: LearnAgentOptions): Promise<{ text: string; promoted: boolean }> {
   const { tool: writeTool, wasPromoted } = buildExtensionWriteTool(o.app, o.db, o.hostMgr, o.getSecret);
@@ -375,7 +375,7 @@ export async function spawnLearningAgent(o: LearnAgentOptions): Promise<{ text: 
       send: o.send,
       // No user on the other end (autonomous repair): every question resolves to a marker the
       // prompt tells the agent to treat as "decide yourself or stop".
-      waitForAnswer: o.waitForAnswer ?? (async () => "[no user available — decide yourself or stop]"),
+      waitForAnswer: o.waitForAnswer ?? (async () => "[no user available - decide yourself or stop]"),
       setSecret: o.setSecret,
     }).filter((t) => t.name === "ask_user" || t.name === "credential_create"),
     ...(o.operationCtx ? buildOperationTools(o.operationCtx) : []),
@@ -388,9 +388,9 @@ export async function spawnLearningAgent(o: LearnAgentOptions): Promise<{ text: 
   let turns = 0;
   const maxTurns = o.maxTurns ?? DEFAULT_MAX_TURNS;
   const refs = listSecretRefs(o.db, "extension.");
-  const systemPrompt = `${LEARN_SYSTEM_PROMPT}\n\nCredentials on file (references only — values are never shown): ${refs.length > 0 ? refs.join(", ") : "none yet"}.`;
+  const systemPrompt = `${LEARN_SYSTEM_PROMPT}\n\nCredentials on file (references only - values are never shown): ${refs.length > 0 ? refs.join(", ") : "none yet"}.`;
   const agent = new Agent({
-    // Heterogeneous per-tool parameter schemas can't unify into one array type without erasure —
+    // Heterogeneous per-tool parameter schemas can't unify into one array type without erasure -
     // same cast agent/index.ts's own createMiroAgent uses for the exact same reason.
     initialState: { systemPrompt, model: o.model, tools: tools as AgentTool<any>[] },
     streamFn: (m, context, options) => o.models.streamSimple(m, context, o.reasoning ? { ...options, reasoning: o.reasoning } : options),

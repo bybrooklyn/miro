@@ -2,7 +2,7 @@ import type { ServerEvent } from "@miro/protocol";
 import { answered, initialState, isQuiet, footerHints, reduce, userSent, type ActivityNode, type UiState } from "@miro/ui-model";
 
 // Replays the event sequences from packages/ui-model/src/index.test.ts through exactly the state
-// App.tsx holds, and prints the transcript the renderer would draw. No OpenTUI, no terminal — this
+// App.tsx holds, and prints the transcript the renderer would draw. No OpenTUI, no terminal - this
 // proves the wiring (reduce / userSent / answered) without needing a daemon or a TTY.
 // Run: bun run apps/miro/src/smoke.ts
 
@@ -40,8 +40,8 @@ function render(state: UiState): string[] {
         for (const line of activityLines(block.node)) out.push(`activity   │ ${line}`);
         break;
       case "plan":
-        out.push(`plan       │ Plan: ${block.plan.title}${block.decision ? ` — ${block.decision}` : ""}`);
-        for (const c of block.plan.components) out.push(`           │   ${c.action.padEnd(9)} ${c.name} — ${c.detail}`);
+        out.push(`plan       │ Plan: ${block.plan.title}${block.decision ? ` - ${block.decision}` : ""}`);
+        for (const c of block.plan.components) out.push(`           │   ${c.action.padEnd(9)} ${c.name} - ${c.detail}`);
         for (const [i, s] of block.plan.steps.entries()) out.push(`           │   ${i + 1}. ${s}`);
         break;
       case "operation": {
@@ -148,8 +148,8 @@ s = apply(s, [
   { type: "operation_progress", id: "o1", phase: "capturing" },
   { type: "operation_progress", id: "o1", phase: "applying" },
   { type: "operation_progress", id: "o1", phase: "verifying" },
-  { type: "operation_result", id: "o1", outcome: "committed", message: "Done — write config, verified." },
-  { type: "notice", level: "credential", text: "Created Jellyfin admin password — value: hunter2" },
+  { type: "operation_result", id: "o1", outcome: "committed", message: "Done - write config, verified." },
+  { type: "notice", level: "credential", text: "Created Jellyfin admin password - value: hunter2" },
 ]);
 show("operation committed, credential notice", s);
 
@@ -160,7 +160,7 @@ s = apply(s, [
     id: "lifeline_confirm:o9",
     prompt: "Still connected after the firewall change?",
     options: [
-      { label: "Still here — keep it", value: "keep" },
+      { label: "Still here - keep it", value: "keep" },
       { label: "Roll back", value: "rollback" },
     ],
     timeoutMs: 90_000,

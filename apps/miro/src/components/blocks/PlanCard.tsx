@@ -50,7 +50,7 @@ export function PlanCard({ plan, decision }: { plan: SystemPlanEvent; decision?:
             <text key={i}>
               <span fg={ACTION_FG[c.action]}>{c.action.padEnd(BADGE_WIDTH)}</span>
               <span fg={theme.text}>{` ${c.name}`}</span>
-              <span fg={theme.textMuted}>{` — ${c.detail}`}</span>
+              <span fg={theme.textMuted}>{` - ${c.detail}`}</span>
             </text>
           ))}
         </Section>

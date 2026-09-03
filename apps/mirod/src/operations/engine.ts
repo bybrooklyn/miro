@@ -9,7 +9,7 @@ export interface OperationPlan {
   autoApprove: boolean;
   details?: Record<string, unknown>;
   /** From the classifier or the kind's own judgement (PLAN.md §5.7). `destructive` and `lifeline`
-   * never auto-approve — the engine enforces that below, whatever the kind asked for. */
+   * never auto-approve - the engine enforces that below, whatever the kind asked for. */
   class?: CommandClass;
   /** The sandbox scope this operation runs under: declared writable roots and whether the network
    * is shared. Shown to the user in the plan, enforced by the kernel (operations/sandbox.ts). */
@@ -23,8 +23,8 @@ export interface OperationPlan {
    * - `expects`: the state transition verify() will check.
    * - `rollbackWhen`: the condition under which rollback fires (or "never" for the irreversible).
    * - `scopeEvidence`: why exactly these writable roots.
-   * - `dryRunFidelity`: how faithfully describe() predicts the effect. The Ansible lesson — a
-   *   dry-run that says "no changes" when it means "unknown" is worse than none — so a kind that
+   * - `dryRunFidelity`: how faithfully describe() predicts the effect. The Ansible lesson - a
+   *   dry-run that says "no changes" when it means "unknown" is worse than none - so a kind that
    *   does not declare one is shown as "none" (effect unknown), never silently as exact. */
   expects?: string;
   rollbackWhen?: string;
@@ -42,7 +42,7 @@ export function effectiveAutoApprove(plan: OperationPlan): boolean {
 
 /** A tracked operation's terminal outcome. `applied_unverified` is the honest third state: the
  * change reached the server (apply succeeded) but verify could not confirm it AND the operation
- * is irreversible, so nothing was rolled back — reporting "rolledback" there is a lie that made
+ * is irreversible, so nothing was rolled back - reporting "rolledback" there is a lie that made
  * the agent re-fight steps the server had already accepted (found live, run #6). */
 export type OperationOutcome = "committed" | "rolledback" | "applied_unverified";
 
@@ -56,7 +56,7 @@ export interface ReflectionTrigger {
   repeatFailureCount: number;
 }
 
-// No time window — counts all-time rollbacks for this kind.
+// No time window - counts all-time rollbacks for this kind.
 // ponytail: an old, long-resolved incident stays in the tally forever; add a sinceMs window if
 // stale incidents start triggering reflection unnecessarily.
 const REPEAT_FAILURE_THRESHOLD = 2;
@@ -68,7 +68,7 @@ export interface OperationKind<P = any, S = any> {
   captureState(params: P): Promise<S>;
   apply(params: P): Promise<void>;
   verify(params: P): Promise<boolean>;
-  /** Best-effort — must not throw; reconciliation and runOperation both treat a rollback failure
+  /** Best-effort - must not throw; reconciliation and runOperation both treat a rollback failure
    * as "already in the worst case we can detect," not something to retry. */
   rollback(params: P, captured: S): Promise<void>;
 }
@@ -78,15 +78,15 @@ export interface OperationToolContext {
   send: (event: ServerEvent) => void;
   waitForAnswer: (id: string) => Promise<string>;
   /** Secret resolution for kinds that inject a credential by reference at apply time (never in a
-   * plan, never in model-visible output) — e.g. http_mutation's auth header. */
+   * plan, never in model-visible output) - e.g. http_mutation's auth header. */
   getSecret?: (ref: string) => string | null;
   /** Secret retention for kinds that keep a value a response returns (http_mutation's
-   * storeResponseField) — the value goes store-ward only, never into model-visible output. */
+   * storeResponseField) - the value goes store-ward only, never into model-visible output. */
   setSecret?: (ref: string, value: string) => void;
   /** How long a `lifeline` operation waits for the user to confirm they are still reachable
    * before rolling itself back. Injectable for tests; defaults to LIFELINE_CONFIRM_MS. */
   lifelineConfirmMs?: number;
-  /** Optional: triggers a budgeted LLM reflection pass (plan §36-37). Fire-and-forget — never
+  /** Optional: triggers a budgeted LLM reflection pass (plan §36-37). Fire-and-forget - never
    * awaited by the caller, never blocks the user-facing operation_result. */
   reflect?: (trigger: ReflectionTrigger) => void;
 }
@@ -116,17 +116,17 @@ export async function runOperation<P, S>(
 
   const plan = await kind.describe(params);
   // Selector sanity before anything else (PLAN.md §5.15 A): a declared write scope that means
-  // "everything" is refused outright — nothing planned, asked, or touched. Google's Diskerase
+  // "everything" is refused outright - nothing planned, asked, or touched. Google's Diskerase
   // erased a CDN fleet because an empty selector was read as "all".
   const bad = badWriteScope(plan.writes);
   if (bad !== null) {
     store.setPhase(db, id, "rolledback", `refused: write scope ${JSON.stringify(bad)}`);
-    const message = `Refused — ${goal}: declared write scope ${JSON.stringify(bad)} is empty, the root, or a glob; an operation must name the exact roots it writes.`;
+    const message = `Refused - ${goal}: declared write scope ${JSON.stringify(bad)} is empty, the root, or a glob; an operation must name the exact roots it writes.`;
     send({ type: "operation_result", id, outcome: "rolledback", message });
     return { outcome: "rolledback", message };
   }
   // Blast-radius gate: past the unattended budget, or right after a rollback, an otherwise
-  // auto-approvable operation is downgraded to "a human must approve" — never refused.
+  // auto-approvable operation is downgraded to "a human must approve" - never refused.
   const gate = unattendedGate(db);
   const downgraded = effectiveAutoApprove(plan) && gate !== null;
   const autoApprove = effectiveAutoApprove(plan) && gate === null;
@@ -138,7 +138,7 @@ export async function runOperation<P, S>(
   if (plan.network !== undefined) details.network = plan.network;
   if (plan.irreversible) details.irreversible = true;
   if (plan.warning) details.warning = plan.warning;
-  // The repair contract rides along; an undeclared fidelity is "none" — effect unknown — on purpose.
+  // The repair contract rides along; an undeclared fidelity is "none" - effect unknown - on purpose.
   if (plan.expects) details.expects = plan.expects;
   if (plan.rollbackWhen) details.rollbackWhen = plan.rollbackWhen;
   if (plan.scopeEvidence) details.scopeEvidence = plan.scopeEvidence;
@@ -146,9 +146,9 @@ export async function runOperation<P, S>(
   send({ type: "operation_plan", id, goal, summary: plan.summary, autoApprove, details });
 
   if (!autoApprove) {
-    const notes = [plan.warning, plan.irreversible ? "cannot be rolled back" : undefined, downgraded ? `${gate} — a human must approve` : undefined]
+    const notes = [plan.warning, plan.irreversible ? "cannot be rolled back" : undefined, downgraded ? `${gate} - a human must approve` : undefined]
       .filter(Boolean)
-      .join(" — ");
+      .join(" - ");
     send({
       type: "question",
       id: `op_confirm:${id}`,
@@ -161,14 +161,14 @@ export async function runOperation<P, S>(
     const answer = await waitForAnswer(`op_confirm:${id}`);
     if (answer !== "approve") {
       store.setPhase(db, id, "rolledback", "cancelled by user");
-      const message = "Cancelled — nothing was changed.";
+      const message = "Cancelled - nothing was changed.";
       send({ type: "operation_result", id, outcome: "rolledback", message });
       return { outcome: "rolledback", message };
     }
   }
 
   // From here on the operation mutates the server: hold the daemon-wide write lock until the
-  // terminal outcome (writer exclusivity), including a lifeline's reachability wait — no other
+  // terminal outcome (writer exclusivity), including a lifeline's reachability wait - no other
   // change is stacked on top of an unconfirmed lockout-risk change.
   return withWriteLock(async () => {
     store.setPhase(db, id, "capturing");
@@ -180,11 +180,11 @@ export async function runOperation<P, S>(
     try {
       await kind.apply(params);
     } catch (err) {
-      // apply() may have partially succeeded (e.g. stopped but didn't restart) — attempt to restore
+      // apply() may have partially succeeded (e.g. stopped but didn't restart) - attempt to restore
       // the captured state rather than leaving the system in whatever state the failure left it.
       await kind.rollback(params, captured).catch((rollbackErr) => console.error("[mirod] rollback failed", rollbackErr));
       store.setPhase(db, id, "rolledback", String(err));
-      const message = `Failed to apply — ${goal}: ${String(err)}`;
+      const message = `Failed to apply - ${goal}: ${String(err)}`;
       onTerminal("rolledback", message);
       send({ type: "operation_result", id, outcome: "rolledback", message });
       return { outcome: "rolledback" as const, message };
@@ -196,8 +196,8 @@ export async function runOperation<P, S>(
 
     if (ok) {
       // Lifeline (§39, PLAN.md §5.7 F3): a change that could lock the user out is only committed
-      // once a human proves they can still reach Miro afterwards. No answer within the window —
-      // because the connection died, or because nobody was there to say so — means roll back.
+      // once a human proves they can still reach Miro afterwards. No answer within the window -
+      // because the connection died, or because nobody was there to say so - means roll back.
       // This is the classic "apply the firewall rule, then require an ack or revert" pattern; the
       // ack travels over the very path the change could have broken.
       if (plan.class === "lifeline") {
@@ -208,7 +208,7 @@ export async function runOperation<P, S>(
           id: `lifeline_confirm:${id}`,
           prompt: `${plan.summary} applied. Are you still connected? Confirm within ${Math.round(windowMs / 1000)}s or it will be rolled back automatically.`,
           options: [
-            { label: "Still here — keep it", value: "keep" },
+            { label: "Still here - keep it", value: "keep" },
             { label: "Roll back", value: "rollback" },
           ],
           timeoutMs: windowMs,
@@ -218,14 +218,14 @@ export async function runOperation<P, S>(
           await kind.rollback(params, captured).catch((err) => console.error("[mirod] rollback failed", err));
           const why = answer === "timeout" ? "no reachability confirmation within the window" : "rolled back at the user's request";
           store.setPhase(db, id, "rolledback", why);
-          const message = `Rolled back — ${goal}: ${why}.`;
+          const message = `Rolled back - ${goal}: ${why}.`;
           onTerminal("rolledback", message);
           send({ type: "operation_result", id, outcome: "rolledback", message });
           return { outcome: "rolledback" as const, message };
         }
       }
       store.setPhase(db, id, "committed");
-      const message = `Done — ${goal}, verified.`;
+      const message = `Done - ${goal}, verified.`;
       onTerminal("committed", message);
       send({ type: "operation_result", id, outcome: "committed", message });
       return { outcome: "committed" as const, message };
@@ -233,20 +233,20 @@ export async function runOperation<P, S>(
 
     // Verify failed. A reversible op is restored to its captured state and honestly called
     // "rolledback". An irreversible one (a POST with no undo, a completed wizard step) already
-    // changed the server and cannot be undone — its rollback() is a no-op, so "rolled back" would
+    // changed the server and cannot be undone - its rollback() is a no-op, so "rolled back" would
     // be a lie. Report applied_unverified so the agent re-inspects instead of blindly retrying a
     // step the server may already have accepted (found live, run #6: the config and admin writes
     // had landed, yet each was reported rolled back, and the agent fought them for minutes).
     if (!plan.irreversible) {
       await kind.rollback(params, captured).catch((err) => console.error("[mirod] rollback failed", err));
       store.setPhase(db, id, "rolledback", "verification failed");
-      const message = `Verification failed — ${goal}, rolled back.`;
+      const message = `Verification failed - ${goal}, rolled back.`;
       onTerminal("rolledback", message);
       send({ type: "operation_result", id, outcome: "rolledback", message });
       return { outcome: "rolledback" as const, message };
     }
     store.setPhase(db, id, "committed"); // it did apply; there is nothing to reconcile back
-    const message = `Applied — ${goal}, but verification did not confirm it and it cannot be rolled back. Inspect the current state before retrying — the change may already be in effect.`;
+    const message = `Applied - ${goal}, but verification did not confirm it and it cannot be rolled back. Inspect the current state before retrying - the change may already be in effect.`;
     onTerminal("committed", message); // recorded as applied, not a rollback; does not trip repeat-failure
     send({ type: "operation_result", id, outcome: "applied_unverified", message });
     return { outcome: "applied_unverified" as const, message };
@@ -254,7 +254,7 @@ export async function runOperation<P, S>(
 }
 
 /** Blast-radius limits (PLAN.md §5.15 A). Automation stays inside a budget a human can reason
- * about — Google's Diskerase and Facebook's FBAR both failed for want of exactly these. Reaching
+ * about - Google's Diskerase and Facebook's FBAR both failed for want of exactly these. Reaching
  * a limit never refuses an operation; it downgrades it to "a human must approve" (FBAR's
  * automation → human escalation), so autonomy degrades gracefully instead of stopping dead.
  * ponytail: fixed thresholds, like every other engine constant. */
@@ -303,7 +303,7 @@ async function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
  * leave a lockout in place for long. ponytail: fixed, like every other engine threshold. */
 export const LIFELINE_CONFIRM_MS = 90_000;
 
-/** Run once at boot (§47). Never retries apply() — an unknown crash point makes blind retry itself
+/** Run once at boot (§47). Never retries apply() - an unknown crash point makes blind retry itself
  * dangerous; re-checking real state and rolling back to known-good is the conservative default. */
 export async function reconcileOperations(db: Database, kinds: Record<string, OperationKind<any, any>>): Promise<void> {
   store.ensureOperationsTable(db);
@@ -311,28 +311,28 @@ export async function reconcileOperations(db: Database, kinds: Record<string, Op
 
   for (const op of store.listByPhases(db, ["planning", "awaiting_confirmation", "capturing"])) {
     store.setPhase(db, op.id, "rolledback", "interrupted before any change was made");
-    // No incident write here — nothing touched the server yet, same reasoning as user-cancellation
+    // No incident write here - nothing touched the server yet, same reasoning as user-cancellation
     // in runOperation.
   }
 
   for (const op of store.listByPhases(db, ["applying", "verifying"])) {
     const kind = kinds[op.kind];
     // The plan was persisted at confirm time (store.setPlan) but reconcile used to ignore it, so
-    // the crash path could not honour irreversible or lifeline — the exact guarantees the durable
+    // the crash path could not honour irreversible or lifeline - the exact guarantees the durable
     // engine exists to keep (audit E1, E2).
     let plan: OperationPlan | null = null;
     try { plan = op.plan ? (JSON.parse(op.plan) as OperationPlan) : null; } catch { plan = null; }
 
     // Irreversible (a completed wizard step, a create with no undo): the change may have applied
     // before the crash and cannot be undone. Reporting "rolled back" is the false-rollback the
-    // applied_unverified outcome was built to kill — and this op often has no rollback data, so it
+    // applied_unverified outcome was built to kill - and this op often has no rollback data, so it
     // used to fall into the rollback branch below. Mark it applied, never claim an undo (E1).
     if (plan?.irreversible) {
       let verified = false;
       try { if (kind && op.params) verified = await kind.verify(JSON.parse(op.params)); } catch { /* inconclusive */ }
       store.setPhase(db, op.id, "committed");
       memory.recordIncident(db, { kind: op.kind, goal: op.goal, phase: "committed", error: null });
-      if (!verified) console.warn(`[mirod] reconciled ${op.kind} (${op.goal}) as applied-unverified — irreversible, could not confirm; inspect`);
+      if (!verified) console.warn(`[mirod] reconciled ${op.kind} (${op.goal}) as applied-unverified - irreversible, could not confirm; inspect`);
       continue;
     }
 

@@ -64,7 +64,7 @@ test("runOperation: destructive/lifeline/irreversible plans never auto-approve, 
     const kind = fakeKind({ autoApprove: true });
     kind.describe = async () => ({ summary: "risky", autoApprove: true, warning: "careful", ...plan });
     const result = await runOperation(ctx, kind, "risky", { x: 1 });
-    expect(result.outcome).toBe("rolledback"); // cancelled — it asked
+    expect(result.outcome).toBe("rolledback"); // cancelled - it asked
     const planEvent = events.find((e) => e.type === "operation_plan") as Extract<ServerEvent, { type: "operation_plan" }>;
     expect(planEvent.autoApprove).toBe(false);
     expect(planEvent.details?.warning).toBe("careful");
@@ -126,7 +126,7 @@ test("runOperation: scope (writes/network/class) rides in the plan event's detai
   await runOperation(ctx, kind, "s", { x: 1 });
   const planEvent = events.find((e) => e.type === "operation_plan") as Extract<ServerEvent, { type: "operation_plan" }>;
   expect(planEvent.autoApprove).toBe(true);
-  // A kind that declares no dryRunFidelity is shown as "none" — effect unknown — never as exact.
+  // A kind that declares no dryRunFidelity is shown as "none" - effect unknown - never as exact.
   expect(planEvent.details).toEqual({ class: "mutate", writes: ["/opt/x"], network: false, dryRunFidelity: "none" });
 });
 
@@ -325,11 +325,11 @@ test("runOperation: reflect only fires once repeat failures cross the threshold"
   const db = freshDb();
   const { ctx: ctx1, reflections: reflections1 } = fakeCtx(db);
   await runOperation(ctx1, fakeKind({ verifyResult: false }), "do the thing", { x: 1 });
-  expect(reflections1).toEqual([]); // 1st failure — below threshold
+  expect(reflections1).toEqual([]); // 1st failure - below threshold
 
   const { ctx: ctx2, reflections: reflections2 } = fakeCtx(db);
   await runOperation(ctx2, fakeKind({ verifyResult: false }), "do the thing", { x: 1 });
-  expect(reflections2).toHaveLength(1); // 2nd failure — threshold crossed
+  expect(reflections2).toHaveLength(1); // 2nd failure - threshold crossed
   expect(reflections2[0].repeatFailureCount).toBe(2);
 });
 
@@ -459,5 +459,5 @@ test("selector sanity: a root write scope is refused before anything is planned,
   expect(result.message).toContain("Refused");
   expect(kind.calls).toEqual(["describe"]);
   expect(events.map((e) => e.type)).toEqual(["operation_result"]); // no plan event, no question
-  expect(listAll(db)).toEqual([]); // no incident — nothing touched
+  expect(listAll(db)).toEqual([]); // no incident - nothing touched
 });

@@ -1,6 +1,6 @@
 import { theme } from "../../theme";
 
-/** A credential is the one time a secret crosses the wire, and mirod never repeats it — so it gets
+/** A credential is the one time a secret crosses the wire, and mirod never repeats it - so it gets
  * a box of its own rather than a line that can scroll past unread. */
 export function NoticeBlock({ level, text }: { level: "info" | "warn" | "credential"; text: string }) {
   if (level === "credential") {
@@ -10,7 +10,7 @@ export function NoticeBlock({ level, text }: { level: "info" | "warn" | "credent
           <span fg={theme.warning}>{"🔑 "}</span>
           {text}
         </text>
-        <text fg={theme.warning}>save this now — shown once</text>
+        <text fg={theme.warning}>save this now - shown once</text>
       </box>
     );
   }

@@ -7,7 +7,7 @@ import { snapshotPaths, restoreSnapshot, type Snapshot } from "../snapshot";
 // needs (writable roots + network), and optionally a verify command and a rollback command; the
 // engine supplies confirmation, a snapshot of the declared roots before apply, the kernel sandbox
 // during apply, verification, and rollback (snapshot restore, then the model's undo command).
-// The classifier is the gate: a `forbidden` command never becomes an operation — the tool refuses
+// The classifier is the gate: a `forbidden` command never becomes an operation - the tool refuses
 // before runOperation, and describe() refuses again as defence in depth.
 
 export interface ShellCommandParams {
@@ -24,7 +24,7 @@ export interface ShellCommandCaptured {
   snapshot: Snapshot;
 }
 
-/** Output of the last apply for a given params object, for the tool to hand back to the model —
+/** Output of the last apply for a given params object, for the tool to hand back to the model -
  * runOperation itself only returns outcome + message. Keyed by object identity, so it cannot leak
  * across calls; entries are dropped once read. */
 const outputs = new WeakMap<object, SandboxResult>();
@@ -39,10 +39,10 @@ export const shellCommandKind: OperationKind<ShellCommandParams, ShellCommandCap
 
   async describe(p) {
     const c = classifyCommand(p.command);
-    if (c.class === "forbidden") throw new Error(`refused: ${c.reasons.join("; ")}${c.alternative ? ` — ${c.alternative}` : ""}`);
+    if (c.class === "forbidden") throw new Error(`refused: ${c.reasons.join("; ")}${c.alternative ? ` - ${c.alternative}` : ""}`);
     if (p.rollback) {
       const r = classifyCommand(p.rollback);
-      if (r.class === "forbidden") throw new Error(`refused: rollback command — ${r.reasons.join("; ")}`);
+      if (r.class === "forbidden") throw new Error(`refused: rollback command - ${r.reasons.join("; ")}`);
     }
     // The declared scope is part of what is being approved (adversarial review: `tar -C /etc`
     // with writes:["/etc"] classified from the command text alone stayed `mutate`).
@@ -64,13 +64,13 @@ export const shellCommandKind: OperationKind<ShellCommandParams, ShellCommandCap
       writes,
       network: p.network,
       warning,
-      expects: p.verify ? `the verify command (${p.verify}) exits 0 afterwards` : "no verify command declared — the outcome cannot be confirmed",
+      expects: p.verify ? `the verify command (${p.verify}) exits 0 afterwards` : "no verify command declared - the outcome cannot be confirmed",
       rollbackWhen: p.rollback
-        ? "verify fails or the command fails — the declared roots are restored from snapshot, then the undo command runs"
-        : "verify fails or the command fails — the declared roots are restored from snapshot",
+        ? "verify fails or the command fails - the declared roots are restored from snapshot, then the undo command runs"
+        : "verify fails or the command fails - the declared roots are restored from snapshot",
       scopeEvidence: "the roots the command itself declared writable",
       // An arbitrary command's effect cannot be predicted from its text (the classifier judges risk,
-      // not outcome) — honestly "none", shown as "effect unknown" rather than a false "no changes".
+      // not outcome) - honestly "none", shown as "effect unknown" rather than a false "no changes".
       dryRunFidelity: "none",
       details: { command: p.command, reasons: c.reasons, verify: p.verify ?? null, rollback: p.rollback ?? null, cwd: p.cwd ?? null },
     };

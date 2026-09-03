@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 
-// Durable extension state (plan §33-36). Plain bun:sqlite, no ORM — same convention as
+// Durable extension state (plan §33-36). Plain bun:sqlite, no ORM - same convention as
 // operations/store.ts and memory/store.ts. The manifest itself (JSON) is the source of truth for
 // an extension's tools/secrets; this table tracks its lifecycle (enabled/disabled) and the two
 // counters that drive Dreaming's repair loop (extensions/repair.ts).
@@ -77,7 +77,7 @@ export function ensureExtensionsTable(db: Database): void {
   if (!cols.includes("successful_runs")) db.run("ALTER TABLE extensions ADD COLUMN successful_runs INTEGER NOT NULL DEFAULT 0");
 }
 
-/** Maturity, derived — never stored, never set by hand (plan §29). ponytail: one threshold; the
+/** Maturity, derived - never stored, never set by hand (plan §29). ponytail: one threshold; the
  * full DISCOVERED→UNDERSTOOD→MANAGED→LEARNED→TRUSTED ladder can refine this when a policy needs
  * the intermediate rungs. */
 export const TRUSTED_AFTER_SUCCESSFUL_RUNS = 10;
@@ -86,7 +86,7 @@ export function maturityOf(record: Pick<ExtensionRecord, "successfulRuns" | "rep
 }
 
 /** A successful generation (fresh learn OR a successful repair) always fully resets both
- * counters — the extension is known-good again either way, no separate "reset repair attempts"
+ * counters - the extension is known-good again either way, no separate "reset repair attempts"
  * call needed at the repair call site. */
 export function promote(db: Database, app: string, manifestJson: string, version: number, baseUrl: string): void {
   const now = Date.now();
@@ -102,7 +102,7 @@ export function promote(db: Database, app: string, manifestJson: string, version
 }
 
 /** Bumped by either a real tool-call failure or a failed periodic re-probe (extensions/repair.ts)
- * — one counter, two triggers, per plan §8. */
+ * - one counter, two triggers, per plan §8. */
 export function recordFailure(db: Database, app: string, error: string): number {
   db.run(
     `UPDATE extensions SET consecutive_failures = consecutive_failures + 1, last_error = ?, updated_at = ? WHERE app = ?`,

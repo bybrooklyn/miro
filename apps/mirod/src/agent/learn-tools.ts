@@ -36,10 +36,10 @@ function textResult(details: unknown): AgentToolResult<unknown> {
 
 const learnParams = Type.Object({
   app: Type.String({ description: "The app/service's name, e.g. 'jellyfin'." }),
-  hint: Type.Optional(Type.String({ description: "Any extra context — its URL, what it does, why it's being learned." })),
+  hint: Type.Optional(Type.String({ description: "Any extra context - its URL, what it does, why it's being learned." })),
 });
 
-/** app_learn — the agent's own decision to acquire a capability (PLAN.md §5.2 C). Kept separate
+/** app_learn - the agent's own decision to acquire a capability (PLAN.md §5.2 C). Kept separate
  * from agent/tools.ts's AGENT_TOOLS and never reachable from spawnWorker, same "authority stays
  * separate" boundary already drawn for operation/memory tools. This is the ONLY way learning is
  * triggered; there is deliberately no user command for it. */
@@ -49,7 +49,7 @@ export function buildLearnTools(ctx: LearnToolContext) {
       name: "app_learn",
       label: "Learn app",
       description:
-        "Learn a self-hosted app you do not have tools for yet: inspect how it is deployed here, research it, choose its best control method, generate and validate an extension (read tools + write operations), and record its operational model. Its ext_<app>_* tools become available to you immediately in this same task — continue with the original request afterwards. Also use it for a dependency you discover you need.",
+        "Learn a self-hosted app you do not have tools for yet: inspect how it is deployed here, research it, choose its best control method, generate and validate an extension (read tools + write operations), and record its operational model. Its ext_<app>_* tools become available to you immediately in this same task - continue with the original request afterwards. Also use it for a dependency you discover you need.",
       parameters: learnParams,
       execute: async (id: string, params: { app: string; hint?: string }): Promise<AgentToolResult<unknown>> => {
         const result = await runLearnFlow({

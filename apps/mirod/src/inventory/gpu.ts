@@ -1,7 +1,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { commandExists, run } from "./exec";
 
-// GPU/accelerator awareness (plan §24) — for diagnosis and configuration only, not a hardware
+// GPU/accelerator awareness (plan §24) - for diagnosis and configuration only, not a hardware
 // dashboard. Real Linux tooling (lspci, /dev/dri); graceful "not available" everywhere else,
 // same pattern as the rest of inventory/.
 

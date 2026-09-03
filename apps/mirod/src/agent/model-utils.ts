@@ -2,14 +2,14 @@ import type { Agent, AgentEvent } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 
 // Extracted from agent/index.ts as a leaf module (no dependency on anything that could import it
-// back) — extensions/learn-agent.ts needs resolveApiKey/runTurn too, and agent/index.ts ->
+// back) - extensions/learn-agent.ts needs resolveApiKey/runTurn too, and agent/index.ts ->
 // agent/learn-tools.ts -> extensions/learn.ts -> extensions/learn-agent.ts -> agent/index.ts would
 // otherwise be a real circular import, same class of issue Stage C slice 1 avoided by having
 // operations/engine.ts depend only on memory/store.ts, never agent/worker.ts. agent/index.ts
 // re-exports these so no other existing import site needs to change.
 
 // ponytail: a curated 4-provider list (matches plan §17's example), not the full 15+ pi-ai
-// supports. Add more here if asked — the /provider flow and pickDefaultModel both read this list.
+// supports. Add more here if asked - the /provider flow and pickDefaultModel both read this list.
 export const PROVIDER_CATALOG = [
   { provider: "anthropic", label: "Anthropic", envVar: "ANTHROPIC_API_KEY" },
   { provider: "openai", label: "OpenAI", envVar: "OPENAI_API_KEY" },
@@ -25,7 +25,7 @@ export function resolveApiKey(provider: string, getStoredKey: (provider: string)
   return entry ? process.env[entry.envVar] : undefined;
 }
 
-// pi-agent-core doesn't throw on a provider error (bad key, rate limit, ...) — it produces an
+// pi-agent-core doesn't throw on a provider error (bad key, rate limit, ...) - it produces an
 // assistant message with stopReason "error", empty content, and the detail in errorMessage.
 // Surface that instead of silently returning empty text, which would read as Miro ignoring you.
 function textOf(message: AssistantMessage | undefined): string {
@@ -48,15 +48,15 @@ export interface ActivityNode {
 }
 
 export interface TurnHooks {
-  /** A tool call started (status running) or finished (done/failed) — the client renders a tree. */
+  /** A tool call started (status running) or finished (done/failed) - the client renders a tree. */
   onActivity?: (node: ActivityNode) => void;
-  /** A fragment of the assistant's visible text, in order — for streaming replies. */
+  /** A fragment of the assistant's visible text, in order - for streaming replies. */
   onDelta?: (text: string) => void;
   /** Nests this turn's tool calls under a parent call (a learning agent under its app_learn). */
   parentActivityId?: string;
 }
 
-/** A short, safe outcome line for a finished tool call — never the full payload. */
+/** A short, safe outcome line for a finished tool call - never the full payload. */
 function summarizeResult(result: unknown, isError: boolean): string | undefined {
   const text = typeof result === "string" ? result : (result as { content?: { text?: string }[] } | undefined)?.content?.[0]?.text;
   if (!text) return isError ? "failed" : undefined;

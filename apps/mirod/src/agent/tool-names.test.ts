@@ -11,7 +11,7 @@ import { sanitizeNamePart } from "./extension-tools";
 import { ensureOperationsTable } from "../operations/store";
 import { ensureMemoryTable } from "../memory/store";
 
-// OpenAI's Responses API (the Codex provider) rejects any tool name outside ^[a-zA-Z0-9_-]+$ —
+// OpenAI's Responses API (the Codex provider) rejects any tool name outside ^[a-zA-Z0-9_-]+$ -
 // found live testing Codex integration, since dotted names ("web.search", "memory.remember", ...)
 // worked fine against Ollama's more lenient endpoint and silently broke against a stricter one.
 // This is the real hygiene backstop: every static tool-name list gets checked here, so a future

@@ -16,7 +16,7 @@ test("registerOllamaIfReachable is a no-op against an unreachable server", async
 test(
   "isOllamaReachable / registerOllamaIfReachable work against the real local Ollama on this dev box",
   async () => {
-    // This machine has Ollama actually running (confirmed manually) — proves the real fetch and
+    // This machine has Ollama actually running (confirmed manually) - proves the real fetch and
     // provider registration path, not just the unreachable branch.
     const reachable = await isOllamaReachable();
     if (!reachable) return; // don't fail elsewhere if Ollama isn't running on whatever box runs this

@@ -8,7 +8,7 @@ test("installCommand matches the plan's documented experienced-path bootstrap (p
 test(
   "probeSshAccess runs a real ssh invocation and reports failure cleanly against an unreachable target",
   async () => {
-    // No real Linux target exists in this environment (the actual blocker on SSH bootstrap) — this
+    // No real Linux target exists in this environment (the actual blocker on SSH bootstrap) - this
     // proves the real `ssh` CLI gets invoked correctly and fails fast/cleanly rather than hanging,
     // which is exactly what happens for a real unreachable target too.
     const result = await probeSshAccess("127.0.0.1", { port: 1, timeoutSeconds: 2 });

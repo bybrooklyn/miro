@@ -1,7 +1,7 @@
 import { test, expect } from "bun:test";
 import { parseDf } from "./storage";
 
-// Captured live from `df -kP` on the dev machine — proves the parser handles real output,
+// Captured live from `df -kP` on the dev machine - proves the parser handles real output,
 // not just a hand-built fixture.
 const REAL_DF_OUTPUT = `Filesystem     1024-blocks      Used Available Capacity  Mounted on
 /dev/disk3s1s1   239362496  15884664   6805876    71%    /

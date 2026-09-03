@@ -2,7 +2,7 @@ import type { ServerEvent, SystemPlanEvent, OperationPlanEvent, QuestionOption, 
 
 // The headless view-model (PLAN.md §5.9 client decision: "one view-model, two thin renderers").
 // A pure reducer from protocol events to what a client shows: a transcript of blocks, the one
-// prompt currently waiting on the user, and status. No rendering, no framework — the terminal
+// prompt currently waiting on the user, and status. No rendering, no framework - the terminal
 // client (apps/miro, OpenTUI) and a future web client render this same state. Every rule here is
 // tested against real event sequences, so the renderers stay thin and dumb.
 
@@ -60,7 +60,7 @@ export interface UiState {
   blocks: Block[];
   pending: Pending | null;
   /** Questions that arrived while another was still open (e.g. a lifeline countdown running when a
-   * new op_confirm arrives). Shown one at a time, never dropped — the daemon can have several
+   * new op_confirm arrives). Shown one at a time, never dropped - the daemon can have several
    * outstanding at once (audit U1). */
   pendingQueue: Pending[];
   /** A turn is in flight (from the user's message until the final reply). */
@@ -73,7 +73,7 @@ export function initialState(server = "home"): UiState {
   return { server, health: "connecting", blocks: [], pending: null, pendingQueue: [], working: false, seq: 0 };
 }
 
-/** Show a new prompt now if none is open, else hold it behind the current one — never overwrite an
+/** Show a new prompt now if none is open, else hold it behind the current one - never overwrite an
  * outstanding question (audit U1). A re-ask of the same id replaces in place. */
 function enqueuePending(state: UiState, p: Pending): UiState {
   const s = closeStreaming(state);
@@ -105,7 +105,7 @@ function push(state: UiState, block: Block): UiState {
   return { ...state, blocks: [...state.blocks, block] };
 }
 
-/** Closes a streaming assistant block, if the last block is one — a tool call or a prompt means
+/** Closes a streaming assistant block, if the last block is one - a tool call or a prompt means
  * the assistant's text so far is complete for now (the Claude-Code-style interleave). */
 function closeStreaming(state: UiState): UiState {
   const l = last(state);
@@ -206,7 +206,7 @@ export function reduce(state: UiState, event: ServerEvent, now = Date.now()): Ui
         blocks: state.blocks.map((b) => (b.kind === "operation" && b.id === event.id ? { ...b, phase: undefined, result: { outcome: event.outcome, message: event.message } } : b)),
       };
       // A lifeline that auto-resolved (timeout/revert) leaves its prompt open with nothing behind
-      // it — clear it so the user can't answer a question the daemon already forgot (audit U7).
+      // it - clear it so the user can't answer a question the daemon already forgot (audit U7).
       if (s.pending?.type === "question" && s.pending.blockId === event.id) return advancePending(s);
       return s;
     }

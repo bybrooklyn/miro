@@ -6,7 +6,7 @@ import { classifyCommand, tokenize, splitSegments, type CommandClass } from "./c
 
 // The bypass catalogue from PLAN.md §5.7, as executable spec. Every entry there has a case here;
 // the classifier is not done until every case passes. Real filesystem for binary resolution
-// (a temp bin dir with real executables and symlinks), no mocks — the resolver is injected the
+// (a temp bin dir with real executables and symlinks), no mocks - the resolver is injected the
 // same way the daemon injects it, pointed at a directory this test controls.
 
 let binDir: string;
@@ -20,14 +20,14 @@ function fakeExecutable(dir: string, name: string): string {
 }
 
 beforeAll(() => {
-  // realpath: on macOS tmpdir() is /var/... which resolves to /private/var/... — the classifier
+  // realpath: on macOS tmpdir() is /var/... which resolves to /private/var/... - the classifier
   // compares realpaths against the trusted list, so the fixture must be a realpath too.
   binDir = realpathSync(mkdtempSync(join(tmpdir(), "classify-bin-")));
   untrustedDir = realpathSync(mkdtempSync(join(tmpdir(), "classify-untrusted-")));
   for (const n of ["ls", "cat", "rm", "ip", "docker", "systemctl", "grep", "rg", "find", "sed", "curl", "git", "apt", "dig", "ss", "tail", "python3", "bash", "sqlite3", "tee", "dd", "echo", "jq", "env", "sudo", "xargs", "nsenter", "busybox", "nice", "timeout", "tcpdump", "iptables", "nft", "ufw", "passwd", "kill", "pkill", "truncate", "cp", "mv", "tar", "rsync", "crontab", "chmod", "chown", "sleep", "yes", "watch", "wget", "perl", "node", "awk", "stat", "df", "journalctl", "nmcli", "apt-get", "dpkg", "mount", "umount", "sysctl", "pip", "ln", "mkdir", "touch", "wg", "ssh", "npm", "printenv", "top", "less", "apt-cache", "wc", "nc", "flock", "runuser", "taskset", "chrt", "unshare", "script", "setpriv", "systemd-run", "at", "batch", "base64", "strings", "head", "nslookup", "ping", "host", "getent", "mtr", "traceroute"]) {
     fakeExecutable(binDir, n);
   }
-  // A symlink named `ls` that is really `rm` — the PATH-shadow bypass.
+  // A symlink named `ls` that is really `rm` - the PATH-shadow bypass.
   mkdirSync(join(untrustedDir, "shadow"));
   symlinkSync(join(binDir, "rm"), join(untrustedDir, "shadow", "ls"));
   // A binary outside the trusted directories.
@@ -482,7 +482,7 @@ describe("tree-walking readers rooted where secrets live (root sandbox review)",
   });
 });
 
-describe("audit 2026-09-02 — classifier secret-leak bypasses (each verified live)", () => {
+describe("audit 2026-09-02 - classifier secret-leak bypasses (each verified live)", () => {
   test("C1: relative and ..-traversal path tokens resolve and are forbidden", () => {
     expectAll("forbidden", [
       "cat ../../../../etc/shadow",
@@ -569,7 +569,7 @@ describe("adversarial review findings (each one was a real bypass)", () => {
       "cat /proc/1/root/etc/shadow",
       "cat /proc/self/root/../etc/shadow",
       "cat /proc/self/root/proc/1/root/etc/shadow",
-      "cat /proc/self/cwd/x", // unresolvable alias — never a legitimate inspection path
+      "cat /proc/self/cwd/x", // unresolvable alias - never a legitimate inspection path
       "ls /proc/self/fd/3",
       "cat /var/lib/miro/../miro/miro.db",
     ]);

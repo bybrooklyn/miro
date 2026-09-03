@@ -26,7 +26,7 @@ export function App() {
   const scrollRef = useRef<ScrollBoxRenderable>(null);
   const send = useMiroConnection((event: ServerEvent) => setState((s) => reduce(s, event)));
 
-  // Scrolling is ↑↓ / PageUp PageDown, always live regardless of what is focused — the chat input is
+  // Scrolling is ↑↓ / PageUp PageDown, always live regardless of what is focused - the chat input is
   // single-line, so the arrows are free. A choice prompt borrows ↑↓ to move between its options
   // (the footer stops advertising scroll then); PageUp/PageDown keep working throughout.
   // Assigning scrollTop rather than calling scrollBy is deliberate: only the setter updates the

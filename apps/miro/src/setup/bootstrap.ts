@@ -11,7 +11,7 @@ export interface BootstrapProbeResult {
 /**
  * Attempts a real, non-interactive SSH connection to confirm access before ever running the
  * actual install payload (`curl -fsSL https://miro.computer/install | sudo sh`, plan §10). This
- * only runs a harmless remote echo — it never installs anything. BatchMode disables password
+ * only runs a harmless remote echo - it never installs anything. BatchMode disables password
  * prompts, so a missing key or unreachable host fails fast instead of hanging on stdin.
  */
 export async function probeSshAccess(

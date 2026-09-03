@@ -11,7 +11,7 @@ import {
   EXTENSIONS_DIR,
 } from "./paths";
 
-// Real filesystem, real ~/.miro/extensions/ — same "no mocks, real everything" convention as
+// Real filesystem, real ~/.miro/extensions/ - same "no mocks, real everything" convention as
 // secrets.test.ts's real temp key files. Uses a throwaway app name, cleaned up after every test.
 const APP = "__paths_test_app__";
 
@@ -73,7 +73,7 @@ test("promoteStagingToLive keeps exactly one prior generation, overwriting any o
   writeFileSync(join(stagingDir(APP), "manifest"), "v3");
   promoteStagingToLive(APP);
 
-  // v1's .prev copy got overwritten by v2's — only one generation of history is ever kept.
+  // v1's .prev copy got overwritten by v2's - only one generation of history is ever kept.
   expect(Bun.file(join(prevDir(APP), "manifest")).text()).resolves.toBe("v2");
   expect(Bun.file(join(extensionDir(APP), "manifest")).text()).resolves.toBe("v3");
 });

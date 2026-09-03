@@ -24,7 +24,7 @@ export function getHostInfo(): HostInfo {
     const prettyName = parseOsRelease(readFileSync("/etc/os-release", "utf8"));
     if (prettyName) os = prettyName;
   } catch {
-    // not Linux, or the file is missing — keep the platform/release fallback
+    // not Linux, or the file is missing - keep the platform/release fallback
   }
 
   const cpuList = cpus();

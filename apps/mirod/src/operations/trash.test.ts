@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { trashDestination, moveToTrash, restoreFromTrash, listTrash } from "./trash";
 
-// Real filesystem, a throwaway trash directory per test — no mocks.
+// Real filesystem, a throwaway trash directory per test - no mocks.
 
 let work: string;
 let trash: string;

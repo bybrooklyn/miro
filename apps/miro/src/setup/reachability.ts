@@ -1,5 +1,5 @@
 // Live TCP reachability probe used by `miro setup` to show "SSH available" before ever
-// attempting to authenticate (plan §10's discovery screen). No credentials involved — just
+// attempting to authenticate (plan §10's discovery screen). No credentials involved - just
 // whether something is listening on the port.
 
 export async function probePort(host: string, port: number, timeoutMs = 1500): Promise<boolean> {

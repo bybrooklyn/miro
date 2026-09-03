@@ -14,11 +14,11 @@ import { redactSecretsInText } from "../operations/classify";
 
 function textResult(details: unknown): AgentToolResult<unknown> {
   // details ?? null: JSON.stringify(undefined) returns the value undefined (not a string),
-  // producing a malformed {text: undefined} block that crashes downstream message processing —
+  // producing a malformed {text: undefined} block that crashes downstream message processing -
   // found live when a void-returning tool (extensions/learn-agent.ts's browser.open) hit this
   // exact bug. null is a real JSON literal; undefined coerced through here is not.
   // Redact the model-visible text: generated extension code holds real ctx.secrets values and its
-  // return is unconstrained, so a tool could echo a secret straight back — this is the one tool
+  // return is unconstrained, so a tool could echo a secret straight back - this is the one tool
   // category with no scrub before now (audit L3).
   return { content: [{ type: "text", text: redactSecretsInText(JSON.stringify(details ?? null, null, 2)) }], details };
 }
@@ -34,7 +34,7 @@ export function resolveSecrets(manifest: ExtensionManifest, getSecret: (ref: str
   return secrets;
 }
 
-// OpenAI's Responses API rejects tool names outside ^[a-zA-Z0-9_-]+$ (found live testing Codex —
+// OpenAI's Responses API rejects tool names outside ^[a-zA-Z0-9_-]+$ (found live testing Codex -
 // Ollama's more lenient endpoint never caught it). manifest.app/spec.name come from generated
 // extension code, not this repo's own literals, so this is a real defensive boundary, not just a
 // style choice: sanitize even though the learn-agent system prompt also asks for clean names.
@@ -50,7 +50,7 @@ const BINDING_KIND_TO_ENGINE: Record<string, string> = {
 
 /** Builds the agent tools for one enabled extension: its read tools/diagnostics (executed in the
  * extension host) and its operation bindings (bound in the host, run by the daemon's engine with
- * full confirm/sandbox/verify/rollback semantics — the extension never performs a write itself).
+ * full confirm/sandbox/verify/rollback semantics - the extension never performs a write itself).
  * Exported so a freshly promoted extension can be hot-loaded into a running agent (PLAN.md §5.4 D). */
 export function buildToolsForExtension(
   row: store.ExtensionRecord,
@@ -67,7 +67,7 @@ export function buildToolsForExtension(
   // the dev VM's pre-existing gotify extension). Don't wire them: with no capability present the
   // agent app_learns the app fresh in the single-file declarative format the next time it's needed.
   if (!existsSync(join(dir, "extension.ts"))) {
-    console.log(`[mirod] extension ${manifest.app}: no extension.ts (pre-declarative format) — not wired; will be re-learned on next use`);
+    console.log(`[mirod] extension ${manifest.app}: no extension.ts (pre-declarative format) - not wired; will be re-learned on next use`);
     return [];
   }
   const prefix = `ext_${sanitizeNamePart(manifest.app)}_`;

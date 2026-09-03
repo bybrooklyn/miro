@@ -5,7 +5,7 @@ import { MIRO_DIR } from "@miro/protocol";
 // Miro's trash (PLAN.md §5.7). `rm` is forbidden for every agent; deletion exists only as the
 // file_delete operation kind, whose apply is a move into here and whose rollback is a move back.
 // Nothing an agent does is an irrecoverable delete. The single place the daemon itself removes a
-// path is the cross-device fallback below (copy, then remove the source) — a move by other means.
+// path is the cross-device fallback below (copy, then remove the source) - a move by other means.
 
 export const TRASH_DIR = join(MIRO_DIR, "trash");
 
@@ -16,7 +16,7 @@ export interface TrashEntry {
   trashedAt: number;
 }
 
-/** Where `originalPath` will land — computed before the move so an operation's rollback can find
+/** Where `originalPath` will land - computed before the move so an operation's rollback can find
  * it from captured state alone, with no hidden bookkeeping in between. */
 export function trashDestination(originalPath: string, trashDir = TRASH_DIR, now = Date.now()): TrashEntry {
   const id = `${now}-${crypto.randomUUID().slice(0, 8)}`;
@@ -45,7 +45,7 @@ export function moveToTrash(entry: TrashEntry, trashDir = TRASH_DIR): void {
 
 export function restoreFromTrash(entry: TrashEntry, trashDir = TRASH_DIR): void {
   if (!existsSync(entry.trashedPath)) throw new Error(`trash entry ${entry.id} is missing`);
-  if (existsSync(entry.originalPath)) throw new Error(`${entry.originalPath} exists again — refusing to overwrite it`);
+  if (existsSync(entry.originalPath)) throw new Error(`${entry.originalPath} exists again - refusing to overwrite it`);
   move(entry.trashedPath, entry.originalPath);
   appendFileSync(join(trashDir, "index.jsonl"), JSON.stringify({ ...entry, action: "restored", restoredAt: Date.now() }) + "\n");
 }
@@ -65,5 +65,5 @@ export function listTrash(trashDir = TRASH_DIR): TrashEntry[] {
 }
 
 // ponytail: no retention purge yet. Purging is itself a destructive operation (a real delete) and
-// must be a confirmed operation kind with a default 30-day retention — add when the trash actually
+// must be a confirmed operation kind with a default 30-day retention - add when the trash actually
 // fills up, not before.

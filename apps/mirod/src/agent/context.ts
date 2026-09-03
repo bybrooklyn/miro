@@ -11,8 +11,8 @@ import type { ExtensionManifest } from "../extensions/manifest";
 import { query as queryMemory } from "../memory/store";
 
 // Self-assembling context (PLAN.md §5.9 client decisions: "assembled block + on-demand tool").
-// The agent is handed a map of itself every turn — what is on this server right now, which
-// systems it already operates and with what tools, and what it cannot do and must do instead —
+// The agent is handed a map of itself every turn - what is on this server right now, which
+// systems it already operates and with what tools, and what it cannot do and must do instead -
 // built from live state, bounded in size. `capabilities` returns the full detail when a turn
 // needs it. Nothing here is hand-maintained prose about the server; it is all read from the
 // same inventory, extension and memory stores the tools use.
@@ -97,21 +97,21 @@ export function buildContextBlock(db: Database, snapshot: ServerSnapshot): strin
     : "none (or Docker not reachable)";
   const services = snapshot.services.length ? snapshot.services.join(", ") : "none of note";
   const mounts = snapshot.mounts.length ? snapshot.mounts.map((m) => `${m.mountPoint} ${m.usedPercent}% used, ${m.availableGb}GB free`).join("; ") : "n/a";
-  parts.push(`This server right now (snapshot, ≤60s old — inspect for detail before acting):\n- ${snapshot.host}\n- containers: ${containers}\n- services: ${services}\n- storage: ${mounts}`);
+  parts.push(`This server right now (snapshot, ≤60s old - inspect for detail before acting):\n- ${snapshot.host}\n- containers: ${containers}\n- services: ${services}\n- storage: ${mounts}`);
 
   const exts = extensionLines(db);
   if (exts.length > 0) {
     parts.push(
-      `Systems you already operate (their ext_<app>_* tools are in your tool list — use them instead of researching):\n` +
-        exts.map((e) => `- ${e.app} v${e.version} (${e.maturity}): reads ${e.tools.join(", ") || "—"}; writes ${e.operations.join(", ") || "—"}`).join("\n"),
+      `Systems you already operate (their ext_<app>_* tools are in your tool list - use them instead of researching):\n` +
+        exts.map((e) => `- ${e.app} v${e.version} (${e.maturity}): reads ${e.tools.join(", ") || "-"}; writes ${e.operations.join(", ") || "-"}`).join("\n"),
     );
   } else {
-    parts.push("You operate no learned systems yet — app_learn acquires one when a request needs it.");
+    parts.push("You operate no learned systems yet - app_learn acquires one when a request needs it.");
   }
   const refs = listSecretRefs(db, "extension.");
   if (refs.length > 0) {
     parts.push(
-      `Credentials on file (references only — values are never shown; use secretHeader { name, ref } or {{secret:<ref>}} in a body/URL; never ask the user for one of these):\n- ${refs.join("\n- ")}`,
+      `Credentials on file (references only - values are never shown; use secretHeader { name, ref } or {{secret:<ref>}} in a body/URL; never ask the user for one of these):\n- ${refs.join("\n- ")}`,
     );
   }
   parts.push(REFUSALS);
@@ -123,7 +123,7 @@ function textResult(details: unknown): AgentToolResult<unknown> {
 }
 
 /** On-demand depth: every extension's tool descriptions and operations, every capability
- * document, the operation kinds and the command classes — the agent's own reference manual. */
+ * document, the operation kinds and the command classes - the agent's own reference manual. */
 export function buildCapabilitiesTool(db: Database) {
   return {
     name: "capabilities",

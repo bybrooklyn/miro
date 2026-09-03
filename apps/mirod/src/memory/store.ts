@@ -3,26 +3,26 @@ import { redactSecretsInText } from "../operations/classify";
 
 // Durable memory (plan §37). Structured facts Miro learns about the user and the server, written
 // mechanically (incidents, straight from operation records) or via a real LLM reflection pass
-// (preferences/patterns) — see dreaming.ts. Same conventions as operations/store.ts: plain
+// (preferences/patterns) - see dreaming.ts. Same conventions as operations/store.ts: plain
 // bun:sqlite, no ORM, no migration framework.
 
 export type MemoryCategory =
   | "preference"
   | "server_fact"
   | "incident"
-  // Schema-ready, no write path yet — app/extension knowledge need self-extension (not built);
+  // Schema-ready, no write path yet - app/extension knowledge need self-extension (not built);
   // research findings need cached web search (not built).
   | "app_knowledge"
   | "extension_knowledge"
   | "research"
   // The durable operational model of a system Miro operates (PLAN.md §5.4 E): key = capability
-  // or app name, value = a JSON document — summary, components, data flow, credentials by
+  // or app name, value = a JSON document - summary, components, data flow, credentials by
   // reference, how to verify. What makes "Download Interstellar" a one-tool call a month later.
   | "capability";
 
 export const WRITABLE_MEMORY_CATEGORIES = ["preference", "server_fact", "incident", "capability"] as const;
 
-/** Shape of a `capability` memory's value (stored as JSON text). Kept loose on purpose — the
+/** Shape of a `capability` memory's value (stored as JSON text). Kept loose on purpose - the
  * learn agent writes it, the main agent reads it; a graph store waits for a query this can't answer. */
 export interface CapabilityDoc {
   summary: string;
@@ -92,7 +92,7 @@ export function ensureMemoryTable(db: Database): void {
   `);
 }
 
-/** Derived at read time from occurrenceCount, not stored — one source of truth. */
+/** Derived at read time from occurrenceCount, not stored - one source of truth. */
 export function confidenceLabel(occurrenceCount: number): "tentative" | "noted a few times" | "confirmed" {
   if (occurrenceCount >= 4) return "confirmed";
   if (occurrenceCount >= 2) return "noted a few times";
@@ -162,7 +162,7 @@ export function listAll(db: Database, limit = 50): MemoryRecord[] {
   return rows.map(fromRow);
 }
 
-/** Top preference/server_fact rows for the always-on system-prompt summary — a hard LIMIT bounds
+/** Top preference/server_fact rows for the always-on system-prompt summary - a hard LIMIT bounds
  * prompt growth structurally, not by convention. Excludes "reply_style" (injected separately as a
  * tone instruction, see agent/index.ts) so it isn't shown twice. */
 export function topFacts(db: Database, limit = 8): MemoryRecord[] {
@@ -191,7 +191,7 @@ export function buildSummary(db: Database): string {
         const doc = JSON.parse(r.value) as CapabilityDoc;
         const parts = [doc.summary];
         if (doc.components?.length) parts.push(`components: ${doc.components.map((c) => c.name).join(", ")}`);
-        summary = parts.join(" — ");
+        summary = parts.join(" - ");
       } catch {
         /* plain text value */
       }
@@ -202,20 +202,20 @@ export function buildSummary(db: Database): string {
   return sections.join("\n\n");
 }
 
-/** Mechanical write for a terminal operation — no LLM, straight from the operation's own fields. */
+/** Mechanical write for a terminal operation - no LLM, straight from the operation's own fields. */
 export function recordIncident(
   db: Database,
   info: { kind: string; goal: string; phase: "committed" | "rolledback"; error: string | null },
 ): MemoryRecord {
   const slug = info.goal.toLowerCase().replace(/[^a-z0-9]+/g, "_").slice(0, 60);
-  const value = info.error ? `${info.goal} — ${info.phase}: ${info.error}` : `${info.goal} — ${info.phase}`;
+  const value = info.error ? `${info.goal} - ${info.phase}: ${info.error}` : `${info.goal} - ${info.phase}`;
   return remember(db, "incident", `incident.${info.kind}.${slug}`, value, `mechanical:${info.kind}`);
 }
 
-/** Delete-only "editing" this slice — id or an id prefix (the /memory display shows short prefixes).
+/** Delete-only "editing" this slice - id or an id prefix (the /memory display shows short prefixes).
  * The prefix goes into a LIKE, so `%`/`_` must be escaped or `/memory forget %` (or an empty arg,
- * building the pattern `%`) would wipe every memory — preferences, facts, and the learned
- * capability documents — with no undo (audit D1). */
+ * building the pattern `%`) would wipe every memory - preferences, facts, and the learned
+ * capability documents - with no undo (audit D1). */
 export function forget(db: Database, idOrPrefix: string): number {
   const trimmed = idOrPrefix.trim();
   if (trimmed === "") return 0; // never match-all on an empty argument

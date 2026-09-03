@@ -47,7 +47,7 @@ test("context block: snapshot, no systems yet, refusals", () => {
   expect(block).not.toContain("Credentials on file");
 });
 
-test("context block names stored extension credentials by reference only — never Miro's own refs", () => {
+test("context block names stored extension credentials by reference only - never Miro's own refs", () => {
   const d = db();
   d.run("INSERT INTO secrets (ref, ciphertext) VALUES (?, ?), (?, ?), (?, ?)", [
     "extension.jellyfin.admin_password", "cipher-a",

@@ -1,8 +1,8 @@
 import { commandExists, run } from "./exec";
 
 // Distro package-manager adapter (plan §7): "distro differences should remain thin and
-// deterministic" — one interface, two backends (apt-family covers Debian+Ubuntu, dnf covers
-// Fedora), matching the plan's own v1 test matrix. ponytail: read-only (list) only — install/
+// deterministic" - one interface, two backends (apt-family covers Debian+Ubuntu, dnf covers
+// Fedora), matching the plan's own v1 test matrix. ponytail: read-only (list) only - install/
 // remove are a Stage 3+ (Safe action) mutation, not built here.
 
 export type PackageManager = "apt" | "dnf";

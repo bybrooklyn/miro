@@ -5,7 +5,7 @@ import { isLocalOrPrivateUrl, redactSecretsInText } from "../classify";
 // bindings, and the main agent directly, change an app's state through its API: the plan shows
 // method + URL + body, captureState GETs the current representation, apply sends the request,
 // verify GETs again, rollback replays an explicit undo request or PUTs the captured body back.
-// Credentials are injected by secret reference at apply time only — never in the plan, never in
+// Credentials are injected by secret reference at apply time only - never in the plan, never in
 // anything the model sees.
 
 export interface HttpMutationParams {
@@ -18,7 +18,7 @@ export interface HttpMutationParams {
   secretHeader?: { name: string; ref: string };
   /** Extra statuses that count as success, on top of any 2xx (e.g. 409 "already exists"). */
   expectStatus?: number[];
-  /** GET before apply — the captured representation rollback can restore for PUT. */
+  /** GET before apply - the captured representation rollback can restore for PUT. */
   captureUrl?: string;
   /** GET after apply; success = 2xx, plus `verifyExpect` substring if given. */
   verifyUrl?: string;
@@ -26,7 +26,7 @@ export interface HttpMutationParams {
   /** Explicit undo request. Without it, only PUT-with-captureUrl is reversible. */
   rollback?: { method: "POST" | "PUT" | "PATCH" | "DELETE"; url: string; body?: string; contentType?: string };
   timeoutMs?: number;
-  /** Keep a field of the JSON response (dotted path) in the secret store under `ref` — the way
+  /** Keep a field of the JSON response (dotted path) in the secret store under `ref` - the way
    * a login's AccessToken or a minted API key is retained. The value never reaches the model:
    * found live, the raw auth response body in tool output was how a session token got into a
    * transcript. Only `extension.<app>.<name>` refs; Miro's own refs are not writable this way. */
@@ -68,15 +68,15 @@ async function request(
 ): Promise<{ status: number; body: string }> {
   const headers: Record<string, string> = { ...(opts.headers ?? {}) };
   if (opts.body !== undefined && opts.contentType) headers["Content-Type"] = opts.contentType;
-  // redirect: "manual" — a compromised local app must not be able to 302 the secret header to a
+  // redirect: "manual" - a compromised local app must not be able to 302 the secret header to a
   // public host (adversarial review). A redirect is reported as its 3xx status, never followed.
   const res = await fetch(url, { method, headers, body: opts.body, redirect: "manual", signal: AbortSignal.timeout(opts.timeoutMs ?? 30_000) });
   return { status: res.status, body: (await res.text()).slice(0, 64 * 1024) };
 }
 
-/** `{{secret:<ref>}}` anywhere in a body, URL, or header value — resolved at request time only.
+/** `{{secret:<ref>}}` anywhere in a body, URL, or header value - resolved at request time only.
  * The plan the user approves and everything the model sees carry the placeholder. */
-const SECRET_PLACEHOLDER = /\{\{secret:([A-Za-z0-9_.-]+)\}\}/g; // for replace/matchAll only — /g regexes are stateful under .test()
+const SECRET_PLACEHOLDER = /\{\{secret:([A-Za-z0-9_.-]+)\}\}/g; // for replace/matchAll only - /g regexes are stateful under .test()
 const HAS_PLACEHOLDER = /\{\{secret:[A-Za-z0-9_.-]+\}\}/;
 
 export function substituteSecrets(text: string, getSecret: (ref: string) => string | null): string {
@@ -89,7 +89,7 @@ export function substituteSecrets(text: string, getSecret: (ref: string) => stri
 
 /** An Authorization-style header that carries no secret: a `{{secret:ref}}` placeholder, or the
  * Jellyfin/Emby `MediaBrowser Client="…", Device="…", DeviceId="…", Version="…"` client
- * identification that `AuthenticateByName` requires *without* a Token — refusing that would push
+ * identification that `AuthenticateByName` requires *without* a Token - refusing that would push
  * the agent to the browser for something the API supports (found in acceptance run #3). */
 export function isCredentialFreeHeader(value: string): boolean {
   if (HAS_PLACEHOLDER.test(value)) return true;
@@ -102,7 +102,7 @@ const LITERAL_CREDENTIAL = /"(password|passwd|pw|token|api_?key|secret)"\s*:\s*"
 
 export function httpMutationKind(
   getSecret: (ref: string) => string | null,
-  setSecret: (ref: string, value: string) => void = () => { throw new Error("secret store unavailable — storeResponseField needs the daemon's store"); },
+  setSecret: (ref: string, value: string) => void = () => { throw new Error("secret store unavailable - storeResponseField needs the daemon's store"); },
 ): OperationKind<HttpMutationParams, HttpMutationCaptured> {
   const authHeaders = (p: HttpMutationParams): Record<string, string> => {
     const h: Record<string, string> = {};
@@ -129,7 +129,7 @@ export function httpMutationKind(
         throw new Error("refused: credentials must be injected via secretHeader (by reference) or a {{secret:ref}} placeholder, never as a literal header");
       }
       if (p.body && LITERAL_CREDENTIAL.test(p.body)) {
-        throw new Error("refused: the body contains a literal credential — write {{secret:<ref>}} in its place (create one with credential_create if needed)");
+        throw new Error("refused: the body contains a literal credential - write {{secret:<ref>}} in its place (create one with credential_create if needed)");
       }
       if (p.storeResponseField && !STORABLE_REF.test(p.storeResponseField.ref)) {
         throw new Error(`refused: storeResponseField.ref must be extension.<app>.<name>, got ${p.storeResponseField.ref}`);
@@ -146,12 +146,12 @@ export function httpMutationKind(
         network: true,
         irreversible,
         warning: irreversible ? "no undo request declared" : undefined,
-        expects: p.verifyUrl ? `GET ${p.verifyUrl} confirms the change afterwards` : "no verify URL declared — the outcome cannot be confirmed",
+        expects: p.verifyUrl ? `GET ${p.verifyUrl} confirms the change afterwards` : "no verify URL declared - the outcome cannot be confirmed",
         rollbackWhen: irreversible
-          ? "never — no undo request declared"
+          ? "never - no undo request declared"
           : p.rollback
-            ? "verify fails — the declared rollback request runs"
-            : "verify fails — the state captured from captureUrl is PUT back",
+            ? "verify fails - the declared rollback request runs"
+            : "verify fails - the state captured from captureUrl is PUT back",
         scopeEvidence: "the app's own local or private-network endpoint only; no files change",
         // The request is known exactly; the server's side effects are not.
         dryRunFidelity: "partial",
@@ -186,7 +186,7 @@ export function httpMutationKind(
       if (!ok) throw new Error(`${p.method} ${p.url} → ${r.status}: ${redactSecretsInText(r.body.slice(0, 500))}`);
       if (p.storeResponseField) {
         // A missing field is reported, not thrown: the write happened (a login did log in), and
-        // a false rollback is the worse outcome — the agent reads the keys and asks again.
+        // a false rollback is the worse outcome - the agent reads the keys and asks again.
         const { field, ref } = p.storeResponseField;
         let json: unknown = null;
         try { json = JSON.parse(r.body); } catch { /* not JSON */ }

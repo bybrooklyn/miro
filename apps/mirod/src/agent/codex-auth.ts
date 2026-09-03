@@ -2,20 +2,20 @@ import type { Database } from "bun:sqlite";
 import type { AuthOperationOptions, Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
 import type { SecretStore } from "../secrets";
 
-// OpenAI Codex (ChatGPT OAuth) login — pi-ai's builtinModels() already registers the
+// OpenAI Codex (ChatGPT OAuth) login - pi-ai's builtinModels() already registers the
 // "openai-codex" provider (including gpt-5.6-luna) with a real OAuthAuth implementation; the only
 // piece missing was somewhere to durably store/refresh the credential. This backs pi-ai's
 // CredentialStore contract with the existing encrypted secrets.ts store (one JSON blob per
 // provider, ref "oauth.<providerId>") rather than inventing a new storage mechanism.
 //
 // Models.getAuth() runs OAuth refresh inside modify() under this store's lock, so a rotated
-// access token is always persisted back here — mirod stays logged in across restarts without
+// access token is always persisted back here - mirod stays logged in across restarts without
 // re-running the CLI login flow.
 
 const OAUTH_REF_PREFIX = "oauth.";
 
 export function createCodexCredentialStore(db: Database, secretStore: SecretStore): CredentialStore {
-  // Single-process daemon — a simple per-provider promise-chain is enough mutual exclusion;
+  // Single-process daemon - a simple per-provider promise-chain is enough mutual exclusion;
   // no cross-process lock needed (unlike a CLI where multiple invocations could race).
   const chains = new Map<string, Promise<unknown>>();
   function enqueue<T>(providerId: string, task: () => Promise<T>): Promise<T> {
@@ -34,7 +34,7 @@ export function createCodexCredentialStore(db: Database, secretStore: SecretStor
       return raw ? (JSON.parse(raw) as Credential) : undefined;
     },
     async list(_options?: AuthOperationOptions): Promise<readonly CredentialInfo[]> {
-      // ponytail: only Codex ever gets logged in through this store today — a real multi-provider
+      // ponytail: only Codex ever gets logged in through this store today - a real multi-provider
       // listing would need secrets.ts to support prefix-scanning, which it doesn't. Add if a
       // second OAuth provider is ever wired up.
       const raw = secretStore.getSecret(db, `${OAUTH_REF_PREFIX}openai-codex`);
@@ -51,7 +51,7 @@ export function createCodexCredentialStore(db: Database, secretStore: SecretStor
       });
     },
     async delete(_providerId: string, _options?: AuthOperationOptions) {
-      // Not needed yet — no logout UX this slice. secrets.ts has no delete either.
+      // Not needed yet - no logout UX this slice. secrets.ts has no delete either.
     },
   };
 }

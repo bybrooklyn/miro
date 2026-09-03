@@ -2,7 +2,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-// Part of `miro setup`'s discovery step (plan §10) — this runs on the user's own machine to find
+// Part of `miro setup`'s discovery step (plan §10) - this runs on the user's own machine to find
 // candidate servers via their SSH config, before mirod exists anywhere. Not a mirod agent tool:
 // mirod runs on the target server diagnosing itself, this runs on the client finding one.
 

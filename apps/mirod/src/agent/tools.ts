@@ -12,11 +12,11 @@ import { detectGpus } from "../inventory/gpu";
 
 function textResult(details: unknown): AgentToolResult<unknown> {
   // details ?? null: JSON.stringify(undefined) returns the value undefined (not a string),
-  // producing a malformed {text: undefined} block — see agent/extension-tools.ts's textResult.
+  // producing a malformed {text: undefined} block - see agent/extension-tools.ts's textResult.
   return { content: [{ type: "text", text: JSON.stringify(details ?? null, null, 2) }], details };
 }
 
-// Schemas are named so `execute` can reference `Static<typeof schema>` explicitly — TS can't
+// Schemas are named so `execute` can reference `Static<typeof schema>` explicitly - TS can't
 // infer a sibling property's type from another property within the same object literal.
 const containerIdParams = Type.Object({ id: Type.String({ description: "Container id or name" }) });
 const containerLogsParams = Type.Object({
@@ -29,7 +29,7 @@ const serviceLogsParams = Type.Object({
   lines: Type.Optional(Type.Number({ description: "Number of lines from the end (default 100)" })),
 });
 const fsIndexParams = Type.Object({ root: Type.String({ description: "Absolute directory path to scan" }) });
-// Plain JSON Schema enum, not Type.Union of literals — the anyOf-of-const shape made a real
+// Plain JSON Schema enum, not Type.Union of literals - the anyOf-of-const shape made a real
 // tool-calling model fail to produce valid calls at all (found live, Stage C slice 1; AGENTS.md).
 const fsQueryParams = Type.Object({
   class: Type.Unsafe<"media" | "config" | "code" | "archive" | "other">({
@@ -40,8 +40,8 @@ const fsQueryParams = Type.Object({
 });
 
 // Read-only Stage 1/2 tool set. Mutating tool groups (operation_*, update_*, backup_*, ...) are
-// Stage 3+ (Safe action) — not built yet, so not exposed to the model. Tool names use underscores,
-// not dots — OpenAI's Responses API rejects names outside ^[a-zA-Z0-9_-]+$ (found live testing
+// Stage 3+ (Safe action) - not built yet, so not exposed to the model. Tool names use underscores,
+// not dots - OpenAI's Responses API rejects names outside ^[a-zA-Z0-9_-]+$ (found live testing
 // Codex integration; Ollama's more lenient endpoint never caught it).
 export const AGENT_TOOLS = [
   {
@@ -126,7 +126,7 @@ export const AGENT_TOOLS = [
     name: "filesystem_index",
     label: "Index filesystem",
     description:
-      "Scan a directory tree and record what's there (path, size, mtime, semantic class: media/config/code/archive/other). Bounded depth and entry count — for a targeted root, not a whole disk crawl.",
+      "Scan a directory tree and record what's there (path, size, mtime, semantic class: media/config/code/archive/other). Bounded depth and entry count - for a targeted root, not a whole disk crawl.",
     parameters: fsIndexParams,
     execute: async (_id: string, params: Static<typeof fsIndexParams>) =>
       textResult({ indexed: indexRootOnDisk(params.root) }),

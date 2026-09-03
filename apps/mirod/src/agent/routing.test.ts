@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { pickDefaultModel } from "./index";
 
-// Uses the real, live model catalog (no faux provider needed — this never makes a network call,
+// Uses the real, live model catalog (no faux provider needed - this never makes a network call,
 // it's pure lookup + cost comparison over builtinModels()'s registered data).
 const models = builtinModels();
 
@@ -18,7 +18,7 @@ test("cheapest picks the lowest combined input+output cost across every connecte
   const model = pickDefaultModel(models, connectedTo("anthropic", "openai"), "cheapest");
   expect(model).not.toBeNull();
   // Whichever model wins, it must be at least as cheap as every other tool-capable model on both
-  // connected providers — not just the cheapest *within* one provider.
+  // connected providers - not just the cheapest *within* one provider.
   const allCandidates = [...(models.getModels("anthropic") ?? []), ...(models.getModels("openai") ?? [])].filter(
     (m) => m.cost,
   );
@@ -34,7 +34,7 @@ test("best picks the highest combined cost among connected providers", () => {
 });
 
 test("only considers providers that are actually connected", () => {
-  // OpenAI has models cheaper than anything on Anthropic (e.g. gpt-5-nano) — if routing ignored
+  // OpenAI has models cheaper than anything on Anthropic (e.g. gpt-5-nano) - if routing ignored
   // the connected-provider filter, this would silently pick an OpenAI model with no key for it.
   const model = pickDefaultModel(models, connectedTo("anthropic"), "cheapest")!;
   expect(model.provider).toBe("anthropic");

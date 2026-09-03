@@ -31,7 +31,7 @@ test("an operation binding is plain data the daemon can run", () => {
   };
   const bound = op.bind({ name: "jellyfin" });
   expect(bound.kind).toBe("http_mutation");
-  expect(JSON.parse(JSON.stringify(bound))).toEqual(bound); // serialisable — it crosses the host RPC
+  expect(JSON.parse(JSON.stringify(bound))).toEqual(bound); // serialisable - it crosses the host RPC
   const ctxShape: (keyof ExtensionContext)[] = ["http", "browser", "secrets", "exec", "readFile"];
   expect(ctxShape.length).toBe(5);
 });

@@ -4,14 +4,14 @@ import { MIRO_DIR } from "@miro/protocol";
 import { run } from "../inventory/exec";
 
 // Pre-apply snapshots for generic operations (PLAN.md §5.7: "a destructive operation on data
-// snapshots before applying — that is the engine's captureState phase, so this is policy on
+// snapshots before applying - that is the engine's captureState phase, so this is policy on
 // kinds, not new machinery"). shell_command captures its declared writable roots here before
 // running anything, so rollback can restore them byte-for-byte on top of whatever undo command
 // the model supplied.
 
 export const SNAPSHOT_DIR = join(MIRO_DIR, "snapshots");
 // ponytail: a single size cap, no incremental/dedup. Above it the roots are recorded as skipped
-// and rollback relies on the model's own rollback command — the plan says which. Raise or replace
+// and rollback relies on the model's own rollback command - the plan says which. Raise or replace
 // with a smarter strategy (rsync --link-dest, overlay) when a real operation needs to snapshot
 // something big like /var/lib/docker.
 export const SNAPSHOT_MAX_BYTES = 64 * 1024 * 1024;

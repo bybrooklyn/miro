@@ -22,7 +22,7 @@ export function parseSystemctlList(output: string): ServiceInfo[] {
 
 export async function listServices(): Promise<{ available: boolean; services: ServiceInfo[] }> {
   if (!(await commandExists("systemctl"))) return { available: false, services: [] };
-  // "present but not usable" (systemd not the init, dbus down) throws — degrade like the container
+  // "present but not usable" (systemd not the init, dbus down) throws - degrade like the container
   // and tailscale readers do, rather than trap the next direct caller (audit H6).
   try {
     const output = await run("systemctl", ["list-units", "--type=service", "--all", "--no-legend", "--plain"]);
@@ -32,7 +32,7 @@ export async function listServices(): Promise<{ available: boolean; services: Se
   }
 }
 
-/** Single-unit read for a specific service's active state — used by the operation engine
+/** Single-unit read for a specific service's active state - used by the operation engine
  * (apps/mirod/src/operations/kinds/systemd-restart.ts) to capture/verify one unit without
  * re-listing every service on the machine. */
 export async function getServiceState(unit: string): Promise<{ active: boolean; activeState: string }> {

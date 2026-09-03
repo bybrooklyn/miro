@@ -8,7 +8,7 @@ import { shellCommandKind } from "../operations/kinds/shell-command";
 import { fileWriteKind } from "../operations/kinds/file-write";
 
 // Extension validation (plan §35). Static checks (typecheck, forbidden-import scan) run here, in
-// the main daemon process — nothing generated is executed, so there's no isolation concern, and
+// the main daemon process - nothing generated is executed, so there's no isolation concern, and
 // it's faster with no subprocess spin-up. Execution checks (tests, live probe) run inside the
 // extension-host subprocess via ExtensionHostManager, under the same isolation boundary they'll
 // actually run under at real runtime.
@@ -36,11 +36,11 @@ export function typecheckExtension(dir: string): string[] {
     // Quote the offending line: the retry has to fix it without seeing the file (the staging dir
     // is discarded on failure), and "',' expected" alone cost two attempts in a live run.
     const text = d.file.text.split("\n")[line]?.trim().slice(0, 160) ?? "";
-    return `${d.file.fileName}:${line + 1}: ${ts.flattenDiagnosticMessageText(d.messageText, "\n")} — in: ${text}`;
+    return `${d.file.fileName}:${line + 1}: ${ts.flattenDiagnosticMessageText(d.messageText, "\n")} - in: ${text}`;
   });
 }
 
-// Allowlist, not denylist — deliberately (plan's own instruction: this is a real security
+// Allowlist, not denylist - deliberately (plan's own instruction: this is a real security
 // boundary, don't be lazy with a regex/denylist that has to anticipate every future dangerous
 // import). Only @miro/sdk and same-directory relative imports are permitted; everything else
 // (node:child_process, bun:sqlite, an npm package that isn't @miro/sdk, ...) is denied by default.
@@ -72,7 +72,7 @@ export function scanForbiddenImports(dir: string): string[] {
   return violations;
 }
 
-// Exported for extensions/repair.ts's periodic re-probe — same "no-arg diagnostics only" scope
+// Exported for extensions/repair.ts's periodic re-probe - same "no-arg diagnostics only" scope
 // limit the live-probe validation check already uses.
 export function requiresArguments(parameters: unknown): boolean {
   const schema = parameters as { required?: string[] } | undefined;
@@ -85,7 +85,7 @@ export function requiresArguments(parameters: unknown): boolean {
 // Pure and unit-tested (validate.test.ts).
 
 const HINTS: { match: RegExp; fix: string }[] = [
-  { match: /http\s*\.\s*(post|put|patch|delete)|\.(post|put|patch|delete)\s*\(/i, fix: "ctx.http is GET-only. A write is an entry with `bind(args)` returning a { kind: \"http_mutation\", method, url, ... } binding — the daemon runs it through its engine. Never fetch a write from code." },
+  { match: /http\s*\.\s*(post|put|patch|delete)|\.(post|put|patch|delete)\s*\(/i, fix: "ctx.http is GET-only. A write is an entry with `bind(args)` returning a { kind: \"http_mutation\", method, url, ... } binding - the daemon runs it through its engine. Never fetch a write from code." },
   { match: /forbidden import/i, fix: "Only \"@miro/sdk\" and same-directory relative imports are allowed. Delete the import; use ctx.http / ctx.exec / ctx.readFile / ctx.secrets instead." },
   { match: /must be \"object\"|is not an object schema|is not a schema|non-object properties/i, fix: "For a declarative `read`, OMIT `parameters` (it is derived from the {placeholders} in read.path). For a `code` entry, write a real schema: Type.Object({ field: Type.String() }) from \"@miro/sdk\"." },
   { match: /no extension\.ts found/i, fix: "Call extension_write with a single `extensionTs` that does `export default { auth?, entries } satisfies ExtensionModule` (import type ExtensionModule from \"@miro/sdk\")." },
@@ -104,7 +104,7 @@ export function annotateFailures(failures: string[]): string[] {
 export interface ValidationResult {
   ok: boolean;
   failures: string[];
-  /** Populated once the live-probe step successfully lists tools — reused by extensions/learn.ts
+  /** Populated once the live-probe step successfully lists tools - reused by extensions/learn.ts
    * to build the manifest without a second, redundant listTools round-trip. */
   tools?: HostToolSpec[];
 }
@@ -123,7 +123,7 @@ export async function validateExtension(
   // The one hard ordering dependency: never RUN code that doesn't compile or violates the import
   // allowlist. Everything past here is independent and aggregated, so one attempt surfaces every
   // remaining problem at once instead of one class per attempt (audit X1). tests.ts is no longer
-  // generated or run — the live probe and dry-run below test the real code against the real kinds,
+  // generated or run - the live probe and dry-run below test the real code against the real kinds,
   // which is stronger and matches the no-mocks house rule (audit X4).
   if (failures.length > 0) return { ok: false, failures: annotateFailures(failures) };
 
@@ -137,10 +137,10 @@ export async function validateExtension(
 
   // Every spec's `parameters` becomes a tool schema the main agent calls with. A generated
   // `parameters: { name: "string" }` (not a schema) would make the provider reject the whole tool
-  // list at the next chat turn — found in a real learn run.
+  // list at the next chat turn - found in a real learn run.
   for (const spec of tools) {
     const failure = invalidSchema(spec.parameters);
-    if (failure) failures.push(`${spec.kind} ${spec.name}: parameters ${failure} — use Type.Object({ ... }) from "@miro/sdk"`);
+    if (failure) failures.push(`${spec.kind} ${spec.name}: parameters ${failure} - use Type.Object({ ... }) from "@miro/sdk"`);
   }
 
   // A no-arg diagnostic with a valid schema is probed live; a bad-schema tool is skipped here (its
@@ -156,7 +156,7 @@ export async function validateExtension(
 
   // Operation bindings never execute at validation time, but their bound params are dry-run through
   // the real kind's describe(): the classifier refuses a forbidden command, the URL guard refuses a
-  // public host, a literal credential header is refused — at learn time, not in front of the user.
+  // public host, a literal credential header is refused - at learn time, not in front of the user.
   for (const op of tools.filter((t) => t.kind === "operation")) {
     if (requiresArguments(op.parameters) || invalidSchema(op.parameters)) continue;
     try {
@@ -177,7 +177,7 @@ export function invalidSchema(parameters: unknown): string | null {
   if (parameters === null || typeof parameters !== "object" || Array.isArray(parameters)) return "is not an object schema";
   const p = parameters as Record<string, unknown>;
   if (Object.keys(p).length === 0) return null;
-  if (p.type !== "object") return `has type ${JSON.stringify(p.type)} — must be "object"`;
+  if (p.type !== "object") return `has type ${JSON.stringify(p.type)} - must be "object"`;
   if (p.properties !== undefined && (typeof p.properties !== "object" || p.properties === null)) return "has a non-object properties field";
   for (const [name, prop] of Object.entries((p.properties ?? {}) as Record<string, unknown>)) {
     if (prop === null || typeof prop !== "object" || Array.isArray(prop)) return `property ${name} is not a schema (got ${JSON.stringify(prop)})`;
@@ -186,7 +186,7 @@ export function invalidSchema(parameters: unknown): string | null {
 }
 
 /** A binding's URLs may be app-relative ("/Startup/User"), exactly like a generated tool's
- * ctx.http.get — resolved against the extension's baseUrl here, before the kind ever sees
+ * ctx.http.get - resolved against the extension's baseUrl here, before the kind ever sees
  * them. Found live: every absolute-URL refusal in a learn run was a relative path the model
  * had every reason to write. */
 export function resolveBindingUrls<T extends Record<string, unknown>>(bound: T, baseUrl: string): T {

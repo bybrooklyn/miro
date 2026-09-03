@@ -10,7 +10,7 @@ const REQUEST_TIMEOUT_MS = 120_000;
 const BROWSER_TIMEOUT_MS = 60_000;
 
 /** The unprivileged user the extension host runs as when the daemon itself is root. Unset (and
- * unused) for an unprivileged dev daemon. ponytail: MIRO_HOST_USER env, default "miro" — the
+ * unused) for an unprivileged dev daemon. ponytail: MIRO_HOST_USER env, default "miro" - the
  * installer creates that user; no lookup of "some other unprivileged account". */
 const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
 const HOST_USER = isRoot ? (process.env.MIRO_HOST_USER ?? "miro") : null;
@@ -29,11 +29,11 @@ export interface ExtensionHostManager {
   call(dir: string, app: string, baseUrl: string, secrets: Record<string, string>, tool: string, args: unknown): Promise<unknown>;
   /** Resolves an operation binding's params for these args (pure, nothing executes in the host). */
   bind(dir: string, app: string, baseUrl: string, secrets: Record<string, string>, tool: string, args: unknown): Promise<unknown>;
-  /** Mechanically derives the manifest's tool specs — spawns a fresh init-mode session. */
+  /** Mechanically derives the manifest's tool specs - spawns a fresh init-mode session. */
   listTools(dir: string, app: string, baseUrl: string, secrets: Record<string, string>): Promise<HostToolSpec[]>;
   /** Drops the live session for `dir` so the next call loads freshly promoted code. */
   invalidate(dir: string): void;
-  /** Browser-automation bridge for the learning agent — keyed by app, not dir (no generated code involved). */
+  /** Browser-automation bridge for the learning agent - keyed by app, not dir (no generated code involved). */
   browserCall(app: string, tool: string, args: unknown): Promise<unknown>;
   closeBrowserSession(app: string): void;
   reapIdle(): void;
@@ -69,7 +69,7 @@ export function createExtensionHostManager(): ExtensionHostManager {
     });
     (async () => {
       // bun-types' ReadableStream doesn't declare Symbol.asyncIterator (even though Bun's
-      // runtime supports `for await` over it) — a manual reader loop is fully type-safe either way.
+      // runtime supports `for await` over it) - a manual reader loop is fully type-safe either way.
       const reader = (session.proc.stdout as ReadableStream<Uint8Array>).getReader();
       for (;;) {
         const { done, value } = await reader.read();
@@ -86,14 +86,14 @@ export function createExtensionHostManager(): ExtensionHostManager {
     const proc = Bun.spawn({
       // When the daemon is root (the production privilege model, PLAN.md §5.5), the host drops to
       // an unprivileged user: Chromium refuses to run as root without disabling its own sandbox
-      // (found live — "Chrome process closed the pipe"), and generated read-code has no business
+      // (found live - "Chrome process closed the pipe"), and generated read-code has no business
       // running as root either. setpriv is util-linux, present on every Debian.
       cmd: HOST_USER ? ["setpriv", `--reuid=${HOST_USER}`, `--regid=${HOST_USER}`, "--init-groups", "--", bun, "run", HOST_ENTRY] : [bun, "run", HOST_ENTRY],
       cwd: dir,
       stdin: "pipe",
       stdout: "pipe",
       stderr: "inherit",
-      // Scrubbed — never the daemon's full env, which can carry provider API keys (see
+      // Scrubbed - never the daemon's full env, which can carry provider API keys (see
       // agent/index.ts's PROVIDER_CATALOG envVar fallbacks).
       env: { PATH: process.env.PATH ?? "", HOME: HOST_USER ? HOST_HOME : (process.env.HOME ?? "") },
     });
@@ -108,7 +108,7 @@ export function createExtensionHostManager(): ExtensionHostManager {
     (session.proc.stdin as any).flush?.();
   }
 
-  // Races against the process actually exiting — a subprocess that fails during init (a
+  // Races against the process actually exiting - a subprocess that fails during init (a
   // generated file that can't even be imported) exits without ever sending "ready" (host-entry.ts
   // exits deliberately on any init-time error); without this race, awaiting readiness would hang
   // forever instead of surfacing the real failure. Found live via an isolated RPC smoke test.
@@ -117,7 +117,7 @@ export function createExtensionHostManager(): ExtensionHostManager {
     return Promise.race([
       new Promise<void>((resolve) => session.readyWaiters.push(resolve)),
       session.proc.exited.then(() => {
-        throw new Error("extension-host process exited before it became ready — check its logs");
+        throw new Error("extension-host process exited before it became ready - check its logs");
       }),
     ]);
   }
@@ -155,7 +155,7 @@ export function createExtensionHostManager(): ExtensionHostManager {
       session.pending.set(req.id, { resolve, reject });
       writeLine(session, req);
     });
-    // A call that never answers (a browser navigate that hangs on a SPA — found in acceptance run
+    // A call that never answers (a browser navigate that hangs on a SPA - found in acceptance run
     // #3, where one browser_open stalled the learning agent and with it the whole chat turn) must
     // fail like any other tool error so the agent can move on.
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -170,7 +170,7 @@ export function createExtensionHostManager(): ExtensionHostManager {
         pending,
         timeout,
         session.proc.exited.then(() => {
-          throw new Error("extension-host process exited before responding — check its logs");
+          throw new Error("extension-host process exited before responding - check its logs");
         }),
       ]);
     } finally {
@@ -201,7 +201,7 @@ export function createExtensionHostManager(): ExtensionHostManager {
     },
     async listTools(dir, app, baseUrl, secrets) {
       const key = `${dir}:list`;
-      const session = spawn(key, dir); // always fresh — this is a one-shot introspection, not a reused session
+      const session = spawn(key, dir); // always fresh - this is a one-shot introspection, not a reused session
       writeLine(session, { type: "init", app, baseUrl, secrets });
       await waitReady(session);
       const res = await request(session, { type: "list_tools", id: nextId() });
@@ -213,7 +213,7 @@ export function createExtensionHostManager(): ExtensionHostManager {
     async browserCall(app, tool, args) {
       const key = `learn:${app}`;
       // learn_init mode never dynamically imports anything from cwd, so any valid directory
-      // works here — the daemon's own cwd is just a convenient always-existent default.
+      // works here - the daemon's own cwd is just a convenient always-existent default.
       const session = await getSession(key, process.cwd(), { type: "learn_init", app });
       const res = await request(session, { type: "call", id: nextId(), tool, args }, BROWSER_TIMEOUT_MS);
       if (res.type !== "result") throw new Error(`unexpected response type: ${res.type}`);

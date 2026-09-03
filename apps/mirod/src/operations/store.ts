@@ -99,7 +99,7 @@ export function setPlan(db: Database, id: string, planJson: string, autoApprove:
 
 /** The one transition that matters for crash safety: captured_state, rollback, and phase='applying'
  * all land in a single atomic UPDATE, so phase='capturing' on disk always means nothing was
- * captured yet — reconciliation never has to guess about a partial capture. */
+ * captured yet - reconciliation never has to guess about a partial capture. */
 export function setCapturedAndApplying(db: Database, id: string, capturedStateJson: string, rollbackJson: string): void {
   db.run(`UPDATE operations SET captured_state = ?, rollback = ?, phase = 'applying', updated_at = ? WHERE id = ?`, [
     capturedStateJson,
@@ -129,7 +129,7 @@ export function countByKindAndPhase(db: Database, kind: string, phase: Operation
   return row.n;
 }
 
-/** Auto-approved (unattended) operations created since `sinceMs` — the input to the engine's
+/** Auto-approved (unattended) operations created since `sinceMs` - the input to the engine's
  * blast-radius rate limit. An auto-approved op has no cancel path, so every row counts as one
  * that ran with no human in the loop. */
 export function countAutoApprovedSince(db: Database, sinceMs: number): number {
@@ -137,7 +137,7 @@ export function countAutoApprovedSince(db: Database, sinceMs: number): number {
   return row.n;
 }
 
-/** When the last REAL rollback happened — a change was made and then undone. A user cancellation
+/** When the last REAL rollback happened - a change was made and then undone. A user cancellation
  * and a crash-interruption before any change both land in phase 'rolledback' but touched nothing,
  * so they never count. null if there has been none. */
 export function lastRollbackAt(db: Database): number | null {

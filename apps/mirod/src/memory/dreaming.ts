@@ -7,14 +7,14 @@ import type { ReflectionTrigger } from "../operations/engine";
 
 // Reflexion-shaped background reflection (plan §36-37): a narrow, budgeted LLM call that decides
 // whether a real event (a repeated-failure pattern, a user correction) reveals a durable fact worth
-// remembering. Deliberately NOT fired on every operation — the mechanical write in
+// remembering. Deliberately NOT fired on every operation - the mechanical write in
 // operations/engine.ts already covers "log what happened" for free; this is only for when a pattern
 // justifies the extra cost.
 
 const WRITABLE_CATEGORIES = new Set<string>(WRITABLE_MEMORY_CATEGORIES);
 
 const INSTRUCTIONS = `Review the event below and decide if it reveals a durable fact worth remembering about
-this user or their server — a preference, a server fact, or a pattern. Most events reveal nothing new; it's
+this user or their server - a preference, a server fact, or a pattern. Most events reveal nothing new; it's
 correct to remember nothing. Respond with ONLY a JSON object, no other text:
 {"remember": [{"category": "preference"|"server_fact"|"incident", "key": "short_stable_slug", "value": "one sentence"}]}
 Use an empty array if there's nothing worth keeping. Keep "key" stable and generic (e.g. "reply_style",
@@ -28,10 +28,10 @@ export function parseRememberJson(text: string): { category: string; key: string
     const match = text.match(/\{[\s\S]*\}/);
     const obj = match ? JSON.parse(match[0]) : null;
     return Array.isArray(obj?.remember) ? obj.remember : [];
-    // ponytail: no schema validation beyond the shape check below — a malformed field just gets
+    // ponytail: no schema validation beyond the shape check below - a malformed field just gets
     // skipped per-item rather than failing the whole reflection.
   } catch {
-    return []; // best-effort backstop — a parse failure is a silent no-op, not an error path
+    return []; // best-effort backstop - a parse failure is a silent no-op, not an error path
   }
 }
 
@@ -61,7 +61,7 @@ Goal: ${trigger.goal}
 Kind: ${trigger.kind}
 Outcome: ${trigger.outcome}
 Detail: ${trigger.message}
-This is the ${trigger.repeatFailureCount}th time a ${trigger.kind} operation has failed — this may be a pattern worth flagging.`;
+This is the ${trigger.repeatFailureCount}th time a ${trigger.kind} operation has failed - this may be a pattern worth flagging.`;
   await runReflection(db, models, model, getStoredKey, context);
 }
 
@@ -88,7 +88,7 @@ const CORRECTION_PATTERNS = [
   /\bdon'?t do that\b/i,
 ];
 
-// ponytail: naive keyword/regex heuristic, no real NLU — upgrade to a real classifier if
+// ponytail: naive keyword/regex heuristic, no real NLU - upgrade to a real classifier if
 // false-positive rate matters.
 export function isLikelyCorrection(text: string): boolean {
   return CORRECTION_PATTERNS.some((re) => re.test(text.trim()));

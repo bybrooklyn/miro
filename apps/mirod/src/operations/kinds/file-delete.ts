@@ -8,7 +8,7 @@ import { realTarget } from "./file-write";
 
 // The only way anything gets deleted (PLAN.md §5.7): a move into Miro's trash, recoverable, with
 // rollback being the move back. The destination is computed in captureState and carried in the
-// captured state, so rollback needs nothing but what the engine already persists — a crash between
+// captured state, so rollback needs nothing but what the engine already persists - a crash between
 // apply and commit reconciles cleanly at boot from the operations table alone.
 
 export interface FileDeleteParams {
@@ -44,7 +44,7 @@ export const fileDeleteKind: OperationKind<FileDeleteParams, FileDeleteCaptured>
       network: false,
       warning: lifeline ? "this path can affect SSH, networking, or Miro itself" : "recoverable from Miro's trash",
       expects: `${p.path} is gone from its path and present in Miro's trash`,
-      rollbackWhen: "verify fails or the move throws — restored from the trash",
+      rollbackWhen: "verify fails or the move throws - restored from the trash",
       scopeEvidence: "the path's parent directory and the trash directory, nothing else",
       dryRunFidelity: "exact",
       details: { path: p.path, type: st.isDirectory() ? "directory" : "file", bytes: sizeOf(p.path) },

@@ -3,10 +3,10 @@ import { extname, join } from "node:path";
 import { Database } from "bun:sqlite";
 import { DB_PATH } from "@miro/protocol";
 
-// Scoped filesystem index (plan §22) — enough to answer "what's on this disk", not the full
+// Scoped filesystem index (plan §22) - enough to answer "what's on this disk", not the full
 // event-driven/dirty-shutdown-recovery index the plan eventually wants. ponytail: bounded
 // depth/entry walk with a fixed denylist and extension-based classifier, both heuristics with a
-// known ceiling — upgrade to real per-app semantic relationships (§23) if this misclassifies often.
+// known ceiling - upgrade to real per-app semantic relationships (§23) if this misclassifies often.
 
 export type SemanticClass = "media" | "config" | "code" | "archive" | "other";
 
@@ -126,7 +126,7 @@ export function queryByClass(db: Database, semanticClass: SemanticClass, limit =
   }));
 }
 
-// SQLite supports multiple connections to the same file from one process — this is its own
+// SQLite supports multiple connections to the same file from one process - this is its own
 // connection to mirod's real DB, kept lazy so importing this module never touches disk at rest
 // (tests never hit it; they pass their own :memory:/temp db to the functions above).
 let sharedDb: Database | null = null;

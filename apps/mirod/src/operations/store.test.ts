@@ -35,7 +35,7 @@ test("setPlan moves to awaiting_confirmation and stores auto_approve", () => {
   expect(op?.plan).toContain("restart x");
 });
 
-test("setCapturedAndApplying is one atomic transition — capturing never partially persists", () => {
+test("setCapturedAndApplying is one atomic transition - capturing never partially persists", () => {
   const db = freshDb();
   createOperation(db, "op1", "systemd.restart", "restart x", "{}");
   setCapturedAndApplying(db, "op1", JSON.stringify({ active: true }), JSON.stringify({ active: true }));

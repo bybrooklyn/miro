@@ -18,7 +18,7 @@ const PHASE_LABEL: Record<Phase, string> = {
 
 const str = (v: unknown) => (typeof v === "string" ? v : undefined);
 
-/** The diff is drawn by a real <diff>, whose sides are laid out at height 100% — so it needs an
+/** The diff is drawn by a real <diff>, whose sides are laid out at height 100% - so it needs an
  * explicit height or it collapses to nothing. Count the hunk body lines and cap the card.
  * ponytail: fixed cap, no expand affordance; add one if long diffs turn out to matter. */
 function diffHeight(diff: string): number {

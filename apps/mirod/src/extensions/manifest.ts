@@ -10,12 +10,12 @@ export interface ExtensionManifest {
   displayName: string;
   baseUrl: string;
   secrets: ExtensionSecretDecl[];
-  // Mechanically derived from the live host's list_tools RPC, never hand-typed by the model —
+  // Mechanically derived from the live host's list_tools RPC, never hand-typed by the model -
   // the direct lesson from Stage C slice 1's live-found Type.Union-of-Literal schema bug: one
   // source of truth, derived once, never hand-duplicated.
   tools: HostToolSpec[];
   diagnostics: HostToolSpec[];
-  /** Declarative write bindings (PLAN.md §5.5 decision 2) — run by the daemon's engine. Absent
+  /** Declarative write bindings (PLAN.md §5.5 decision 2) - run by the daemon's engine. Absent
    * on extensions promoted before operations existed; readers treat it as []. */
   operations?: HostToolSpec[];
   version: number;

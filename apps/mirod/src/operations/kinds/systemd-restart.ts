@@ -36,7 +36,7 @@ export const systemdRestartKind: OperationKind<Params, Captured> = {
       warning: lifeline ? "restarting this can drop your connection" : undefined,
       details: { unit, currentState: state.activeState },
       expects: `${unit} is active after the restart`,
-      rollbackWhen: "the unit is not active afterwards — its previous state is restored",
+      rollbackWhen: "the unit is not active afterwards - its previous state is restored",
       scopeEvidence: "systemd's runtime directories only; no files change",
       dryRunFidelity: "exact",
     };

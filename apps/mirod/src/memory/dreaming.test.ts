@@ -1,7 +1,7 @@
 import { test, expect } from "bun:test";
 import { isLikelyCorrection, parseRememberJson } from "./dreaming";
 
-// The LLM call itself isn't unit-tested here — same established boundary as worker.test.ts not
+// The LLM call itself isn't unit-tested here - same established boundary as worker.test.ts not
 // testing spawnWorker's real streaming (it hardcodes builtinModels() internally, needs a real key).
 
 test("isLikelyCorrection matches common correction phrasings", () => {

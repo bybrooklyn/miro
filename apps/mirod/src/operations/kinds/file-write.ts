@@ -7,7 +7,7 @@ import { unifiedDiff } from "../diff";
 
 // Writing a whole file as a tracked operation. The full new content is in the plan the user sees
 // (alongside the current content, so the change is reviewable), the previous content is captured,
-// verify is a read-back, and rollback restores the previous content — or, for a file this
+// verify is a read-back, and rollback restores the previous content - or, for a file this
 // operation created, moves it to the trash rather than deleting it.
 
 export interface FileWriteParams {
@@ -23,7 +23,7 @@ export interface FileWriteCaptured {
   mode: number | null;
 }
 
-/** The path with symlinks resolved — the file itself if it exists, else its nearest existing
+/** The path with symlinks resolved - the file itself if it exists, else its nearest existing
  * ancestor plus the remainder. */
 export function realTarget(path: string): string {
   if (existsSync(path)) {
@@ -71,7 +71,7 @@ export const fileWriteKind: OperationKind<FileWriteParams, FileWriteCaptured> = 
       network: false,
       warning: lifeline ? "this file can affect SSH, networking, or Miro itself" : undefined,
       expects: `${p.path} contains exactly the proposed content`,
-      rollbackWhen: existed ? "verify fails or the write throws — the previous content is restored" : "verify fails or the write throws — the new file is removed",
+      rollbackWhen: existed ? "verify fails or the write throws - the previous content is restored" : "verify fails or the write throws - the new file is removed",
       scopeEvidence: `the target's real parent directory (${dirname(real)})`,
       dryRunFidelity: "exact",
       details: {

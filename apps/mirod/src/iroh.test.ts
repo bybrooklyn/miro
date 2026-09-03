@@ -5,9 +5,9 @@ import { generateIrohSecretKey, startIrohEndpoint, ticketFor, acceptLoop } from 
 
 const { EndpointTicket } = irohPkg;
 
-// Real Iroh endpoints, no mocks — matches this repo's convention (see reachability.test.ts).
+// Real Iroh endpoints, no mocks - matches this repo's convention (see reachability.test.ts).
 // Same-process/same-machine only proves the ticket/ALPN/wire-protocol glue is correct, not real
-// NAT/relay traversal — that needs tools/dev-vm/ as a genuinely separate network endpoint.
+// NAT/relay traversal - that needs tools/dev-vm/ as a genuinely separate network endpoint.
 test("a persistent Iroh connection survives multiple round trips", async () => {
   const server = await startIrohEndpoint(generateIrohSecretKey());
   const client = await startIrohEndpoint(generateIrohSecretKey());
@@ -28,7 +28,7 @@ test("a persistent Iroh connection survives multiple round trips", async () => {
   }).catch(() => {});
 
   // The client's 3rd ack only arrives after the server has already pushed its 3rd received
-  // message (the send happens after the push) — so awaiting this alone is enough synchronization.
+  // message (the send happens after the push) - so awaiting this alone is enough synchronization.
   const clientTurns = (async () => {
     const addr = EndpointTicket.fromString(ticket).endpointAddr();
     const conn = await client.connect(addr, alpnBytes(IROH_ALPN));

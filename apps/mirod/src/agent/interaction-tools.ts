@@ -5,8 +5,8 @@ import type { ServerEvent } from "@miro/protocol";
 // The two tools that make the outcome loop conversational without ending the turn (PLAN.md
 // §5.4 A): ask_user for the intent Miro genuinely cannot infer, and system_plan for the one
 // approval an experienced self-hoster wants before a multi-component change. Both ride on the
-// existing question/secret_prompt events and the connection's pending-answer map — the same
-// mechanism operation confirmations already use — so nothing new crosses the wire for answers.
+// existing question/secret_prompt events and the connection's pending-answer map - the same
+// mechanism operation confirmations already use - so nothing new crosses the wire for answers.
 
 function textResult(details: unknown): AgentToolResult<unknown> {
   return { content: [{ type: "text", text: JSON.stringify(details ?? null, null, 2) }], details };
@@ -15,7 +15,7 @@ function textResult(details: unknown): AgentToolResult<unknown> {
 export interface InteractionContext {
   send: (event: ServerEvent) => void;
   waitForAnswer: (id: string) => Promise<string>;
-  /** Called with each secret answer so it is stored by reference — the model never sees the value. */
+  /** Called with each secret answer so it is stored by reference - the model never sees the value. */
   setSecret: (ref: string, value: string) => void;
 }
 
@@ -23,9 +23,9 @@ const askUserParams = Type.Object({
   questions: Type.Array(
     Type.Object({
       key: Type.String({ description: "Short identifier for this answer in the result, e.g. media_types." }),
-      question: Type.String({ description: "The question, phrased around the user's intent — never around implementation you could decide yourself." }),
+      question: Type.String({ description: "The question, phrased around the user's intent - never around implementation you could decide yourself." }),
       options: Type.Optional(Type.Array(Type.Object({ label: Type.String(), value: Type.String() }), { description: "Choices, if the answer is one of a fixed set. Omit for free text." })),
-      secretRef: Type.Optional(Type.String({ description: "If this answer is a credential, the secret-store reference to save it under (e.g. extension.jellyfin.api_key). The value is stored, never returned to you — only the reference." })),
+      secretRef: Type.Optional(Type.String({ description: "If this answer is a credential, the secret-store reference to save it under (e.g. extension.jellyfin.api_key). The value is stored, never returned to you - only the reference." })),
     }),
     { minItems: 1, maxItems: 6, description: "Ask everything you need in one batch." },
   ),
@@ -33,7 +33,7 @@ const askUserParams = Type.Object({
 
 const systemPlanParams = Type.Object({
   title: Type.String({ description: "One line: the outcome this plan delivers." }),
-  findings: Type.Array(Type.String(), { description: "What you inspected and inferred — the evidence. Cite real tool results." }),
+  findings: Type.Array(Type.String(), { description: "What you inspected and inferred - the evidence. Cite real tool results." }),
   components: Type.Array(
     Type.Object({
       name: Type.String(),
@@ -42,7 +42,7 @@ const systemPlanParams = Type.Object({
     }),
   ),
   steps: Type.Array(Type.String(), { description: "Ordered steps you will take." }),
-  verification: Type.Array(Type.String(), { description: "How you will prove the whole system works — architecture checks, not 'the container started'." }),
+  verification: Type.Array(Type.String(), { description: "How you will prove the whole system works - architecture checks, not 'the container started'." }),
   notes: Type.Optional(Type.Array(Type.String(), { description: "Irreversible parts, credentials you will create, tradeoffs the user should know." })),
 });
 
@@ -65,14 +65,14 @@ export function buildInteractionTools(ctx: InteractionContext) {
       name: "credential_create",
       label: "Create credential",
       description:
-        "Generate a strong password or token for an app on this machine, store it under a secret reference, and show it to the user ONCE. You receive only the reference — never the value. Use this whenever an app needs a new password or API key (a first admin account, an API token); never ask the user to invent one.",
+        "Generate a strong password or token for an app on this machine, store it under a secret reference, and show it to the user ONCE. You receive only the reference - never the value. Use this whenever an app needs a new password or API key (a first admin account, an API token); never ask the user to invent one.",
       parameters: credentialCreateParams,
       execute: async (_id: string, params: Static<typeof credentialCreateParams>) => {
         const value = generateCredential(params.kind ?? "password");
         ctx.setSecret(params.ref, value);
         // The one place a secret value is ever sent to the client: the owner needs it to log in
         // themselves. It goes to the user's screen, not into the model's context.
-        ctx.send({ type: "notice", level: "credential", text: `Created ${params.purpose} — stored as ${params.ref}. Value (shown once, save it): ${value}` });
+        ctx.send({ type: "notice", level: "credential", text: `Created ${params.purpose} - stored as ${params.ref}. Value (shown once, save it): ${value}` });
         return textResult({ created: true, ref: params.ref, shownToUserOnce: true });
       },
     },
@@ -80,7 +80,7 @@ export function buildInteractionTools(ctx: InteractionContext) {
       name: "ask_user",
       label: "Ask the user",
       description:
-        "Ask the user one or more questions and wait for the answers, without ending your turn. Only for genuine intent (movies or TV? torrent or Usenet?), credentials Miro cannot obtain itself, tradeoffs that matter to them, or irreversible choices. Never for anything you could find by inspecting the machine — check first. Batch everything you need into one call.",
+        "Ask the user one or more questions and wait for the answers, without ending your turn. Only for genuine intent (movies or TV? torrent or Usenet?), credentials Miro cannot obtain itself, tradeoffs that matter to them, or irreversible choices. Never for anything you could find by inspecting the machine - check first. Batch everything you need into one call.",
       parameters: askUserParams,
       execute: async (_id: string, params: Static<typeof askUserParams>) => {
         const answers: Record<string, string> = {};
@@ -107,7 +107,7 @@ export function buildInteractionTools(ctx: InteractionContext) {
       name: "system_plan",
       label: "Propose plan",
       description:
-        "Show the user the architecture you intend to build — findings, components (reuse vs install), ordered steps, and how you will verify it — and wait for one approval. Required before any multi-component setup. After approval, routine operations proceed without re-asking; destructive, lifeline, or irreversible ones still confirm individually.",
+        "Show the user the architecture you intend to build - findings, components (reuse vs install), ordered steps, and how you will verify it - and wait for one approval. Required before any multi-component setup. After approval, routine operations proceed without re-asking; destructive, lifeline, or irreversible ones still confirm individually.",
       parameters: systemPlanParams,
       execute: async (_id: string, params: Static<typeof systemPlanParams>) => {
         const id = crypto.randomUUID();

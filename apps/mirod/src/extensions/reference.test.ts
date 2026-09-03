@@ -25,7 +25,7 @@ test("every reference entry is well-formed and derives a valid tool schema", asy
     validateEntry(entry); // throws if the entry shape is wrong
     expect(invalidSchema(entrySpec(entry).parameters)).toBeNull(); // derived or explicit schema is valid
   }
-  // The get_widget declarative read auto-derives {id} as a required string param — no hand-typed schema.
+  // The get_widget declarative read auto-derives {id} as a required string param - no hand-typed schema.
   expect(entrySpec(mod.entries.find((e) => e.name === "get_widget")!).parameters).toEqual({
     type: "object",
     properties: { id: { type: "string" } },

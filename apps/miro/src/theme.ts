@@ -1,4 +1,4 @@
-/** The one palette. Every colour in the TUI comes from here — no ad-hoc hex in a component.
+/** The one palette. Every colour in the TUI comes from here - no ad-hoc hex in a component.
  * Token names follow opencode's TUI theme (MIT) so the vocabulary is familiar; the values are
  * Miro's own: a low-contrast slate ground with a cool blue/violet accent family, tuned so the
  * status colours (success/warning/error) are the only saturated things on screen. */

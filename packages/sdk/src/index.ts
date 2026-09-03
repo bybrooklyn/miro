@@ -1,14 +1,14 @@
 import { Type, type Static } from "@earendil-works/pi-ai";
 
-// The API surface a generated extension (one file, extension.ts — PLAN.md §5.13) is allowed to
-// use — everything else is denied by extensions/validate.ts's forbidden-import allowlist scan.
+// The API surface a generated extension (one file, extension.ts - PLAN.md §5.13) is allowed to
+// use - everything else is denied by extensions/validate.ts's forbidden-import allowlist scan.
 // Deliberately read-only: HttpClient exposes only get(); writes are declarative bindings the daemon
 // runs through its engine. Most entries are declarative DATA (read/bind); `code` is the escape
 // hatch for a read that genuinely needs logic.
 
 export { Type, type Static };
 
-/** What ctx.http.get resolves to — the actual HTTP response, not a pre-parsed body. A non-2xx is
+/** What ctx.http.get resolves to - the actual HTTP response, not a pre-parsed body. A non-2xx is
  * returned (never thrown), so a health check can read `status` directly; `json()` parses `body`. */
 export interface HttpResponse {
   status: number;
@@ -30,7 +30,7 @@ function response(status: number, body: string): HttpResponse {
   return { status, ok: status >= 200 && status < 300, body, json: <T,>() => JSON.parse(body) as T };
 }
 
-/** Real client — used by extensions/host-entry.ts's `init`/`learn_init` modes. Per-call headers
+/** Real client - used by extensions/host-entry.ts's `init`/`learn_init` modes. Per-call headers
  * merge over the client's fixed auth headers. */
 export function createHttpClient(baseUrl: string, headers: Record<string, string>): HttpClient {
   return {
@@ -41,7 +41,7 @@ export function createHttpClient(baseUrl: string, headers: Record<string, string
   };
 }
 
-/** Fixture-based fake client — deterministic, no real network. A fixture value is the response body
+/** Fixture-based fake client - deterministic, no real network. A fixture value is the response body
  * (an object is JSON-encoded, a string used verbatim); wrap it as `{ status, body }` to fix a
  * non-200. Exact-path match only (query string ignored). Used by unit tests and, from slice 2, to
  * replay a captured trace against a declarative read as its own canary (PLAN.md §5.13). */
@@ -74,7 +74,7 @@ export interface ReadResult {
 }
 
 /** Implemented only inside extensions/host-entry.ts (needs Bun.WebView, which only exists in the
- * extension-host process) — this package declares the shape, not the implementation. */
+ * extension-host process) - this package declares the shape, not the implementation. */
 export interface BrowserSession {
   open(url: string): Promise<void>;
   snapshot(): Promise<SnapshotNode[]>;
@@ -92,7 +92,7 @@ export interface ExtensionTool<P = any> {
   /** Human label for the UI; defaults to `name` when omitted (generated code rarely sets it). */
   label?: string;
   description: string;
-  parameters: unknown; // a TSchema (Type.Object(...)) — kept as unknown here to avoid a hard TypeBox type dependency in generated code's own signatures
+  parameters: unknown; // a TSchema (Type.Object(...)) - kept as unknown here to avoid a hard TypeBox type dependency in generated code's own signatures
   execute: (args: P) => Promise<unknown>;
 }
 
@@ -104,7 +104,7 @@ export interface ExecResult {
 
 /** Handed to a generated extension's `code`/`bind` entry functions (PLAN.md §5.13). Everything here
  * is read-only: writes exist only as operation bindings, which the daemon runs through its engine
- * (confirmation, sandbox, verification, rollback). Declarative `read` entries never see it — the
+ * (confirmation, sandbox, verification, rollback). Declarative `read` entries never see it - the
  * daemon interprets them directly. */
 export interface ExtensionContext {
   http: HttpClient;
@@ -174,8 +174,8 @@ export interface OperationBinding {
 
 /** A write the extension offers, as data: the daemon binds the caller's args to one of its own
  * operation kinds and runs it with full engine semantics. The extension never performs the write
- * itself and never contains rollback logic. `parameters` MUST be a JSON Schema object —
- * Type.Object({...}) from "@miro/sdk" — it becomes the tool schema the agent calls with.
+ * itself and never contains rollback logic. `parameters` MUST be a JSON Schema object -
+ * Type.Object({...}) from "@miro/sdk" - it becomes the tool schema the agent calls with.
  * `bind` is synchronous: it shapes data, it never fetches (the host tolerates an async bind, but
  * generated tests read the result directly). */
 export interface ExtensionOperation<P = any> {
@@ -191,7 +191,7 @@ export interface ExtensionOperation<P = any> {
 
 /** A read the extension offers, as DATA rather than code. GET only. The daemon templates
  * {placeholders} in `path` from the tool's args, applies the module's declarative `auth`, GETs, and
- * — if `pick` is given — keeps only those fields (mapping over an array response). `expectStatus`
+ * - if `pick` is given - keeps only those fields (mapping over an array response). `expectStatus`
  * defaults to [200]. A captured HTTP trace maps onto one of these one-to-one, which is what lets a
  * discovered API become an extension with no generated code. */
 export interface ReadBinding {
@@ -211,10 +211,10 @@ export interface AuthSpec {
 }
 
 /** One capability the extension offers. Exactly one of `read`/`bind`/`code` is present:
- *  - kind "tool"/"diagnostic": `read` (declarative GET — preferred) or `code` (escape hatch).
+ *  - kind "tool"/"diagnostic": `read` (declarative GET - preferred) or `code` (escape hatch).
  *  - kind "operation": `bind` (synchronous, returns an OperationBinding the daemon's engine runs).
  * `parameters` is optional: omitted, it is auto-derived from {placeholders} in a read `path` (each a
- * required string) and defaults to the empty object schema — so the declarative common case needs no
+ * required string) and defaults to the empty object schema - so the declarative common case needs no
  * hand-typed JSON Schema. Provide a Type.Object({...}) for a `code` entry taking structured args. */
 export interface ExtensionEntry<P = any> {
   name: string;
@@ -228,7 +228,7 @@ export interface ExtensionEntry<P = any> {
 }
 
 /** The single generated file's default export: `export default { auth?, entries } satisfies
- * ExtensionModule`. Behavior only — the app's metadata (baseUrl, secrets, displayName) is passed to
+ * ExtensionModule`. Behavior only - the app's metadata (baseUrl, secrets, displayName) is passed to
  * the daemon out-of-band by extension_write, so the model writes just what the app can do. */
 export interface ExtensionModule {
   auth?: AuthSpec;

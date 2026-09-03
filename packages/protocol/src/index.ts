@@ -70,12 +70,12 @@ export interface ActivityEvent {
   parentId?: string;
   label: string;
   status: "running" | "done" | "failed";
-  /** Short outcome text on done/failed (an error message, a count) — never a full payload. */
+  /** Short outcome text on done/failed (an error message, a count) - never a full payload. */
   detail?: string;
 }
 
 /** A one-off line that is not part of a tool tree: a repair gave up, a credential was created.
- * `credential` carries a value the owner must save — the only time a secret crosses the wire. */
+ * `credential` carries a value the owner must save - the only time a secret crosses the wire. */
 export interface NoticeEvent {
   type: "notice";
   level: "info" | "warn" | "credential";
@@ -110,7 +110,7 @@ export interface OperationPlanEvent {
 
 /** Final outcome of a tracked operation (plan §38). `applied_unverified`: the change reached the
  * server but verify could not confirm it and the operation is irreversible, so nothing was rolled
- * back — distinct from both a clean commit and a true rollback. */
+ * back - distinct from both a clean commit and a true rollback. */
 export interface OperationResultEvent {
   type: "operation_result";
   id: string;
@@ -125,7 +125,7 @@ export interface SystemPlanEvent {
   type: "system_plan";
   id: string;
   title: string;
-  /** What was inspected and inferred — the evidence the plan rests on. */
+  /** What was inspected and inferred - the evidence the plan rests on. */
   findings: string[];
   /** Each component and what happens to it. */
   components: { name: string; action: "reuse" | "install" | "configure" | "remove"; detail: string }[];
@@ -166,17 +166,17 @@ export interface ProviderSetupMessage {
   type: "provider_setup";
 }
 
-/** Triggered by the `/pair` slash command — asks mirod for its Iroh connection ticket (plan §54 Stage A). */
+/** Triggered by the `/pair` slash command - asks mirod for its Iroh connection ticket (plan §54 Stage A). */
 export interface PairRequestMessage {
   type: "pair_request";
 }
 
-/** Triggered by the `/memory` slash command (plan §37) — lists remembered facts. */
+/** Triggered by the `/memory` slash command (plan §37) - lists remembered facts. */
 export interface MemoryListMessage {
   type: "memory_list";
 }
 
-/** Triggered by `/memory forget <id>` (plan §37) — delete-only editing this slice. */
+/** Triggered by `/memory forget <id>` (plan §37) - delete-only editing this slice. */
 export interface MemoryForgetMessage {
   type: "memory_forget";
   id: string;
@@ -194,7 +194,7 @@ export type ClientMessage =
   | MemoryListMessage
   | MemoryForgetMessage;
 
-/** ALPN identifying the miro wire protocol to Iroh — bump the suffix on any breaking wire change. */
+/** ALPN identifying the miro wire protocol to Iroh - bump the suffix on any breaking wire change. */
 export const IROH_ALPN = "miro/mirod/1";
 
 /** Iroh's connect/stream APIs take byte arrays, not Buffers. */

@@ -1,5 +1,5 @@
 // The declarative-extension interpreter (PLAN.md §5.13). Pure logic shared by the extension-host
-// subprocess (host-entry.ts) and its unit tests — kept out of host-entry.ts so a test can import it
+// subprocess (host-entry.ts) and its unit tests - kept out of host-entry.ts so a test can import it
 // without pulling in that file's stdin/Bun.WebView bootstrap. A declarative `read` entry is DATA,
 // not code; this turns it back into a real GET, so a purely-declarative extension runs no generated
 // code at all. A captured HTTP trace maps onto a ReadBinding one-to-one, which is what will let a
@@ -19,7 +19,7 @@ export function templatePath(path: string, args: any): string {
 }
 
 /** parameters as JSON Schema: explicit if the entry gave one, else derived from a read path's
- * {placeholders} (each a required string), else the empty object schema — no hand-typed schema for
+ * {placeholders} (each a required string), else the empty object schema - no hand-typed schema for
  * the declarative common case (the historical Type.Union schema-bug source). */
 export function entryParameters(entry: ExtensionEntry): unknown {
   if (entry.parameters !== undefined) return entry.parameters;
@@ -43,7 +43,7 @@ export function moduleAuthHeaders(mod: ExtensionModule, secrets: Record<string, 
 export async function runRead(ctx: ExtensionContext, mod: ExtensionModule, read: ReadBinding, args: any): Promise<unknown> {
   const res = await ctx.http.get(templatePath(read.path, args), { query: read.query, headers: { ...moduleAuthHeaders(mod, ctx.secrets), ...read.headers } });
   const expect = read.expectStatus ?? [200];
-  if (!expect.includes(res.status)) throw new Error(`GET ${read.path} returned ${res.status}, expected ${expect.join("/")} — body: ${res.body.slice(0, 200)}`);
+  if (!expect.includes(res.status)) throw new Error(`GET ${read.path} returned ${res.status}, expected ${expect.join("/")} - body: ${res.body.slice(0, 200)}`);
   return applyPick(res.json(), read.pick);
 }
 
@@ -52,18 +52,18 @@ export function entrySpec(entry: ExtensionEntry): HostToolSpec {
 }
 
 /** The model writes whatever it wants; `satisfies ExtensionModule` catches most of it at typecheck,
- * but a wrong entry shape still needs a named error — the retry never sees the file (staging is
+ * but a wrong entry shape still needs a named error - the retry never sees the file (staging is
  * discarded on failure). An operation missing `bind`, or a read without `read.path`, cost three
  * attempts in a live run when the error was only "not a function". */
 export function validateEntry(entry: any): asserts entry is ExtensionEntry {
   if (!entry || typeof entry.name !== "string" || typeof entry.description !== "string" || !["tool", "diagnostic", "operation"].includes(entry.kind)) {
-    throw new Error(`each entry must be { name, kind: "tool"|"diagnostic"|"operation", description, and one of read/bind/code } — got keys [${Object.keys(entry ?? {}).join(", ")}]`);
+    throw new Error(`each entry must be { name, kind: "tool"|"diagnostic"|"operation", description, and one of read/bind/code } - got keys [${Object.keys(entry ?? {}).join(", ")}]`);
   }
   if (entry.kind === "operation") {
     if (typeof entry.bind !== "function") throw new Error(`operation "${entry.name}" needs bind(args) returning a { kind, goal, ... } binding`);
   } else if (entry.read) {
     if (typeof entry.read.path !== "string") throw new Error(`read entry "${entry.name}" needs read.path (a string, e.g. "/api/items/{id}")`);
   } else if (typeof entry.code !== "function") {
-    throw new Error(`entry "${entry.name}" needs either read (a declarative GET — preferred) or code(ctx, args)`);
+    throw new Error(`entry "${entry.name}" needs either read (a declarative GET - preferred) or code(ctx, args)`);
   }
 }

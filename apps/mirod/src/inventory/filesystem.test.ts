@@ -32,7 +32,7 @@ test("scanRoot walks a real directory tree, classifying files and skipping noisy
   expect(byPath.get(join(root, "movie.mp4"))?.class).toBe("media");
   expect(byPath.get(join(root, "config.yaml"))?.class).toBe("config");
   expect(byPath.get(join(root, "sub", "app.ts"))?.class).toBe("code");
-  // node_modules is a real directory that exists on disk — it must not appear in the results.
+  // node_modules is a real directory that exists on disk - it must not appear in the results.
   expect(entries.some((e) => e.path.includes("node_modules"))).toBe(false);
 
   rmSync(root, { recursive: true, force: true });

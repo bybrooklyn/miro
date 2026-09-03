@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runSandboxed, bwrapArgs, sandboxAvailable } from "./sandbox";
 
-// Real bubblewrap, real subprocesses, real filesystem — no mocks. These tests are the live proof
+// Real bubblewrap, real subprocesses, real filesystem - no mocks. These tests are the live proof
 // of the containment property and only mean something where bwrap exists (the dev VM, any Debian
 // server); on the dev Mac they skip. bwrapArgs() is pure and tested everywhere.
 
@@ -12,7 +12,7 @@ const available = await sandboxAvailable();
 
 describe("bwrapArgs (pure)", () => {
   test("read-only root, writable binds, scratch /tmp, every namespace unshared, caps dropped", () => {
-    // The unprivileged shape — pinned with root=false so the assertion holds when the suite itself
+    // The unprivileged shape - pinned with root=false so the assertion holds when the suite itself
     // runs as root on the VM.
     const args = bwrapArgs({ writableRoots: ["/srv/media", "/var/run/docker.sock"], network: false }, false);
     expect(args.slice(0, 3)).toEqual(["bwrap", "--ro-bind", "/"]);

@@ -41,7 +41,7 @@ test("a turn: user → tool tree (nested learn) → streamed reply", () => {
   expect(isQuiet(host.node)).toBe(true);
   expect(learn.node.children.map((c) => c.label)).toEqual(["Web search", "Learn another app"]);
   expect(learn.node.children[1].children[0]).toMatchObject({ label: "HTTP GET", status: "running" });
-  expect(isQuiet(learn.node)).toBe(false); // still running — shown
+  expect(isQuiet(learn.node)).toBe(false); // still running - shown
 
   s = run(
     [
@@ -74,7 +74,7 @@ test("a tool call closes a streaming assistant block; the next delta opens a new
   ]);
   expect(s.blocks.map((b) => b.kind)).toEqual(["assistant", "activity", "assistant"]);
   expect((s.blocks[0] as Extract<Block, { kind: "assistant" }>).streaming).toBe(false);
-  // The two assistant blocks must have distinct ids (audit U3 — a reused key collides in React).
+  // The two assistant blocks must have distinct ids (audit U3 - a reused key collides in React).
   const ids = s.blocks.filter((b) => b.kind === "assistant").map((b) => b.id);
   expect(new Set(ids).size).toBe(ids.length);
 });
@@ -126,7 +126,7 @@ test("operation card: plan → confirm → progress → result", () => {
       { type: "operation_progress", id: "o1", phase: "capturing" },
       { type: "operation_progress", id: "o1", phase: "applying" },
       { type: "operation_progress", id: "o1", phase: "verifying" },
-      { type: "operation_result", id: "o1", outcome: "committed", message: "Done — write config, verified." },
+      { type: "operation_result", id: "o1", outcome: "committed", message: "Done - write config, verified." },
     ],
     s,
   );
@@ -134,7 +134,7 @@ test("operation card: plan → confirm → progress → result", () => {
 });
 
 test("lifeline question carries a countdown and k/r keys", () => {
-  const s = reduce(initialState(), { type: "question", id: "lifeline_confirm:o9", prompt: "still connected?", options: [{ label: "Still here — keep it", value: "keep" }, { label: "Roll back", value: "rollback" }], timeoutMs: 90_000 }, T);
+  const s = reduce(initialState(), { type: "question", id: "lifeline_confirm:o9", prompt: "still connected?", options: [{ label: "Still here - keep it", value: "keep" }, { label: "Roll back", value: "rollback" }], timeoutMs: 90_000 }, T);
   expect(secondsLeft(s.pending, T + 30_000)).toBe(60);
   expect(keyToAnswer(s.pending, "k")).toBe("keep");
   expect(keyToAnswer(s.pending, "r")).toBe("rollback");
@@ -145,13 +145,13 @@ test("lifeline question carries a countdown and k/r keys", () => {
 test("free-text and secret prompts, notices", () => {
   let s = reduce(initialState(), { type: "question", id: "ask:1", prompt: "Where is media?", options: [] }, T);
   expect(s.pending).toMatchObject({ kind: "ask", options: [] });
-  expect(keyToAnswer(s.pending, "a")).toBeNull(); // free text — keys don't answer
+  expect(keyToAnswer(s.pending, "a")).toBeNull(); // free text - keys don't answer
   expect(footerHints(s)[0].label).toBe("send");
   s = answered(s, "ask:1", "/srv/media");
   s = reduce(s, { type: "secret_prompt", id: "ask:2", prompt: "VPN password" }, T);
   expect(s.pending).toMatchObject({ type: "secret" });
   s = answered(s, "ask:2", "");
-  s = reduce(s, { type: "notice", level: "credential", text: "Created admin password — value: abc" }, T);
+  s = reduce(s, { type: "notice", level: "credential", text: "Created admin password - value: abc" }, T);
   expect(s.blocks.at(-1)).toMatchObject({ kind: "notice", level: "credential" });
 });
 

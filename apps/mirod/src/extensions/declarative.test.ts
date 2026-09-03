@@ -3,7 +3,7 @@ import { createFakeHttpClient, type ExtensionContext, type ExtensionModule } fro
 import { templatePath, pathPlaceholders, entryParameters, applyPick, moduleAuthHeaders, runRead, validateEntry } from "./declarative";
 
 // The declarative-read interpreter (PLAN.md §5.13) is what makes a purely-declarative extension run
-// zero generated code. Real fake HTTP client (no mocks), pure logic — the checks that guard the
+// zero generated code. Real fake HTTP client (no mocks), pure logic - the checks that guard the
 // interpreter without needing a live app.
 
 function ctx(routes: Record<string, unknown>, secrets: Record<string, string> = {}): ExtensionContext {

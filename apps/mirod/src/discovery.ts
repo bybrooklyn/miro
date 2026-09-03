@@ -8,7 +8,7 @@ import { NOISE_UNIT } from "./agent/context";
 // (b) the app-presence facts the learning agent needs, so learning never depends on a hand-written
 // golden hint. Reads only through the existing inventory tools; writes only through memory/store's
 // redaction choke point. The shell-touching wrappers are thin; the parsing/formatting is pure and
-// unit-tested — the same split as inventory/containers.ts's parseDockerPs vs listContainers.
+// unit-tested - the same split as inventory/containers.ts's parseDockerPs vs listContainers.
 
 /** Host-published ports parsed from `docker ps`'s Ports field
  *  ("0.0.0.0:8096->8096/tcp, :::8096->8096/tcp" → [8096]). Host side only, deduped, sorted.
@@ -55,16 +55,16 @@ export function presenceFrom(app: string, containers: ContainerSummary[], servic
   }
   const port = container?.ports[0];
   const baseUrlGuess = port ? `http://localhost:${port}` : undefined;
-  if (baseUrlGuess) evidence.push(`likely base URL ${baseUrlGuess} (unverified — probe it)`);
+  if (baseUrlGuess) evidence.push(`likely base URL ${baseUrlGuess} (unverified - probe it)`);
   return { found: Boolean(container || service), container, service, baseUrlGuess, evidence };
 }
 
 /** The discovery-derived replacement for a golden hint: a one-line "here's what's on your box"
- * string fed into the learn goal. Honest when nothing matched — the agent still has its ladder. */
+ * string fed into the learn goal. Honest when nothing matched - the agent still has its ladder. */
 export function formatPresence(app: string, p: AppPresence): string {
   return p.found
-    ? `found on this box — ${p.evidence.join("; ")}`
-    : `not found running on this box (no matching container or systemd unit) — it may be stopped or named differently; inspect with container_list / shell_inspect`;
+    ? `found on this box - ${p.evidence.join("; ")}`
+    : `not found running on this box (no matching container or systemd unit) - it may be stopped or named differently; inspect with container_list / shell_inspect`;
 }
 
 /** Thin wrapper: fetch live inventory, then presenceFrom. */
@@ -77,7 +77,7 @@ export async function discoverAppOnBox(app: string): Promise<AppPresence> {
 }
 
 /** Pure: the durable, high-level server_facts to persist from live inventory. Deliberately few and
- * summarised — raw per-container detail already reaches the agent every turn via the live snapshot
+ * summarised - raw per-container detail already reaches the agent every turn via the live snapshot
  * in agent/context.ts; these are the cross-restart, reinforceable facts, not a copy of that. */
 export function factsFrom(containers: ContainerSummary[], services: ServiceInfo[]): { key: string; value: string }[] {
   const facts: { key: string; value: string }[] = [];
@@ -99,7 +99,7 @@ export function factsFrom(containers: ContainerSummary[], services: ServiceInfo[
 }
 
 /** Persist the derived server_facts, reinforced on each run (occurrence_count grows → confidence).
- * ponytail: no staleness prune — a removed container's fact lingers until the next sweep re-derives
+ * ponytail: no staleness prune - a removed container's fact lingers until the next sweep re-derives
  * (and overwrites) the value. Add a last_seen prune only if stale facts actually mislead. */
 export async function runDiscovery(db: Database): Promise<{ facts: number }> {
   const [containers, services] = await Promise.all([

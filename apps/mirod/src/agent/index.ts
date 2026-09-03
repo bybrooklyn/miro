@@ -16,34 +16,34 @@ import { getExtension } from "../extensions/store";
 import { PROVIDER_CATALOG, resolveApiKey, runTurn } from "./model-utils";
 
 // Re-exported so no existing import site (apps/mirod/src/index.ts, agent/worker.ts) needs to
-// change — see model-utils.ts's own comment for why these moved out of this file.
+// change - see model-utils.ts's own comment for why these moved out of this file.
 export { PROVIDER_CATALOG, resolveApiKey, runTurn };
 
 const BASE_SYSTEM_PROMPT = `You are Miro, an AI server-management partner living on one self-hosted Linux server. You are
 talking to its owner, an experienced self-hoster. Be concise and transparent about what you check.
 
 You are given OUTCOMES, not instructions. For anything beyond a quick question, work the loop:
-1. INSPECT FIRST. Use your tools to see what is actually here — containers, services, storage,
-   network, existing configuration — before saying or asking anything. Facts from the machine beat
+1. INSPECT FIRST. Use your tools to see what is actually here - containers, services, storage,
+   network, existing configuration - before saying or asking anything. Facts from the machine beat
    assumptions and beat documentation.
 2. INFER. Decide everything you can from what exists: paths, ports, networks, which components fit.
-   Existing, working software wins — reuse and adapt it rather than replacing it with a favourite.
-3. ASK ONLY FOR INTENT, in one batch, through the ask_user tool — never as questions in your
+   Existing, working software wins - reuse and adapt it rather than replacing it with a favourite.
+3. ASK ONLY FOR INTENT, in one batch, through the ask_user tool - never as questions in your
    reply. Ending a turn with "tell me X" is a failure: call ask_user, get the answers, keep going.
    Genuine intent means preferences (movies or TV? torrent or Usenet?), credentials that live
    outside this machine, tradeoffs that matter to them, irreversible choices. Never ask about
-   ports, networks, subnets, paths you can inspect, or which tool to use — those are your job. If
+   ports, networks, subnets, paths you can inspect, or which tool to use - those are your job. If
    the machine already answers a question, do not ask it. A request to set something up is not
    finished until it is set up and verified, or the user cancelled.
-4. ARCHITECT. Before the first write of any setup, install, or configure request — even for a
-   single app — show a system_plan: findings, components (reuse vs install), steps, how you will
+4. ARCHITECT. Before the first write of any setup, install, or configure request - even for a
+   single app - show a system_plan: findings, components (reuse vs install), steps, how you will
    verify. Wait for the one approval, then proceed without re-asking for routine steps.
 5. EXECUTE. Read with shell_inspect/read_file/http_get and the ext_* tools; change things only
    through operations (shell_command, file_write, file_delete, http_mutation, ext_* operations),
    which are shown to the user, sandboxed to the scope you declare, verified, and rolled back on
    failure. rm and friends are refused by design: deletion is file_delete (trash).
 6. ACQUIRE CAPABILITY WHEN YOU HIT SOMETHING UNKNOWN. If a request involves an app you have no
-   ext_* tools for, call app_learn for it — it inspects, researches, generates and validates tools,
+   ext_* tools for, call app_learn for it - it inspects, researches, generates and validates tools,
    and they become available to you in this same task. Then continue the original request with
    them. Learning can recurse into dependencies on its own.
 7. VERIFY THE ARCHITECTURE, not liveness. "The container started" is not done. Check the data
@@ -53,17 +53,17 @@ You are given OUTCOMES, not instructions. For anything beyond a quick question, 
    request is a single tool call, not another investigation.
 
 Back every conclusion with evidence from your tools. When an app needs a new password or token,
-call credential_create — never ask the user to invent one, and never repeat a value you were
+call credential_create - never ask the user to invent one, and never repeat a value you were
 shown. When a tool refuses something, do what its alternative says.`;
 
-// Personality changes wording only (plan §4) — never autonomy, permissions, or accuracy, so this
+// Personality changes wording only (plan §4) - never autonomy, permissions, or accuracy, so this
 // only ever touches the prompt's tone line, nothing else about how the agent is built.
 const PERSONALITY_TONE = {
   casual: "Talk casually: short, relaxed, direct, with context-aware humor when it fits.",
   professional: "Talk professionally: short, direct, neutral.",
 } as const;
 
-/** `learnedStyle` adapts the existing personality's delivery (plan §37) — one system, not a
+/** `learnedStyle` adapts the existing personality's delivery (plan §37) - one system, not a
  * separate layer. `memorySummary` is the MemGPT-style always-on core-memory block (plan §37). */
 export function systemPrompt(
   personality: keyof typeof PERSONALITY_TONE,
@@ -86,9 +86,9 @@ function totalCost(model: Model<any>): number {
 
 /**
  * Real cost-based routing (plan §17) over every tool-capable model on every *connected* provider
- * (a key in the secret store or the environment) — not a hardcoded per-provider pick. "cheapest"
+ * (a key in the secret store or the environment) - not a hardcoded per-provider pick. "cheapest"
  * and "best" are the true min/max by combined input+output cost; "balanced" is the sorted midpoint.
- * ponytail: cost as the only signal, no quality/latency data — good enough until routing decisions
+ * ponytail: cost as the only signal, no quality/latency data - good enough until routing decisions
  * actually need more than "cheap" vs "expensive" to be useful.
  */
 export function pickDefaultModel(
@@ -104,7 +104,7 @@ export function pickDefaultModel(
       if (model.cost && totalCost(model) >= 0) candidates.push(model);
     }
   }
-  // Ollama needs no key — being registered on `models` at all (done once at startup, only if the
+  // Ollama needs no key - being registered on `models` at all (done once at startup, only if the
   // local server was reachable) already means "connected", no separate credential check needed.
   candidates.push(...(models.getModels(OLLAMA_PROVIDER) ?? []));
   if (candidates.length === 0) return null;
@@ -122,14 +122,14 @@ export function createMiroAgent(
   personality: keyof typeof PERSONALITY_TONE = "casual",
   operationCtx?: OperationToolContext,
   learnCtx?: Omit<LearnToolContext, "db" | "send" | "models" | "getStoredKey" | "onPromoted">,
-  /** Reasoning effort for models that support it — e.g. Codex logins always run at "medium". */
+  /** Reasoning effort for models that support it - e.g. Codex logins always run at "medium". */
   reasoning?: ThinkingLevel,
   /** The assembled per-turn context (agent/context.ts): server snapshot, operated systems, refusals. */
   contextBlock = "",
 ): Agent {
   const getSecret = learnCtx?.getSecret ?? operationCtx?.getSecret;
   // Hot-load (PLAN.md §5.4 D): after app_learn promotes an extension, swap its tools into THIS
-  // running agent so the same task continues with them — pi-agent-core's state.tools is a setter
+  // running agent so the same task continues with them - pi-agent-core's state.tools is a setter
   // and a tool result's addedToolNames marks them usable from that transcript point on.
   let agent: Agent | null = null;
   const onPromoted = (app: string): string[] => {
@@ -171,7 +171,7 @@ export function createMiroAgent(
   const learnedStyle = operationCtx ? (getByKey(operationCtx.db, "preference", "reply_style")?.value ?? null) : null;
   const memorySummary = operationCtx ? buildSummary(operationCtx.db) : "";
   agent = new Agent({
-    // Heterogeneous per-tool parameter schemas can't unify into one array type without erasure —
+    // Heterogeneous per-tool parameter schemas can't unify into one array type without erasure -
     // this is how pi-agent-core's own AgentState.tools is typed.
     initialState: { systemPrompt: systemPrompt(personality, learnedStyle, memorySummary, contextBlock), model, tools: tools as AgentTool<any>[] },
     streamFn: (m, context, options) => models.streamSimple(m, context, reasoning ? { ...options, reasoning } : options),

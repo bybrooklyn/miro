@@ -11,7 +11,7 @@ type Phase = "discovering" | "confirming" | "connecting" | "done" | "none";
  * Everything up through the SSH access probe is real and live. The actual install step
  * (`curl -fsSL https://miro.computer/install | sudo sh` run *on* the target over that SSH
  * session) needs a real reachable server to run against, so it's shown as the next step rather
- * than executed — this environment has no real target to install onto.
+ * than executed - this environment has no real target to install onto.
  */
 export function SetupScreen() {
   const [phase, setPhase] = useState<Phase>("discovering");
