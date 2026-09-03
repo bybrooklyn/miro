@@ -13,7 +13,8 @@ import { fileWriteKind } from "../operations/kinds/file-write";
 // extension-host subprocess via ExtensionHostManager, under the same isolation boundary they'll
 // actually run under at real runtime.
 
-const GENERATED_FILES = ["tools.ts", "diagnostics.ts", "browser.ts", "operations.ts"];
+// One generated file now (PLAN.md §5.13). Kept as an array so typecheck/import-scan stay uniform.
+const GENERATED_FILES = ["extension.ts"];
 
 const COMPILER_OPTIONS: ts.CompilerOptions = {
   target: ts.ScriptTarget.ESNext,
@@ -26,7 +27,7 @@ const COMPILER_OPTIONS: ts.CompilerOptions = {
 
 export function typecheckExtension(dir: string): string[] {
   const files = GENERATED_FILES.map((f) => join(dir, f)).filter(existsSync);
-  if (files.length === 0) return ["no tools.ts/diagnostics.ts/browser.ts found to typecheck"];
+  if (files.length === 0) return ["no extension.ts found to typecheck"];
   const program = ts.createProgram(files, COMPILER_OPTIONS);
   const diagnostics = [...program.getSyntacticDiagnostics(), ...program.getSemanticDiagnostics()];
   return diagnostics.map((d) => {
@@ -78,6 +79,28 @@ export function requiresArguments(parameters: unknown): boolean {
   return Boolean(schema?.required && schema.required.length > 0);
 }
 
+// --- Compiler-as-teacher (PLAN.md §5.13) ---
+// The failure strings ARE the retry contract with the (possibly weak) learn model. A raw compiler
+// message names the symptom; append the concrete fix so a small model converges instead of looping.
+// Pure and unit-tested (validate.test.ts).
+
+const HINTS: { match: RegExp; fix: string }[] = [
+  { match: /http\s*\.\s*(post|put|patch|delete)|\.(post|put|patch|delete)\s*\(/i, fix: "ctx.http is GET-only. A write is an entry with `bind(args)` returning a { kind: \"http_mutation\", method, url, ... } binding — the daemon runs it through its engine. Never fetch a write from code." },
+  { match: /forbidden import/i, fix: "Only \"@miro/sdk\" and same-directory relative imports are allowed. Delete the import; use ctx.http / ctx.exec / ctx.readFile / ctx.secrets instead." },
+  { match: /must be \"object\"|is not an object schema|is not a schema|non-object properties/i, fix: "For a declarative `read`, OMIT `parameters` (it is derived from the {placeholders} in read.path). For a `code` entry, write a real schema: Type.Object({ field: Type.String() }) from \"@miro/sdk\"." },
+  { match: /no extension\.ts found/i, fix: "Call extension_write with a single `extensionTs` that does `export default { auth?, entries } satisfies ExtensionModule` (import type ExtensionModule from \"@miro/sdk\")." },
+  { match: /has no exported member|Cannot find name|is not exported/i, fix: "Import the symbol from \"@miro/sdk\": ExtensionModule, ExtensionEntry, ExtensionContext, ReadBinding, OperationBinding, Type." },
+  { match: /needs (bind|read\.path|either read)/i, fix: "Each entry carries exactly one of: `read` (declarative GET, preferred), `bind` (a write), or `code` (a read that needs logic). A \"operation\" entry uses bind; a \"tool\"/\"diagnostic\" uses read or code." },
+];
+
+/** Append the fix to each failure that matches a known pattern; pass others through unchanged. */
+export function annotateFailures(failures: string[]): string[] {
+  return failures.map((f) => {
+    const hint = HINTS.find((h) => h.match.test(f));
+    return hint ? `${f}\n    → fix: ${hint.fix}` : f;
+  });
+}
+
 export interface ValidationResult {
   ok: boolean;
   failures: string[];
@@ -102,14 +125,14 @@ export async function validateExtension(
   // remaining problem at once instead of one class per attempt (audit X1). tests.ts is no longer
   // generated or run — the live probe and dry-run below test the real code against the real kinds,
   // which is stronger and matches the no-mocks house rule (audit X4).
-  if (failures.length > 0) return { ok: false, failures };
+  if (failures.length > 0) return { ok: false, failures: annotateFailures(failures) };
 
   let tools: HostToolSpec[] = [];
   try {
     tools = await hostMgr.listTools(dir, app, baseUrl, secrets);
   } catch (err) {
     failures.push(`live probe setup failed: ${String(err instanceof Error ? err.message : err)}`);
-    return { ok: false, failures };
+    return { ok: false, failures: annotateFailures(failures) };
   }
 
   // Every spec's `parameters` becomes a tool schema the main agent calls with. A generated
@@ -145,7 +168,7 @@ export async function validateExtension(
     }
   }
 
-  return { ok: failures.length === 0, failures, tools };
+  return { ok: failures.length === 0, failures: annotateFailures(failures), tools };
 }
 
 /** A tool/operation `parameters` value must be a JSON Schema object schema. Returns why it isn't,

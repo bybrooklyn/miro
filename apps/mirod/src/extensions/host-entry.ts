@@ -8,10 +8,11 @@
 // any generated code is ever loaded here.)
 
 import { join } from "node:path";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { encodeLine, createLineBuffer } from "@miro/protocol";
-import { createHttpClient, type ExtensionContext, type BrowserSession, type ExtensionTool, type ExtensionOperation, type SnapshotNode, type ReadResult } from "@miro/sdk";
+import { createHttpClient, type ExtensionContext, type ExtensionModule, type BrowserSession, type SnapshotNode, type ReadResult } from "@miro/sdk";
 import type { HostRequest, HostResponse, HostToolSpec } from "./host-protocol";
+import { runRead, entrySpec, validateEntry } from "./declarative";
 // Pure / CLI-backed modules with no path to the DB or secrets — safe to import into this process.
 // They let generated code's ctx.exec/ctx.readFile be gated by the same classifier and sandbox the
 // daemon uses (PLAN.md §5.7), without a reverse RPC.
@@ -134,11 +135,11 @@ function createBrowserSession(): BrowserSession {
   };
 }
 
-// --- Generated-extension loading (init/test_init modes) ---
+// --- Generated-extension loading (init mode) ---
 
-// These files don't exist in the source tree — they're written per-extension at runtime under
+// extension.ts doesn't exist in the source tree — it's written per-extension at runtime under
 // ~/.miro/extensions/<app>/. Two issues, both handled here:
-// 1. A plain string-literal import() would make TS try (and fail) to statically resolve them;
+// 1. A plain string-literal import() would make TS try (and fail) to statically resolve it;
 //    routing the specifier through a non-literal `string` parameter opts out of that resolution
 //    attempt entirely (standard TS behavior: only literal import() specifiers get statically
 //    resolved).
@@ -153,37 +154,25 @@ function importGenerated(relativePath: string): Promise<any> {
 }
 
 interface LoadedExtension {
-  tools: Map<string, { spec: HostToolSpec; tool: ExtensionTool }>;
-  operations: Map<string, { spec: HostToolSpec; op: ExtensionOperation }>;
+  tools: Map<string, { spec: HostToolSpec; execute: (args: any) => Promise<unknown> }>;
+  operations: Map<string, { spec: HostToolSpec; bind: (args: any) => unknown }>;
 }
 
-/** Generated code returns whatever the model wrote, and `ctx: any` lets any shape typecheck. A
- * diagnostics.ts returning [{ tool: {...} }] surfaced as "entry.tool.execute is not a function"
- * at the live probe, three attempts in a row, because nothing named the actual mistake. */
-function checkShape(fn: string, entry: any, method: "execute" | "bind"): void {
-  if (!entry || typeof entry.name !== "string" || typeof entry[method] !== "function") {
-    throw new Error(`${fn}(ctx) must return plain objects { name, description, parameters, ${method} } — got an element with keys [${Object.keys(entry ?? {}).join(", ")}]; do not wrap it`);
-  }
-}
-
+// The declarative-read interpreter + entry validation live in ./declarative (pure, unit-tested).
 async function loadExtension(ctx: ExtensionContext): Promise<LoadedExtension> {
-  const toolsMod = await importGenerated("./tools.ts");
-  const diagMod = await importGenerated("./diagnostics.ts");
-  const tools = new Map<string, { spec: HostToolSpec; tool: ExtensionTool }>();
-  for (const tool of toolsMod.buildTools(ctx) as ExtensionTool[]) {
-    checkShape("buildTools", tool, "execute");
-    tools.set(tool.name, { tool, spec: { name: tool.name, kind: "tool", label: tool.label ?? tool.name, description: tool.description, parameters: tool.parameters } });
-  }
-  for (const tool of diagMod.buildDiagnostics(ctx) as ExtensionTool[]) {
-    checkShape("buildDiagnostics", tool, "execute");
-    tools.set(tool.name, { tool, spec: { name: tool.name, kind: "diagnostic", label: tool.label ?? tool.name, description: tool.description, parameters: tool.parameters } });
-  }
-  const operations = new Map<string, { spec: HostToolSpec; op: ExtensionOperation }>();
-  if (existsSync(join(process.cwd(), "operations.ts"))) {
-    const opsMod = await importGenerated("./operations.ts");
-    for (const op of opsMod.buildOperations(ctx) as ExtensionOperation[]) {
-      checkShape("buildOperations", op, "bind");
-      operations.set(op.name, { op, spec: { name: op.name, kind: "operation", label: op.label ?? op.name, description: op.description, parameters: op.parameters } });
+  const mod = (await importGenerated("./extension.ts")).default as ExtensionModule;
+  if (!mod || !Array.isArray(mod.entries)) throw new Error(`extension.ts must \`export default { auth?, entries } satisfies ExtensionModule\` — entries missing`);
+  const tools: LoadedExtension["tools"] = new Map();
+  const operations: LoadedExtension["operations"] = new Map();
+  for (const entry of mod.entries) {
+    validateEntry(entry);
+    const spec = entrySpec(entry);
+    if (entry.kind === "operation") {
+      operations.set(entry.name, { spec, bind: (args) => entry.bind!(args) });
+    } else if (entry.read) {
+      tools.set(entry.name, { spec, execute: (args) => runRead(ctx, mod, entry.read!, args) });
+    } else {
+      tools.set(entry.name, { spec, execute: (args) => entry.code!(ctx, args) });
     }
   }
   return { tools, operations };
@@ -211,7 +200,7 @@ function createReadPrimitives(): Pick<ExtensionContext, "exec" | "readFile"> {
 
 // --- Main ---
 
-let mode: "init" | "learn_init" | "test_init" | null = null;
+let mode: "init" | "learn_init" | null = null;
 let browser: BrowserSession | null = null;
 let loaded: LoadedExtension | null = null;
 
@@ -234,13 +223,6 @@ async function handle(req: HostRequest): Promise<void> {
     browser = createBrowserSession();
     const ctx: ExtensionContext = { http: createHttpClient(req.baseUrl, authHeaders(req.secrets)), browser, secrets: req.secrets, ...createReadPrimitives() };
     loaded = await loadExtension(ctx);
-    send({ type: "ready" });
-    return;
-  }
-  if (req.type === "test_init") {
-    // tests.ts is self-contained (imports createFakeHttpClient/buildTools/buildDiagnostics
-    // itself, see run_tests below) — nothing here needs loading ahead of time.
-    mode = "test_init";
     send({ type: "ready" });
     return;
   }
@@ -267,7 +249,7 @@ async function handle(req: HostRequest): Promise<void> {
       return;
     }
     try {
-      const value = await entry.tool.execute(req.args);
+      const value = await entry.execute(req.args);
       send({ type: "result", id: req.id, ok: true, value });
     } catch (err) {
       send({ type: "result", id: req.id, ok: false, error: String(err instanceof Error ? err.message : err) });
@@ -284,7 +266,7 @@ async function handle(req: HostRequest): Promise<void> {
       // await: a generated `bind: async (args) => ({...})` is natural next to an async execute,
       // and unawaited it serialised as {} — "binding must include kind and goal" on a file that
       // plainly had both (found live, run #5).
-      const value = await entry.op.bind(req.args);
+      const value = await entry.bind(req.args);
       send({ type: "result", id: req.id, ok: true, value });
     } catch (err) {
       send({ type: "result", id: req.id, ok: false, error: String(err instanceof Error ? err.message : err) });
@@ -296,16 +278,6 @@ async function handle(req: HostRequest): Promise<void> {
     send({ type: "tools", id: req.id, tools });
     return;
   }
-  if (req.type === "run_tests") {
-    try {
-      const mod = await importGenerated("./tests.ts");
-      const results = await mod.default();
-      send({ type: "test_results", id: req.id, results });
-    } catch (err) {
-      send({ type: "test_results", id: req.id, results: [{ name: "tests.ts", passed: false, error: String(err instanceof Error ? err.message : err) }] });
-    }
-    return;
-  }
   if (req.type === "shutdown") {
     browser?.close();
     process.exit(0);
@@ -313,9 +285,10 @@ async function handle(req: HostRequest): Promise<void> {
 }
 
 function authHeaders(secrets: Record<string, string>): Record<string, string> {
-  // Convention: an extension's declared secret named "api_key" (if present) is sent as
-  // Authorization: Bearer <value> — generated tools.ts can still read ctx.secrets directly for
-  // an app-specific header scheme (e.g. Gotify's X-Gotify-Key) instead of relying on this default.
+  // The default baked into ctx.http for `code` entries: a declared secret named "api_key" (if
+  // present) is sent as Authorization: Bearer <value>. Declarative `read` entries override this via
+  // the module's `auth` (e.g. Jellyfin's X-Emby-Token); a `code` entry can also read ctx.secrets
+  // directly for an app-specific header scheme.
   return secrets.api_key ? { Authorization: `Bearer ${secrets.api_key}` } : {};
 }
 

@@ -2062,3 +2062,92 @@ Slice 1 (Jellyfin fresh install through the whole Goal→Inspect→Infer→Ask-i
 Verify→Retain loop, live-verified) is met. Residuals: `snapshots/` dir at default perms could hold
 sensitive file contents (low-severity remainder of H2); the `esc interrupt` hint still has no
 `ClientMessage` behind it; maturity-gated auto-approve still unwired.
+
+### 5.13 Self-extension redesign — declarative-first, machine-earned knowledge (2026-09-02)
+
+**Why.** Self-extension promoted exactly once across ~10 live runs; every failure lived in
+generated-code validation (schema arity, import scan, JSON shape, await-bind). Root cause: the learn
+agent hand-writes four TypeScript files, and *reads/diagnostics are imperative code* while *writes are
+already declarative data* (`OperationBinding`). Second problem: the loop only worked because a
+hand-written `golden-hints/<app>.json` spoon-fed the API sequence — which contradicts the whole thesis
+("Miro learns whatever system is required"). If a human writes the map, it is not learning.
+
+**Grilled decisions (2026-09-02, user).**
+1. **Declarative default, generated-code escape hatch** — routine HTTP/API/config bindings become
+   data Miro owns and validates as *schema*, not code that must compile. Self-writing code stays
+   first-class (reserved for entries that genuinely need logic: pagination, multi-step auth,
+   transforms), NOT a deprecated fallback.
+2. **One `.ts` file per extension** (`extension.ts`) replacing tools/diagnostics/operations/browser —
+   a module that is mostly data literals, functions only on the entries that need them.
+3. **Machine-earned knowledge over golden hints** — introspect the running box first (the tools and a
+   DISCOVERY-LADDER prompt already exist), capture real request/response traces, distill a persistent
+   recipe (`server_facts` + `app_recipes` with a freshness/app-version tag). A captured trace and a
+   declarative read entry are the *same shape*, so synthesis becomes mechanical.
+4. **Provider-agnostic + compiler-as-teacher** — do not bet on Codex/Ollama (routing is already
+   generic via `pickDefaultModel`/`resolveApiKey`/`PROVIDER_CATALOG`; the Codex "always-prefer" branch
+   and Ollama special-case become a setting). The real fragility lever is validator feedback good
+   enough that a *weak* model converges: every failure string names the fix.
+5. **Tests from traces, not from the model** — `tests.ts` was killed this session precisely because
+   model-authored tests were a second failure surface. Reborn as: the captured trace IS the test and
+   the canary (promote only if replaying it still matches). One artifact does discovery, testing, and
+   canary.
+
+**Arc (slices):** 1 — single-file declarative format + declarative read binding + teacher-grade
+validator feedback (foundation; keeps the Jellyfin golden hint in place to isolate the format change).
+2 — discovery-first + trace capture + persistent `server_facts`/`app_recipes` + remove golden hints.
+3 — trace-as-canary promotion + repair-on-drift + provider genericization.
+
+**Slice 1 (this build).** New SDK vocabulary in `@miro/sdk`: `ReadBinding` (mirror of
+`HttpMutationBinding` minus method/body, plus `pick`), `ExtensionEntry` (one of `read` data / `bind`
+fn / `code` fn), `ExtensionModule` (`{ auth?, entries }`). The host (`host-entry.ts`) loads the one
+file and *interprets* declarative reads (GET + path-template + `pick`) — zero generated code runs for
+the common case; `bind` writes and `code` reads keep today's paths. `parameters` auto-derives from
+`{placeholders}` in a read path (killing hand-typed schemas too). `validate.ts` typechecks/import-scans
+the single file and wraps every failure string through a teacher mapper that appends the concrete fix.
+Dead `tests.ts`/`browser.ts` machinery removed. Metadata (displayName/baseUrl/secretNames) stays as
+`extension_write` params (the daemon needs baseUrl+secrets to init the host before any module loads).
+Manifest still mechanically derived from the live host's `list_tools` — no hand-typed schemas.
+Local verification (done, 2026-09-02): all four packages `tsc --noEmit` clean; `bun test` 256 pass /
+14 skip / 0 fail (added `declarative.test.ts` for the interpreter + derived-schema, an
+`annotateFailures` teacher-mapper test, and the single-file `reference.test.ts`). Crucially, a
+scratchpad host smoke (`host-smoke.ts`) spawned the REAL extension-host subprocess against a real
+`Bun.serve` fake app and a real generated `extension.ts`: `list_tools` derived all four specs and
+auto-derived `get_widget`'s `{id}` schema; declarative reads ran with zero generated code (`pick`
+dropped a field, `{id}` templated); the `code` diagnostic ran; the write bound to `http_mutation`;
+and module auth was enforced (a wrong secret surfaced the 401). This is the exact
+spawn→RPC→importGenerated→runRead path where prior live bugs hid, now green off-VM.
+Live verification (done, dev VM, 2026-09-02) — MET, better than the bar:
+- **Re-learn Jellyfin** (capability wiped, secrets kept, golden hint present): Codex generated ONE
+  `extension.ts` and `extension_write` succeeded on **attempt 1** (vs. the historical ~10-run
+  failure) — v1 promoted, 3 declarative reads (2 with `pick`) + 1 `code` health diagnostic + 2
+  declarative write bindings. The model used the escape hatch exactly where intended (the health
+  check that returns a boolean instead of throwing) and mapped auth to the on-file secret
+  (`X-Emby-Token`/`session_token`). 4 of 6 entries are pure data — the compile/arity/import bug
+  classes cannot exist on them.
+- **Interpreter correct against real Jellyfin**: the declarative `list_media_libraries` read returned
+  `[{Name:"TV Shows",Locations:["/media/TV"],...},{Name:"Movies",...}]`, cross-checked independently
+  against `/System/Info/Public` (unauthed curl, v10.11.11) AND the container's own on-disk library
+  config (`/config/root/default/` → Movies, TV Shows) — matching, with no generated code run for
+  reads. (Secrets are encrypted at rest — `ref`+`ciphertext` only — so the authed endpoint could not
+  be raw-curled, which is correct.)
+- **Retained capability** (separate later turn, "is jellyfin healthy and which libraries?"): answered
+  in 6s from the promoted v1 tools with **zero re-learn** and no thrash.
+
+Two real bugs found live and fixed (the live-verification thesis earning its keep — neither caught by
+tsc or unit tests):
+- **Old-format migration**: pre-existing extensions (gotify, in the old 4-file format) are unloadable
+  by the new host → every call fails → the repair loop auto-migrates them (it did, gotify→v12) but
+  slowly, and the agent thrashed ~12min on a stale one. Fix (`agent/extension-tools.ts`): don't wire
+  an extension whose dir lacks `extension.ts`; the capability reappears cleanly via `app_learn` on
+  next use. New installs never hit this.
+- **Cold-host init race** (latent, pre-existing, exposed by the run): `host.ts` `getSession` returned
+  an existing-but-still-initializing session without awaiting readiness, so a SECOND parallel call
+  reached `host-entry` before `loadExtension` set `loaded` → "Unknown tool". The agent's parallel
+  `health`+`list_media_libraries` calls on a cold host hit it. Fix: `await waitReady(existing)` on the
+  reused-session path (free once warm). Proven by a scratchpad host smoke (real subprocess + fake
+  app): 9/9 checks pass with the fix, the parallel check rejects without it; and the VM re-run then
+  showed both parallel calls succeeding, 0 "Unknown tool".
+
+Local: 4 packages `tsc --noEmit` clean; `bun test` 256 pass / 14 skip / 0 fail (new
+`declarative.test.ts` interpreter+schema tests, `annotateFailures` teacher-mapper test, single-file
+`reference.test.ts`). Slice 1 met; unblocks Slice 2 (discovery + persistent knowledge).

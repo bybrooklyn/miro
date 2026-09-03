@@ -71,78 +71,69 @@ that lives outside this machine (a VPN provider login, an external account).
 ASK ABOUT INTENT, INFER IMPLEMENTATION. Before asking anything, check whether the machine already
 answers it. Never ask about ports, networks, paths, or which component to use.
 
-WRITES NEVER LIVE IN GENERATED CODE. Anything that changes the app's state is an operation
-binding in operations.ts: buildOperations(ctx) returns ExtensionOperation[] whose bind(args)
-synchronously returns plain data (no async, no fetch) — { kind: "http_mutation" |
-"shell_command" | "file_write", goal, ...params } — and the daemon runs it through its engine
-(confirmation, sandbox, verification, rollback). URLs in a binding may be app-relative
-("/Startup/User"), like ctx.http.get; the daemon resolves them against the app's base URL.
-Give every binding a verify (verifyUrl/verifyExpect, or a verify command) and a rollback where the
-app makes one possible. Credentials never appear as values: in a header use secretHeader:
-{ name, ref }; anywhere in a body or URL write the placeholder {{secret:<ref>}} (e.g.
+DECLARATIVE FIRST — write DATA, not code. The extension is ONE file, extension.ts, that
+\`export default { auth?, entries } satisfies ExtensionModule\`. Each entry is one capability:
+- A READ (kind "tool" or "diagnostic") is declarative data: { name, kind, description,
+  read: { path, method?, query?, pick?, expectStatus? } }. The daemon GETs read.path (app-relative,
+  e.g. "/Library/VirtualFolders"), substituting {placeholders} in the path from the tool's args,
+  applies the module's auth, and — if you give pick — keeps only those fields (mapping over an
+  array). No code runs. Prefer this for everything a GET can answer.
+- A WRITE (kind "operation") is a binding: { name, kind: "operation", parameters, bind: (args) => ({
+  kind: "http_mutation" | "shell_command" | "file_write", goal, ...params }) }. bind is synchronous —
+  it returns plain data, never fetches — and the daemon runs it through its engine (confirmation,
+  sandbox, verification, rollback). URLs may be app-relative. Give every binding a verify
+  (verifyUrl/verifyExpect, or a verify command) and a rollback where the app allows one.
+- CODE is the escape hatch, ONLY when a read needs logic a \`read\` cannot express (pagination,
+  combining calls, a health check that returns a boolean instead of throwing): { name, kind,
+  parameters, code: (ctx, args) => Promise<unknown> }. ctx is read-only (ctx.http.get, ctx.exec,
+  ctx.readFile, ctx.secrets). Reach for it last.
+AUTH is declarative: set the module's auth: { header, secret } (e.g. { header: "X-Emby-Token",
+secret: "api_key" }) and every read sends it automatically; a code entry reads ctx.secrets.
+Credentials never appear as values: in a write header use secretHeader: { name, ref }; anywhere in a
+body or URL write the placeholder {{secret:<ref>}} (e.g.
 {"Name":"admin","Password":"{{secret:extension.jellyfin.admin_password}}"}) — the daemon
 substitutes the real value at request time and the plan shows only the placeholder. The same
 placeholder works when you call http_mutation yourself during learning.
 
-SCHEMAS: every tool's, diagnostic's and operation's "parameters" is a real JSON Schema built with
-Type from "@miro/sdk" — e.g. parameters: Type.Object({ path: Type.String({ description: "..." }) })
-— or Type.Object({}) for none. Never a plain object like { path: "string" }; validation rejects it.
+SCHEMAS: for a declarative read, OMIT parameters — it is DERIVED from the {placeholders} in read.path
+(each a required string). For a code entry that takes structured args, set parameters to a real JSON
+Schema built with Type from "@miro/sdk" — parameters: Type.Object({ id: Type.String() }) — or
+Type.Object({}) for none. Never a plain object like { id: "string" }; validation rejects it.
 
 RECURSE WHEN YOU MUST. If operating this app requires another app you do not know (an indexer
 manager, a download client), call app_learn for it, let it finish, then continue here.
 
-WHEN YOU UNDERSTAND THE APP, call extension_write with toolsTs / diagnosticsTs / operationsTs /
-browserTs. There is no tests file — the daemon validates by typechecking, then probing every no-arg
-diagnostic against the live app and dry-running every no-arg operation binding through its real
-engine kind, so your code is tested against the real thing. Rules:
-- toolsTs / diagnosticsTs export buildTools(ctx: ExtensionContext): ExtensionTool[] and
-  buildDiagnostics(ctx: ExtensionContext): ExtensionTool[] — those exact annotated signatures,
-  types imported from "@miro/sdk". Every element a plain { name, description, parameters, execute }
-  object, never wrapped (not { tool: ... }). Read-only: ctx.http.get, ctx.exec, ctx.readFile,
-  ctx.secrets. Never import anything but "@miro/sdk".
-- operationsTs exports buildOperations(ctx: ExtensionContext): ExtensionOperation[] — writes as
-  bindings; bind is synchronous and returns plain data. Empty string only if nothing to configure.
-- browserTs only if browser diagnostics are genuinely needed; empty string otherwise.
-Every name matches ^[a-zA-Z0-9_-]+$ (underscores, never dots). extension_write reports ALL problems
-at once — fix each named one and call again; attempts are limited.
+WHEN YOU UNDERSTAND THE APP, call extension_write with a single extensionTs. There is no test file —
+the daemon validates by typechecking it, then probing every no-arg diagnostic against the live app
+and dry-running every no-arg operation binding through its real engine kind, so it is tested against
+the real thing. Rules:
+- extensionTs does \`export default { auth?, entries } satisfies ExtensionModule\` — import the types
+  from "@miro/sdk", import nothing else.
+- Prefer declarative read entries; use bind for writes; use code only where a read cannot express it.
+- Every name matches ^[a-zA-Z0-9_-]+$ (underscores, never dots).
+extension_write reports ALL problems at once, each with a concrete fix — apply each and call again;
+attempts are limited.
 
 @miro/sdk SURFACE — the only import, exact shapes (write to them, do not guess):
-  ctx.http.get(path, opts?): Promise<HttpResponse>   opts = { query?, headers? } (both Record<string,string>)
-      HttpResponse = { status: number; ok: boolean; body: string; json<T>(): T } — does NOT throw on
-      non-2xx and does NOT pre-parse: read r.ok / r.status / r.json() / r.body.
-  ctx.exec(cmd): Promise<{ exitCode; stdout; stderr }>   ctx.readFile(path): Promise<string>
-  ctx.secrets: Record<string,string>  (real values, by name — never echo one back from a tool)
-  ExtensionTool = { name; description; parameters; execute(args): Promise<unknown>; label? }
-  ExtensionOperation = { name; description; parameters; bind(args): OperationBinding; label? }
+  ExtensionModule = { auth?: { header: string; secret: string }; entries: ExtensionEntry[] }
+  ExtensionEntry  = { name; kind: "tool"|"diagnostic"|"operation"; description; label?; parameters?;
+                      read?; bind?; code? } — exactly ONE of read / bind / code.
+  read (ReadBinding) = { path; method?: "GET"; query?; headers?; pick?: string[]; expectStatus?: number[] }
+  bind(args) => { kind: "http_mutation"|"shell_command"|"file_write"; goal; ...params }
+  code(ctx, args) => Promise<unknown>; ctx = { http.get(path, {query?,headers?}), exec(cmd),
+      readFile(path), secrets } — http.get returns { status; ok; body; json<T>() }, never throws on non-2xx.
+  Type from "@miro/sdk" for any hand-written schema.
 
 WORKED EXAMPLE — a complete, correct extension for a token-auth HTTP app (copy this shape exactly):
-  // tools.ts
-  import { Type, type ExtensionContext, type ExtensionTool } from "@miro/sdk";
-  const auth = (ctx: ExtensionContext) => ({ "X-Api-Key": ctx.secrets.api_key });
-  export function buildTools(ctx: ExtensionContext): ExtensionTool[] {
-    return [
-      { name: "list_widgets", description: "List all widgets.",
-        parameters: Type.Object({}),
-        execute: async () => (await ctx.http.get("/api/widgets", { headers: auth(ctx) })).json() },
-      { name: "get_widget", description: "Get one widget by id.",
-        parameters: Type.Object({ id: Type.String({ description: "Widget id" }) }),
-        execute: async (args: { id: string }) => (await ctx.http.get(\`/api/widgets/\${args.id}\`, { headers: auth(ctx) })).json() },
-    ];
-  }
-  // diagnostics.ts
-  import { Type, type ExtensionContext, type ExtensionTool } from "@miro/sdk";
-  export function buildDiagnostics(ctx: ExtensionContext): ExtensionTool[] {
-    return [
-      { name: "reachable", description: "App answers on its health endpoint.",
-        parameters: Type.Object({}),
-        execute: async () => { const r = await ctx.http.get("/health"); return { healthy: r.ok, status: r.status }; } },
-    ];
-  }
-  // operations.ts  (use your app's real name in the ref, e.g. extension.gotify.api_key)
-  import { Type, type ExtensionContext, type ExtensionOperation } from "@miro/sdk";
-  export function buildOperations(_ctx: ExtensionContext): ExtensionOperation[] {
-    return [
-      { name: "create_widget", description: "Create a widget.",
+  import { Type, type ExtensionModule, type ExtensionContext } from "@miro/sdk";
+  export default {
+    auth: { header: "X-Api-Key", secret: "api_key" },
+    entries: [
+      { name: "list_widgets", kind: "tool", description: "List all widgets.",
+        read: { path: "/api/widgets", pick: ["id", "label"] } },
+      { name: "get_widget", kind: "tool", description: "Get one widget by id.",
+        read: { path: "/api/widgets/{id}" } },                       // parameters derived from {id}
+      { name: "create_widget", kind: "operation", description: "Create a widget.",
         parameters: Type.Object({ label: Type.String() }),
         bind: (args: { label: string }) => ({
           kind: "http_mutation", goal: \`Create widget \${args.label}\`,
@@ -150,8 +141,10 @@ WORKED EXAMPLE — a complete, correct extension for a token-auth HTTP app (copy
           body: JSON.stringify({ label: args.label }), contentType: "application/json",
           secretHeader: { name: "X-Api-Key", ref: "extension.myapp.api_key" },
           verifyUrl: "/api/widgets" }) },
-    ];
-  }
+      { name: "reachable", kind: "diagnostic", description: "App answers on its health endpoint.",
+        code: async (ctx: ExtensionContext) => { const r = await ctx.http.get("/health"); return { healthy: r.ok, status: r.status }; } },
+    ],
+  } satisfies ExtensionModule;
 
 FINALLY, call capability_write with the app's operational model: what it is for, how it is
 controlled, its components and what it depends on, how data flows through it, which credentials
@@ -248,10 +241,7 @@ const extensionWriteParams = Type.Object({
   displayName: Type.String(),
   baseUrl: Type.String({ description: "Base URL of the app's API/web UI, e.g. http://localhost:8080" }),
   secretNames: Type.Array(Type.Object({ name: Type.String(), description: Type.String() })),
-  toolsTs: Type.String(),
-  diagnosticsTs: Type.String(),
-  operationsTs: Type.String({ description: "Write bindings — buildOperations(ctx). Empty string only if the app has nothing to configure." }),
-  browserTs: Type.String({ description: "Empty string if this app doesn't need browser-based diagnostics." }),
+  extensionTs: Type.String({ description: 'The complete extension.ts: `export default { auth?, entries } satisfies ExtensionModule` (types from "@miro/sdk"). Declarative reads/bindings preferred; code only where a read cannot express it.' }),
 });
 
 const MAX_WRITE_ATTEMPTS = 3;
@@ -280,10 +270,7 @@ function buildExtensionWriteTool(
       const dir = stagingDir(app);
       discardStaging(app);
       mkdirSync(dir, { recursive: true });
-      writeFileSync(join(dir, "tools.ts"), args.toolsTs);
-      writeFileSync(join(dir, "diagnostics.ts"), args.diagnosticsTs);
-      if (args.operationsTs.trim()) writeFileSync(join(dir, "operations.ts"), args.operationsTs);
-      if (args.browserTs.trim()) writeFileSync(join(dir, "browser.ts"), args.browserTs);
+      writeFileSync(join(dir, "extension.ts"), args.extensionTs);
       ensureNodeModulesSymlink(dir, MIROD_NODE_MODULES);
 
       const secrets: Record<string, string> = {};

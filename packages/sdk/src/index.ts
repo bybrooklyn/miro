@@ -1,8 +1,10 @@
 import { Type, type Static } from "@earendil-works/pi-ai";
 
-// The API surface generated extension code (tools.ts/diagnostics.ts/browser.ts/tests.ts) is
-// allowed to use — everything else is denied by extensions/validate.ts's forbidden-import
-// allowlist scan. Deliberately read-only this slice: HttpClient exposes only get().
+// The API surface a generated extension (one file, extension.ts — PLAN.md §5.13) is allowed to
+// use — everything else is denied by extensions/validate.ts's forbidden-import allowlist scan.
+// Deliberately read-only: HttpClient exposes only get(); writes are declarative bindings the daemon
+// runs through its engine. Most entries are declarative DATA (read/bind); `code` is the escape
+// hatch for a read that genuinely needs logic.
 
 export { Type, type Static };
 
@@ -39,10 +41,10 @@ export function createHttpClient(baseUrl: string, headers: Record<string, string
   };
 }
 
-/** Fixture-based fake client — used by generated tests.ts (extensions/host-entry.ts's `test_init`
- * mode) so tests exercise the generated parsing/mapping logic deterministically, no real network.
- * A fixture value is the response body (an object is JSON-encoded, a string used verbatim); wrap
- * it as `{ status, body }` to fix a non-200. Exact-path match only (query string ignored). */
+/** Fixture-based fake client — deterministic, no real network. A fixture value is the response body
+ * (an object is JSON-encoded, a string used verbatim); wrap it as `{ status, body }` to fix a
+ * non-200. Exact-path match only (query string ignored). Used by unit tests and, from slice 2, to
+ * replay a captured trace against a declarative read as its own canary (PLAN.md §5.13). */
 export function createFakeHttpClient(routes: Record<string, unknown> = {}): HttpClient {
   return {
     async get(path) {
@@ -100,9 +102,10 @@ export interface ExecResult {
   stderr: string;
 }
 
-/** Handed to a generated extension's `buildTools(ctx)`/`buildDiagnostics(ctx)`/`buildOperations(ctx)`.
- * Everything here is read-only: writes exist only as operation bindings, which the daemon runs
- * through its engine (confirmation, sandbox, verification, rollback). */
+/** Handed to a generated extension's `code`/`bind` entry functions (PLAN.md §5.13). Everything here
+ * is read-only: writes exist only as operation bindings, which the daemon runs through its engine
+ * (confirmation, sandbox, verification, rollback). Declarative `read` entries never see it — the
+ * daemon interprets them directly. */
 export interface ExtensionContext {
   http: HttpClient;
   browser: BrowserSession;
@@ -184,7 +187,56 @@ export interface ExtensionOperation<P = any> {
   bind: (args: P) => OperationBinding;
 }
 
-/** Fixture-based fake for generated tests.ts: exact-command match. */
+// --- Declarative reads + the single-file module shape (PLAN.md §5.13) ---
+
+/** A read the extension offers, as DATA rather than code. GET only. The daemon templates
+ * {placeholders} in `path` from the tool's args, applies the module's declarative `auth`, GETs, and
+ * — if `pick` is given — keeps only those fields (mapping over an array response). `expectStatus`
+ * defaults to [200]. A captured HTTP trace maps onto one of these one-to-one, which is what lets a
+ * discovered API become an extension with no generated code. */
+export interface ReadBinding {
+  method?: "GET";
+  path: string;
+  query?: Record<string, string>;
+  headers?: Record<string, string>;
+  pick?: string[];
+  expectStatus?: number[];
+}
+
+/** Shared declarative auth for every `read`: send `{ [header]: <value of the named secret> }`.
+ * `code`/`bind` entries read ctx.secrets directly instead. */
+export interface AuthSpec {
+  header: string;
+  secret: string;
+}
+
+/** One capability the extension offers. Exactly one of `read`/`bind`/`code` is present:
+ *  - kind "tool"/"diagnostic": `read` (declarative GET — preferred) or `code` (escape hatch).
+ *  - kind "operation": `bind` (synchronous, returns an OperationBinding the daemon's engine runs).
+ * `parameters` is optional: omitted, it is auto-derived from {placeholders} in a read `path` (each a
+ * required string) and defaults to the empty object schema — so the declarative common case needs no
+ * hand-typed JSON Schema. Provide a Type.Object({...}) for a `code` entry taking structured args. */
+export interface ExtensionEntry<P = any> {
+  name: string;
+  kind: "tool" | "diagnostic" | "operation";
+  label?: string;
+  description: string;
+  parameters?: unknown;
+  read?: ReadBinding;
+  bind?: (args: P) => OperationBinding;
+  code?: (ctx: ExtensionContext, args: P) => Promise<unknown>;
+}
+
+/** The single generated file's default export: `export default { auth?, entries } satisfies
+ * ExtensionModule`. Behavior only — the app's metadata (baseUrl, secrets, displayName) is passed to
+ * the daemon out-of-band by extension_write, so the model writes just what the app can do. */
+export interface ExtensionModule {
+  auth?: AuthSpec;
+  entries: ExtensionEntry[];
+}
+
+/** Fixture-based fake HTTP/exec/readFile clients: exact-match routing. Kept for unit tests and for
+ * replaying captured traces against a declarative read (PLAN.md §5.13 slice 2). */
 export function createFakeExec(routes: Record<string, Partial<ExecResult>> = {}): ExtensionContext["exec"] {
   return async (command) => {
     if (!(command in routes)) throw new Error(`No fixture for exec ${JSON.stringify(command)}`);

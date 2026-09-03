@@ -1,5 +1,7 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Database } from "bun:sqlite";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import * as store from "../extensions/store";
 import type { ExtensionManifest } from "../extensions/manifest";
 import type { ExtensionHostManager } from "../extensions/host";
@@ -60,6 +62,14 @@ export function buildToolsForExtension(
 ) {
   const manifest: ExtensionManifest = JSON.parse(row.manifest);
   const dir = extensionDir(manifest.app);
+  // Old-format extensions (pre-§5.13: tools.ts/diagnostics.ts, no extension.ts) are unloadable by
+  // the new host, so their tools would fail on every call and thrash the repair loop (found live on
+  // the dev VM's pre-existing gotify extension). Don't wire them: with no capability present the
+  // agent app_learns the app fresh in the single-file declarative format the next time it's needed.
+  if (!existsSync(join(dir, "extension.ts"))) {
+    console.log(`[mirod] extension ${manifest.app}: no extension.ts (pre-declarative format) — not wired; will be re-learned on next use`);
+    return [];
+  }
   const prefix = `ext_${sanitizeNamePart(manifest.app)}_`;
   const kinds: Record<string, OperationKind<any, any>> = allOperationKinds(getSecret, operationCtx?.setSecret);
 

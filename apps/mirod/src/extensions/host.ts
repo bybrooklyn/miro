@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { encodeLine, createLineBuffer } from "@miro/protocol";
-import type { HostRequest, HostResponse, HostToolSpec, HostTestResult } from "./host-protocol";
+import type { HostRequest, HostResponse, HostToolSpec } from "./host-protocol";
 
 const HOST_ENTRY = join(import.meta.dir, "host-entry.ts");
 const IDLE_REAP_MS = 5 * 60 * 1000;
@@ -33,8 +33,6 @@ export interface ExtensionHostManager {
   listTools(dir: string, app: string, baseUrl: string, secrets: Record<string, string>): Promise<HostToolSpec[]>;
   /** Drops the live session for `dir` so the next call loads freshly promoted code. */
   invalidate(dir: string): void;
-  /** Spawns a throwaway test-mode session, runs generated tests.ts, tears it down. */
-  runTests(dir: string, app: string): Promise<HostTestResult[]>;
   /** Browser-automation bridge for the learning agent — keyed by app, not dir (no generated code involved). */
   browserCall(app: string, tool: string, args: unknown): Promise<unknown>;
   closeBrowserSession(app: string): void;
@@ -132,6 +130,13 @@ export function createExtensionHostManager(): ExtensionHostManager {
     const existing = sessions.get(key);
     if (existing && isAlive(existing)) {
       existing.lastUsed = Date.now();
+      // Await readiness even for a reused session: spawn() registers it in the map synchronously, so
+      // a SECOND concurrent call can reach here while the first call's init (loadExtension) is still
+      // in flight. Without this, that call's request line reaches host-entry before `loaded` is set
+      // and comes back "Unknown tool: <name>". Found live on the dev VM: the agent issued two
+      // jellyfin tool calls in parallel on a cold host; the earlier one raced init and failed while
+      // the later one succeeded. waitReady resolves immediately once ready, so the warm path is free.
+      await waitReady(existing);
       return existing;
     }
     if (existing) sessions.delete(key); // dead, replace
@@ -204,17 +209,6 @@ export function createExtensionHostManager(): ExtensionHostManager {
       sessions.delete(key);
       if (res.type !== "tools") throw new Error(`unexpected response type: ${res.type}`);
       return res.tools;
-    },
-    async runTests(dir, app) {
-      const key = `${dir}:test`;
-      const session = spawn(key, dir);
-      writeLine(session, { type: "test_init", app, baseUrl: "http://unused.invalid", secrets: {} });
-      await waitReady(session);
-      const res = await request(session, { type: "run_tests", id: nextId() });
-      writeLine(session, { type: "shutdown" });
-      sessions.delete(key);
-      if (res.type !== "test_results") throw new Error(`unexpected response type: ${res.type}`);
-      return res.results;
     },
     async browserCall(app, tool, args) {
       const key = `learn:${app}`;
