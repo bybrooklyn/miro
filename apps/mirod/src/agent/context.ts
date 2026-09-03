@@ -28,8 +28,9 @@ export interface ServerSnapshot {
 const SNAPSHOT_TTL_MS = 60_000;
 let cached: ServerSnapshot | null = null;
 
-/** Systemd units that are always there and never what the user means by "what runs here". */
-const NOISE_UNIT = /^(systemd-|dbus|getty@|user@|polkit|cron|rsyslog|ssh|serial-getty|e2scrub|apparmor|udisks|ModemManager|unattended|apt-daily|fwupd|thermald|irqbalance|console-setup|keyboard-setup|networking|ifupdown|cloud-)/;
+/** Systemd units that are always there and never what the user means by "what runs here".
+ * Exported so the discovery pass (../discovery.ts) filters the same noise it does. */
+export const NOISE_UNIT = /^(systemd-|dbus|getty@|user@|polkit|cron|rsyslog|ssh|serial-getty|e2scrub|apparmor|udisks|ModemManager|unattended|apt-daily|fwupd|thermald|irqbalance|console-setup|keyboard-setup|networking|ifupdown|cloud-)/;
 
 export async function takeSnapshot(force = false): Promise<ServerSnapshot> {
   if (cached && !force && Date.now() - cached.takenAt < SNAPSHOT_TTL_MS) return cached;
