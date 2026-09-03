@@ -128,3 +128,25 @@ export function countByKindAndPhase(db: Database, kind: string, phase: Operation
   const row = db.query("SELECT COUNT(*) as n FROM operations WHERE kind = ? AND phase = ?").get(kind, phase) as { n: number };
   return row.n;
 }
+
+/** Auto-approved (unattended) operations created since `sinceMs` — the input to the engine's
+ * blast-radius rate limit. An auto-approved op has no cancel path, so every row counts as one
+ * that ran with no human in the loop. */
+export function countAutoApprovedSince(db: Database, sinceMs: number): number {
+  const row = db.query("SELECT COUNT(*) as n FROM operations WHERE auto_approve = 1 AND created_at >= ?").get(sinceMs) as { n: number };
+  return row.n;
+}
+
+/** When the last REAL rollback happened — a change was made and then undone. A user cancellation
+ * and a crash-interruption before any change both land in phase 'rolledback' but touched nothing,
+ * so they never count. null if there has been none. */
+export function lastRollbackAt(db: Database): number | null {
+  const row = db
+    .query(
+      `SELECT MAX(updated_at) AS t FROM operations
+       WHERE phase = 'rolledback'
+         AND (error IS NULL OR (error NOT LIKE 'cancelled by user%' AND error NOT LIKE 'interrupted before%'))`,
+    )
+    .get() as { t: number | null };
+  return row.t ?? null;
+}

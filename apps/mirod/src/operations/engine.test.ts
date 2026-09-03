@@ -348,3 +348,92 @@ test("reconcileOperations: interrupted-before-apply writes no incident memory", 
 
   expect(listAll(db)).toEqual([]);
 });
+
+// --- Blast-radius guards (PLAN.md §5.15 A): write mutex, rate limit + cooldown, selector sanity ---
+import { badWriteScope, MAX_UNATTENDED_OPS_PER_HOUR } from "./engine";
+import { setPhase } from "./store";
+
+test("write mutex: a second mutating operation waits until the first reaches its terminal outcome", async () => {
+  const db = freshDb();
+  const log: string[] = [];
+  let releaseFirst!: () => void;
+  const firstMayFinish = new Promise<void>((resolve) => (releaseFirst = resolve));
+  const first = fakeKind();
+  first.apply = async () => {
+    log.push("first:apply");
+    await firstMayFinish; // holds the lock mid-apply
+  };
+  const second = fakeKind();
+  second.captureState = async () => {
+    log.push("second:capture");
+    return { was: false };
+  };
+  const { ctx } = fakeCtx(db);
+  const p1 = runOperation(ctx, first, "one", { x: 1 });
+  const p2 = runOperation(ctx, second, "two", { x: 2 });
+  await Bun.sleep(30); // both are past describe/confirm; the second must be parked at the lock
+  expect(log).toEqual(["first:apply"]);
+  releaseFirst();
+  const [r1, r2] = await Promise.all([p1, p2]);
+  expect([r1.outcome, r2.outcome]).toEqual(["committed", "committed"]);
+  expect(log).toEqual(["first:apply", "second:capture"]);
+});
+
+test("rate limit: past the unattended budget an auto-approvable operation asks a human instead of running alone", async () => {
+  const db = freshDb();
+  for (let i = 0; i < MAX_UNATTENDED_OPS_PER_HOUR; i++) {
+    createOperation(db, `auto${i}`, "test.kind", "g", "{}");
+    setPlan(db, `auto${i}`, "{}", true); // ran unattended, this hour
+    setPhase(db, `auto${i}`, "committed");
+  }
+  const { ctx, events } = fakeCtx(db, "approve");
+  const result = await runOperation(ctx, fakeKind({ autoApprove: true }), "one more", { x: 1 });
+  const planEvent = events.find((e) => e.type === "operation_plan") as Extract<ServerEvent, { type: "operation_plan" }>;
+  expect(planEvent.autoApprove).toBe(false); // downgraded to a human decision, not refused
+  const q = events.find((e) => e.type === "question") as Extract<ServerEvent, { type: "question" }>;
+  expect(q.prompt).toContain("unattended-operation limit");
+  expect(result.outcome).toBe("committed"); // the human approved, so it ran
+});
+
+test("cooldown: a recent real rollback makes the next auto-approvable operation ask a human", async () => {
+  const db = freshDb();
+  createOperation(db, "r1", "test.kind", "g", "{}");
+  setPhase(db, "r1", "rolledback", "verification failed"); // a change was made and undone, just now
+  const { ctx, events } = fakeCtx(db, "approve");
+  await runOperation(ctx, fakeKind({ autoApprove: true }), "next", { x: 1 });
+  const q = events.find((e) => e.type === "question") as Extract<ServerEvent, { type: "question" }>;
+  expect(q.prompt).toContain("cooling down");
+});
+
+test("cooldown: a user cancellation is not a rollback and does not trip it", async () => {
+  const db = freshDb();
+  createOperation(db, "c1", "test.kind", "g", "{}");
+  setPhase(db, "c1", "rolledback", "cancelled by user");
+  const { ctx, events } = fakeCtx(db);
+  await runOperation(ctx, fakeKind({ autoApprove: true }), "next", { x: 1 });
+  expect(events.some((e) => e.type === "question")).toBe(false); // still ran unattended
+});
+
+test("selector sanity: badWriteScope flags empty, root, and glob roots only", () => {
+  expect(badWriteScope(["/opt/x", "/etc/nginx"])).toBeNull();
+  expect(badWriteScope(undefined)).toBeNull();
+  expect(badWriteScope(["/"])).toBe("/");
+  expect(badWriteScope([" "])).toBe(" ");
+  expect(badWriteScope(["/opt/*"])).toBe("/opt/*");
+});
+
+test("selector sanity: a root write scope is refused before anything is planned, asked, or touched", async () => {
+  const db = freshDb();
+  const { ctx, events } = fakeCtx(db);
+  const kind = fakeKind();
+  kind.describe = async () => {
+    kind.calls.push("describe");
+    return { summary: "wipe", autoApprove: true, writes: ["/"] };
+  };
+  const result = await runOperation(ctx, kind, "wipe", { x: 1 });
+  expect(result.outcome).toBe("rolledback");
+  expect(result.message).toContain("Refused");
+  expect(kind.calls).toEqual(["describe"]);
+  expect(events.map((e) => e.type)).toEqual(["operation_result"]); // no plan event, no question
+  expect(listAll(db)).toEqual([]); // no incident — nothing touched
+});

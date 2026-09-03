@@ -103,7 +103,21 @@ export async function runOperation<P, S>(
   }
 
   const plan = await kind.describe(params);
-  const autoApprove = effectiveAutoApprove(plan);
+  // Selector sanity before anything else (PLAN.md §5.15 A): a declared write scope that means
+  // "everything" is refused outright — nothing planned, asked, or touched. Google's Diskerase
+  // erased a CDN fleet because an empty selector was read as "all".
+  const bad = badWriteScope(plan.writes);
+  if (bad !== null) {
+    store.setPhase(db, id, "rolledback", `refused: write scope ${JSON.stringify(bad)}`);
+    const message = `Refused — ${goal}: declared write scope ${JSON.stringify(bad)} is empty, the root, or a glob; an operation must name the exact roots it writes.`;
+    send({ type: "operation_result", id, outcome: "rolledback", message });
+    return { outcome: "rolledback", message };
+  }
+  // Blast-radius gate: past the unattended budget, or right after a rollback, an otherwise
+  // auto-approvable operation is downgraded to "a human must approve" — never refused.
+  const gate = unattendedGate(db);
+  const downgraded = effectiveAutoApprove(plan) && gate !== null;
+  const autoApprove = effectiveAutoApprove(plan) && gate === null;
   store.setPlan(db, id, JSON.stringify(plan), autoApprove);
   // Scope and class ride in `details` so the client-facing protocol is unchanged.
   const details: Record<string, unknown> = { ...(plan.details ?? {}) };
@@ -115,7 +129,9 @@ export async function runOperation<P, S>(
   send({ type: "operation_plan", id, goal, summary: plan.summary, autoApprove, details: Object.keys(details).length > 0 ? details : null });
 
   if (!autoApprove) {
-    const notes = [plan.warning, plan.irreversible ? "cannot be rolled back" : undefined].filter(Boolean).join(" — ");
+    const notes = [plan.warning, plan.irreversible ? "cannot be rolled back" : undefined, downgraded ? `${gate} — a human must approve` : undefined]
+      .filter(Boolean)
+      .join(" — ");
     send({
       type: "question",
       id: `op_confirm:${id}`,
@@ -134,85 +150,136 @@ export async function runOperation<P, S>(
     }
   }
 
-  store.setPhase(db, id, "capturing");
-  send({ type: "operation_progress", id, phase: "capturing" });
-  const captured = await kind.captureState(params);
-  store.setCapturedAndApplying(db, id, JSON.stringify(captured), JSON.stringify(captured));
+  // From here on the operation mutates the server: hold the daemon-wide write lock until the
+  // terminal outcome (writer exclusivity), including a lifeline's reachability wait — no other
+  // change is stacked on top of an unconfirmed lockout-risk change.
+  return withWriteLock(async () => {
+    store.setPhase(db, id, "capturing");
+    send({ type: "operation_progress", id, phase: "capturing" });
+    const captured = await kind.captureState(params);
+    store.setCapturedAndApplying(db, id, JSON.stringify(captured), JSON.stringify(captured));
 
-  send({ type: "operation_progress", id, phase: "applying" });
-  try {
-    await kind.apply(params);
-  } catch (err) {
-    // apply() may have partially succeeded (e.g. stopped but didn't restart) — attempt to restore
-    // the captured state rather than leaving the system in whatever state the failure left it.
-    await kind.rollback(params, captured).catch((rollbackErr) => console.error("[mirod] rollback failed", rollbackErr));
-    store.setPhase(db, id, "rolledback", String(err));
-    const message = `Failed to apply — ${goal}: ${String(err)}`;
-    onTerminal("rolledback", message);
-    send({ type: "operation_result", id, outcome: "rolledback", message });
-    return { outcome: "rolledback", message };
-  }
-
-  store.setPhase(db, id, "verifying");
-  send({ type: "operation_progress", id, phase: "verifying" });
-  const ok = await kind.verify(params);
-
-  if (ok) {
-    // Lifeline (§39, PLAN.md §5.7 F3): a change that could lock the user out is only committed
-    // once a human proves they can still reach Miro afterwards. No answer within the window —
-    // because the connection died, or because nobody was there to say so — means roll back.
-    // This is the classic "apply the firewall rule, then require an ack or revert" pattern; the
-    // ack travels over the very path the change could have broken.
-    if (plan.class === "lifeline") {
-      const windowMs = ctx.lifelineConfirmMs ?? LIFELINE_CONFIRM_MS;
-      send({ type: "operation_progress", id, phase: "awaiting_reachability" });
-      send({
-        type: "question",
-        id: `lifeline_confirm:${id}`,
-        prompt: `${plan.summary} applied. Are you still connected? Confirm within ${Math.round(windowMs / 1000)}s or it will be rolled back automatically.`,
-        options: [
-          { label: "Still here — keep it", value: "keep" },
-          { label: "Roll back", value: "rollback" },
-        ],
-        timeoutMs: windowMs,
-      });
-      const answer = await Promise.race([waitForAnswer(`lifeline_confirm:${id}`), Bun.sleep(windowMs).then(() => "timeout" as const)]);
-      if (answer !== "keep") {
-        await kind.rollback(params, captured).catch((err) => console.error("[mirod] rollback failed", err));
-        const why = answer === "timeout" ? "no reachability confirmation within the window" : "rolled back at the user's request";
-        store.setPhase(db, id, "rolledback", why);
-        const message = `Rolled back — ${goal}: ${why}.`;
-        onTerminal("rolledback", message);
-        send({ type: "operation_result", id, outcome: "rolledback", message });
-        return { outcome: "rolledback", message };
-      }
+    send({ type: "operation_progress", id, phase: "applying" });
+    try {
+      await kind.apply(params);
+    } catch (err) {
+      // apply() may have partially succeeded (e.g. stopped but didn't restart) — attempt to restore
+      // the captured state rather than leaving the system in whatever state the failure left it.
+      await kind.rollback(params, captured).catch((rollbackErr) => console.error("[mirod] rollback failed", rollbackErr));
+      store.setPhase(db, id, "rolledback", String(err));
+      const message = `Failed to apply — ${goal}: ${String(err)}`;
+      onTerminal("rolledback", message);
+      send({ type: "operation_result", id, outcome: "rolledback", message });
+      return { outcome: "rolledback" as const, message };
     }
-    store.setPhase(db, id, "committed");
-    const message = `Done — ${goal}, verified.`;
-    onTerminal("committed", message);
-    send({ type: "operation_result", id, outcome: "committed", message });
-    return { outcome: "committed", message };
-  }
 
-  // Verify failed. A reversible op is restored to its captured state and honestly called
-  // "rolledback". An irreversible one (a POST with no undo, a completed wizard step) already
-  // changed the server and cannot be undone — its rollback() is a no-op, so "rolled back" would
-  // be a lie. Report applied_unverified so the agent re-inspects instead of blindly retrying a
-  // step the server may already have accepted (found live, run #6: the config and admin writes
-  // had landed, yet each was reported rolled back, and the agent fought them for minutes).
-  if (!plan.irreversible) {
-    await kind.rollback(params, captured).catch((err) => console.error("[mirod] rollback failed", err));
-    store.setPhase(db, id, "rolledback", "verification failed");
-    const message = `Verification failed — ${goal}, rolled back.`;
-    onTerminal("rolledback", message);
-    send({ type: "operation_result", id, outcome: "rolledback", message });
-    return { outcome: "rolledback", message };
+    store.setPhase(db, id, "verifying");
+    send({ type: "operation_progress", id, phase: "verifying" });
+    const ok = await kind.verify(params);
+
+    if (ok) {
+      // Lifeline (§39, PLAN.md §5.7 F3): a change that could lock the user out is only committed
+      // once a human proves they can still reach Miro afterwards. No answer within the window —
+      // because the connection died, or because nobody was there to say so — means roll back.
+      // This is the classic "apply the firewall rule, then require an ack or revert" pattern; the
+      // ack travels over the very path the change could have broken.
+      if (plan.class === "lifeline") {
+        const windowMs = ctx.lifelineConfirmMs ?? LIFELINE_CONFIRM_MS;
+        send({ type: "operation_progress", id, phase: "awaiting_reachability" });
+        send({
+          type: "question",
+          id: `lifeline_confirm:${id}`,
+          prompt: `${plan.summary} applied. Are you still connected? Confirm within ${Math.round(windowMs / 1000)}s or it will be rolled back automatically.`,
+          options: [
+            { label: "Still here — keep it", value: "keep" },
+            { label: "Roll back", value: "rollback" },
+          ],
+          timeoutMs: windowMs,
+        });
+        const answer = await Promise.race([waitForAnswer(`lifeline_confirm:${id}`), Bun.sleep(windowMs).then(() => "timeout" as const)]);
+        if (answer !== "keep") {
+          await kind.rollback(params, captured).catch((err) => console.error("[mirod] rollback failed", err));
+          const why = answer === "timeout" ? "no reachability confirmation within the window" : "rolled back at the user's request";
+          store.setPhase(db, id, "rolledback", why);
+          const message = `Rolled back — ${goal}: ${why}.`;
+          onTerminal("rolledback", message);
+          send({ type: "operation_result", id, outcome: "rolledback", message });
+          return { outcome: "rolledback" as const, message };
+        }
+      }
+      store.setPhase(db, id, "committed");
+      const message = `Done — ${goal}, verified.`;
+      onTerminal("committed", message);
+      send({ type: "operation_result", id, outcome: "committed", message });
+      return { outcome: "committed" as const, message };
+    }
+
+    // Verify failed. A reversible op is restored to its captured state and honestly called
+    // "rolledback". An irreversible one (a POST with no undo, a completed wizard step) already
+    // changed the server and cannot be undone — its rollback() is a no-op, so "rolled back" would
+    // be a lie. Report applied_unverified so the agent re-inspects instead of blindly retrying a
+    // step the server may already have accepted (found live, run #6: the config and admin writes
+    // had landed, yet each was reported rolled back, and the agent fought them for minutes).
+    if (!plan.irreversible) {
+      await kind.rollback(params, captured).catch((err) => console.error("[mirod] rollback failed", err));
+      store.setPhase(db, id, "rolledback", "verification failed");
+      const message = `Verification failed — ${goal}, rolled back.`;
+      onTerminal("rolledback", message);
+      send({ type: "operation_result", id, outcome: "rolledback", message });
+      return { outcome: "rolledback" as const, message };
+    }
+    store.setPhase(db, id, "committed"); // it did apply; there is nothing to reconcile back
+    const message = `Applied — ${goal}, but verification did not confirm it and it cannot be rolled back. Inspect the current state before retrying — the change may already be in effect.`;
+    onTerminal("committed", message); // recorded as applied, not a rollback; does not trip repeat-failure
+    send({ type: "operation_result", id, outcome: "applied_unverified", message });
+    return { outcome: "applied_unverified" as const, message };
+  });
+}
+
+/** Blast-radius limits (PLAN.md §5.15 A). Automation stays inside a budget a human can reason
+ * about — Google's Diskerase and Facebook's FBAR both failed for want of exactly these. Reaching
+ * a limit never refuses an operation; it downgrades it to "a human must approve" (FBAR's
+ * automation → human escalation), so autonomy degrades gracefully instead of stopping dead.
+ * ponytail: fixed thresholds, like every other engine constant. */
+export const MAX_UNATTENDED_OPS_PER_HOUR = 10;
+export const ROLLBACK_COOLDOWN_MS = 5 * 60_000;
+
+/** Why an otherwise auto-approvable operation must ask a human right now, or null. */
+function unattendedGate(db: Database): string | null {
+  if (store.countAutoApprovedSince(db, Date.now() - 3_600_000) >= MAX_UNATTENDED_OPS_PER_HOUR) {
+    return `unattended-operation limit reached (${MAX_UNATTENDED_OPS_PER_HOUR}/hour)`;
   }
-  store.setPhase(db, id, "committed"); // it did apply; there is nothing to reconcile back
-  const message = `Applied — ${goal}, but verification did not confirm it and it cannot be rolled back. Inspect the current state before retrying — the change may already be in effect.`;
-  onTerminal("committed", message); // recorded as applied, not a rollback; does not trip repeat-failure
-  send({ type: "operation_result", id, outcome: "applied_unverified", message });
-  return { outcome: "applied_unverified", message };
+  const last = store.lastRollbackAt(db);
+  if (last !== null && Date.now() - last < ROLLBACK_COOLDOWN_MS) return "cooling down after a recent rollback";
+  return null;
+}
+
+/** A declared write scope that means "everything" is never accepted: an empty entry, the root, or
+ * a glob. Returns the offending entry, or null. Exported so a kind can refuse in describe() too. */
+export function badWriteScope(writes: string[] | undefined): string | null {
+  for (const w of writes ?? []) {
+    const t = w.trim();
+    if (t === "" || t === "/" || /[*?[]/.test(t)) return w;
+  }
+  return null;
+}
+
+/** Writer exclusivity (STRATUS's A1): one mutating operation in flight daemon-wide, from
+ * captureState through its terminal outcome. The human-confirm wait stays OUTSIDE the lock, so a
+ * plan awaiting approval never blocks another operation's mutation. No kind re-enters the engine
+ * (verified: every call site is a top-level tool), so a non-reentrant lock cannot self-deadlock.
+ * ponytail: one global lock for one server; per-resource locks only if concurrency ever matters. */
+let writeLock: Promise<void> = Promise.resolve();
+async function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = writeLock;
+  let release!: () => void;
+  writeLock = new Promise<void>((resolve) => (release = resolve));
+  await previous;
+  try {
+    return await fn();
+  } finally {
+    release();
+  }
 }
 
 /** 90s: long enough to read the prompt and click, short enough that a lost connection does not
