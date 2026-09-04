@@ -53,6 +53,16 @@
         "@miro/schema-engine": "workspace:*",
       },
     },
+    "packages/model-client": {
+      "name": "@miro/model-client",
+      "version": "0.0.0",
+      "dependencies": {
+        "@miro/agent-sys": "workspace:*",
+        "@miro/agent-wire": "workspace:*",
+        "@miro/model-catalog": "workspace:*",
+        "@miro/schema-engine": "workspace:*",
+      },
+    },
     "packages/native": {
       "name": "@miro/native",
       "version": "0.0.0",
@@ -146,6 +156,8 @@
     "@miro/agent-wire": ["@miro/agent-wire@workspace:packages/agent-wire"],
 
     "@miro/model-catalog": ["@miro/model-catalog@workspace:packages/model-catalog"],
+
+    "@miro/model-client": ["@miro/model-client@workspace:packages/model-client"],
 
     "@miro/native": ["@miro/native@workspace:packages/native"],
 
