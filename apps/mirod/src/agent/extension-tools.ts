@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@miro/agent-core";
+import { objectSchema } from "../extensions/declarative";
 import type { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -77,7 +78,7 @@ export function buildToolsForExtension(
     name: `${prefix}${sanitizeNamePart(spec.name)}`,
     label: spec.label,
     description: spec.description,
-    parameters: spec.parameters as any,
+    parameters: objectSchema(spec.parameters) as any,
     execute: async (_id: string, args: unknown) => {
       const secrets = resolveSecrets(manifest, getSecret);
       try {
@@ -104,7 +105,7 @@ export function buildToolsForExtension(
     name: `${prefix}${sanitizeNamePart(spec.name)}`,
     label: spec.label,
     description: `${spec.description} (a tracked operation: shown to you, confirmed, sandboxed, verified, rolled back on failure)`,
-    parameters: spec.parameters as any,
+    parameters: objectSchema(spec.parameters) as any,
     execute: async (_id: string, args: unknown) => {
       if (!operationCtx) return textResult({ error: "operations are not available in this context" });
       const secrets = resolveSecrets(manifest, getSecret);

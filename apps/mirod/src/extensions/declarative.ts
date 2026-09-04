@@ -28,13 +28,26 @@ export function toJsonSchema(parameters: unknown): unknown {
   return schema.toJsonSchema({ target: "draft-2020-12", fallback: (ctx: { base: unknown }) => ctx.base });
 }
 
+/** A tool's parameters as the JSON Schema the manifest stores and the model is shown - with a
+ * no-argument tool spelled as the canonical `{ type: "object", properties: {} }`, never a bare `{}`.
+ * A bare `{}` is a valid JSON Schema ("anything") that the wire layer legitimately collapses to the
+ * boolean `true`, which OpenAI's tools API then rejects ("expected an object, but got a boolean") -
+ * found live on the first Codex turn after the migration, on every no-arg extension tool. Applied
+ * where a manifest is written (entryParameters) AND where one is read (agent/extension-tools.ts),
+ * so extensions promoted before this fix keep working. */
+export function objectSchema(parameters: unknown): unknown {
+  const p = toJsonSchema(parameters);
+  if (p == null || (typeof p === "object" && !Array.isArray(p) && Object.keys(p).length === 0)) return { type: "object", properties: {} };
+  return p;
+}
+
 /** parameters as JSON Schema: explicit if the entry gave one, else derived from a read path's
  * {placeholders} (each a required string), else the empty object schema - no hand-typed schema for
  * the declarative common case (the historical Type.Union schema-bug source). */
 export function entryParameters(entry: ExtensionEntry): unknown {
-  if (entry.parameters !== undefined) return toJsonSchema(entry.parameters);
+  if (entry.parameters !== undefined) return objectSchema(entry.parameters);
   const names = entry.read ? pathPlaceholders(entry.read.path) : [];
-  if (names.length === 0) return {};
+  if (names.length === 0) return objectSchema(undefined);
   return { type: "object", properties: Object.fromEntries(names.map((n) => [n, { type: "string" }])), required: names };
 }
 

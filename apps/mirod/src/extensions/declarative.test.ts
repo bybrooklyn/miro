@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
 import { createFakeHttpClient, type ExtensionContext, type ExtensionModule } from "@miro/sdk";
-import { templatePath, pathPlaceholders, entryParameters, applyPick, moduleAuthHeaders, runRead, validateEntry } from "./declarative";
+import { templatePath, pathPlaceholders, entryParameters, objectSchema, applyPick, moduleAuthHeaders, runRead, validateEntry } from "./declarative";
 
 // The declarative-read interpreter (PLAN.md §5.13) is what makes a purely-declarative extension run
 // zero generated code. Real fake HTTP client (no mocks), pure logic - the checks that guard the
@@ -16,11 +16,20 @@ test("templatePath extracts, substitutes, and URL-encodes path placeholders", ()
   expect(templatePath("/no/params", {})).toBe("/no/params");
 });
 
-test("entryParameters derives a required-string schema from read placeholders, else {}", () => {
+test("entryParameters derives a required-string schema from read placeholders, else the canonical empty object schema", () => {
   expect(entryParameters({ name: "a", kind: "tool", description: "d", read: { path: "/Items/{id}" } })).toEqual({ type: "object", properties: { id: { type: "string" } }, required: ["id"] });
-  expect(entryParameters({ name: "b", kind: "tool", description: "d", read: { path: "/all" } })).toEqual({});
+  // Never a bare {} - the wire layer collapses that to the boolean `true`, which OpenAI rejects (found live).
+  expect(entryParameters({ name: "b", kind: "tool", description: "d", read: { path: "/all" } })).toEqual({ type: "object", properties: {} });
+  expect(entryParameters({ name: "b2", kind: "tool", description: "d", parameters: {}, code: async () => 1 })).toEqual({ type: "object", properties: {} });
   const explicit = { type: "object", properties: { q: { type: "string" } } };
   expect(entryParameters({ name: "c", kind: "tool", description: "d", parameters: explicit, code: async () => 1 })).toBe(explicit);
+});
+
+test("objectSchema turns a Type.Object(...) schema into plain JSON Schema and a legacy {} into the canonical empty object schema", async () => {
+  const { Type } = await import("@miro/sdk");
+  expect(objectSchema(Type.Object({ id: Type.String() }))).toMatchObject({ type: "object", properties: { id: { type: "string" } }, required: ["id"] });
+  expect(objectSchema({})).toEqual({ type: "object", properties: {} });
+  expect(objectSchema(undefined)).toEqual({ type: "object", properties: {} });
 });
 
 test("applyPick keeps only picked fields, over an object or an array response", () => {
