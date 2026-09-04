@@ -27,5 +27,7 @@ test("createFakeHttpClient throws for an unfixtured path", async () => {
 
 test("re-exports the same Type schema builder every other tool file uses", () => {
   const schema = Type.Object({ id: Type.String() });
-  expect(schema.type).toBe("object");
+  // Not a plain JSON object any more (PLAN.md §5.17): the schema engine's Type carries its JSON
+  // Schema behind toJsonSchema(), which is what the extension host serializes for the manifest.
+  expect(schema.toJsonSchema()).toMatchObject({ type: "object", properties: { id: { type: "string" } }, required: ["id"] });
 });

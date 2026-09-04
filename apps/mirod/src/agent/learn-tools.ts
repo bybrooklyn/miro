@@ -1,6 +1,6 @@
-import { Type } from "@earendil-works/pi-ai";
-import type { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { Type } from "@miro/schema-engine/typebox";
+import type { AgentToolResult } from "@miro/agent-core";
+import type { ModelRegistry } from "./models";
 import type { Database } from "bun:sqlite";
 import type { ServerEvent } from "@miro/protocol";
 import type { ExtensionHostManager } from "../extensions/host";
@@ -14,7 +14,7 @@ export interface LearnToolContext {
   hostMgr: ExtensionHostManager;
   setSecret: (ref: string, value: string) => void;
   getSecret: (ref: string) => string | null;
-  models: ReturnType<typeof builtinModels>;
+  models: ModelRegistry;
   resolveCodegenModel: () => Promise<CodegenSelection | null>;
   getStoredKey: (provider: string) => string | null;
   /** Lets the learning agent ask the user mid-research (PLAN.md §5.3 C). */

@@ -1,5 +1,5 @@
-import type { Model, ThinkingLevel } from "@earendil-works/pi-ai";
-import type { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import type { Effort, Model } from "@miro/model-client";
+import type { ModelRegistry } from "../agent/models";
 import type { Database } from "bun:sqlite";
 import type { ServerEvent } from "@miro/protocol";
 import type { ExtensionHostManager } from "./host";
@@ -12,7 +12,7 @@ import { discoverAppOnBox, formatPresence } from "../discovery";
  * distinct from the general cost-tier routing_policy used for everyday chat. */
 export interface CodegenSelection {
   model: Model<any>;
-  reasoning?: ThinkingLevel;
+  reasoning?: Effort;
 }
 
 /** Learning recurses (PLAN.md §5.2 C): learning Radarr can branch into learning Prowlarr and
@@ -29,7 +29,7 @@ export interface LearnFlowOptions {
   hostMgr: ExtensionHostManager;
   setSecret: (ref: string, value: string) => void;
   getSecret: (ref: string) => string | null;
-  models: ReturnType<typeof builtinModels>;
+  models: ModelRegistry;
   resolveCodegenModel: () => Promise<CodegenSelection | null>;
   getStoredKey: (provider: string) => string | null;
   send: (event: ServerEvent) => void;

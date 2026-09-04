@@ -1,5 +1,5 @@
-import { Type, type Static } from "@earendil-works/pi-ai";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { Type, type Static } from "@miro/schema-engine/typebox";
+import type { AgentToolResult } from "@miro/agent-core";
 import { existsSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import { classifyCommand, isSensitivePath, isLocalOrPrivateUrl, redactSecretsInText } from "../operations/classify";
 import { runSandboxed, sandboxAvailable } from "../operations/sandbox";
@@ -35,7 +35,7 @@ const netCaptureParams = Type.Object({
   durationSeconds: Type.Integer({ description: "How long to capture (1-60). Perform the action you want to observe while it runs." }),
   filter: Type.Optional(Type.String({ description: "BPF capture filter, e.g. 'tcp port 8096' or 'host 172.17.0.2'. Strongly recommended - unfiltered captures are noisy." })),
   interface: Type.Optional(Type.String({ description: "Interface name (default 'any')." })),
-  mode: Type.Optional(Type.Unsafe<"summary" | "http">({ type: "string", enum: ["summary", "http"], description: "summary = one line per packet (time, src→dst, protocol, info). http = decoded plaintext HTTP requests/responses only (method, URI, status, body). Default summary." })),
+  mode: Type.Optional(Type.Enum(["summary", "http"], { description: "summary = one line per packet (time, src→dst, protocol, info). http = decoded plaintext HTTP requests/responses only (method, URI, status, body). Default summary." })),
 });
 
 export interface ReadToolContext {

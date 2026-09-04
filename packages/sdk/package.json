@@ -7,6 +7,6 @@
   "main": "src/index.ts",
   "types": "src/index.ts",
   "dependencies": {
-    "@earendil-works/pi-ai": "^0.84.4"
+    "@miro/schema-engine": "workspace:*"
   }
 }

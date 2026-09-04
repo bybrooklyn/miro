@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { createModels } from "@earendil-works/pi-ai";
+import { createModelRegistry } from "./models";
 import { isOllamaReachable, registerOllamaIfReachable, OLLAMA_PROVIDER } from "./ollama";
 
 test("isOllamaReachable is false for a port nothing is listening on (no real service touched)", async () => {
@@ -7,10 +7,10 @@ test("isOllamaReachable is false for a port nothing is listening on (no real ser
 });
 
 test("registerOllamaIfReachable is a no-op against an unreachable server", async () => {
-  const models = createModels();
+  const models = createModelRegistry(() => null);
   const registered = await registerOllamaIfReachable(models, "http://127.0.0.1:1");
   expect(registered).toBe(false);
-  expect(models.getModels(OLLAMA_PROVIDER) ?? []).toEqual([]);
+  expect(models.getModels(OLLAMA_PROVIDER)).toEqual([]);
 });
 
 test(
@@ -20,11 +20,13 @@ test(
     // provider registration path, not just the unreachable branch.
     const reachable = await isOllamaReachable();
     if (!reachable) return; // don't fail elsewhere if Ollama isn't running on whatever box runs this
-    const models = createModels();
+    const models = createModelRegistry(() => null);
     expect(await registerOllamaIfReachable(models)).toBe(true);
-    const registered = models.getModels(OLLAMA_PROVIDER) ?? [];
+    const registered = models.getModels(OLLAMA_PROVIDER);
     expect(registered.some((m) => m.id === "gemma4:31b-cloud")).toBe(true);
-    expect(registered[0].cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+    expect(registered[0]!.cost).toMatchObject({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+    // The registry, not a stored key, supplies Ollama's placeholder credential.
+    expect(await models.getApiKey(registered[0]!)).toBe("ollama-local");
   },
   { timeout: 10000, retry: 2 },
 );

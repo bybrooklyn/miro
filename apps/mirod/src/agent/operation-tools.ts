@@ -1,5 +1,5 @@
-import { Type } from "@earendil-works/pi-ai";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { Type } from "@miro/schema-engine/typebox";
+import type { AgentToolResult } from "@miro/agent-core";
 import type { OperationToolContext } from "../operations/engine";
 import { runOperation } from "../operations/engine";
 import { systemdRestartKind } from "../operations/kinds/systemd-restart";
@@ -43,7 +43,7 @@ const fileDeleteParams = Type.Object({
 });
 
 const httpMutationParams = Type.Object({
-  method: Type.Unsafe<"POST" | "PUT" | "PATCH" | "DELETE">({ type: "string", enum: ["POST", "PUT", "PATCH", "DELETE"] }),
+  method: Type.Enum(["POST", "PUT", "PATCH", "DELETE"]),
   url: Type.String({ description: "Local or private-network URL only." }),
   reason: Type.String({ description: "Why, in one line - shown to the user as the goal." }),
   body: Type.Optional(Type.String({ description: "Request body. Never a literal credential: write {{secret:<ref>}} where a password or token belongs (create one with credential_create); the daemon substitutes it at request time and the user sees only the placeholder." })),
@@ -56,7 +56,7 @@ const httpMutationParams = Type.Object({
   verifyExpect: Type.Optional(Type.String()),
   rollback: Type.Optional(
     Type.Object({
-      method: Type.Unsafe<"POST" | "PUT" | "PATCH" | "DELETE">({ type: "string", enum: ["POST", "PUT", "PATCH", "DELETE"] }),
+      method: Type.Enum(["POST", "PUT", "PATCH", "DELETE"]),
       url: Type.String(),
       body: Type.Optional(Type.String()),
       contentType: Type.Optional(Type.String()),

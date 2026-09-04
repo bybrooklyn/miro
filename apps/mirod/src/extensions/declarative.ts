@@ -18,11 +18,21 @@ export function templatePath(path: string, args: any): string {
   return path.replace(PLACEHOLDER, (_m, name) => encodeURIComponent(String(args?.[name] ?? "")));
 }
 
+/** `Type.Object(...)` from @miro/sdk is no longer a plain JSON object (PLAN.md §5.17: the schema
+ * engine's Type is a callable carrying toJsonSchema) - the manifest, the host RPC and the validator
+ * all need plain JSON Schema, so this is the one place an entry's schema is turned into it. */
+export function toJsonSchema(parameters: unknown): unknown {
+  const schema = parameters as { toJsonSchema?: (options: unknown) => unknown } | null | undefined;
+  if (typeof schema?.toJsonSchema !== "function") return parameters;
+  // Same options agent-core uses for the wire, so a schema means the same thing in both places.
+  return schema.toJsonSchema({ target: "draft-2020-12", fallback: (ctx: { base: unknown }) => ctx.base });
+}
+
 /** parameters as JSON Schema: explicit if the entry gave one, else derived from a read path's
  * {placeholders} (each a required string), else the empty object schema - no hand-typed schema for
  * the declarative common case (the historical Type.Union schema-bug source). */
 export function entryParameters(entry: ExtensionEntry): unknown {
-  if (entry.parameters !== undefined) return entry.parameters;
+  if (entry.parameters !== undefined) return toJsonSchema(entry.parameters);
   const names = entry.read ? pathPlaceholders(entry.read.path) : [];
   if (names.length === 0) return {};
   return { type: "object", properties: Object.fromEntries(names.map((n) => [n, { type: "string" }])), required: names };

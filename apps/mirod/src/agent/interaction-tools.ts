@@ -1,5 +1,5 @@
-import { Type, type Static } from "@earendil-works/pi-ai";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { Type, type Static } from "@miro/schema-engine/typebox";
+import type { AgentToolResult } from "@miro/agent-core";
 import type { ServerEvent } from "@miro/protocol";
 
 // The two tools that make the outcome loop conversational without ending the turn (PLAN.md
@@ -37,7 +37,7 @@ const systemPlanParams = Type.Object({
   components: Type.Array(
     Type.Object({
       name: Type.String(),
-      action: Type.Unsafe<"reuse" | "install" | "configure" | "remove">({ type: "string", enum: ["reuse", "install", "configure", "remove"] }),
+      action: Type.Enum(["reuse", "install", "configure", "remove"]),
       detail: Type.String({ description: "What exactly happens to it and why. Existing, working software is reused, not replaced." }),
     }),
   ),
@@ -49,7 +49,7 @@ const systemPlanParams = Type.Object({
 const credentialCreateParams = Type.Object({
   ref: Type.String({ description: "Secret-store reference to create, e.g. extension.jellyfin.admin_password or extension.jellyfin.api_key." }),
   purpose: Type.String({ description: "What it is for, shown to the user with the value, e.g. 'Jellyfin admin password for user admin'." }),
-  kind: Type.Optional(Type.Unsafe<"password" | "token">({ type: "string", enum: ["password", "token"], description: "password = 20 chars, letters/digits/symbols; token = 32 hex chars. Default password." })),
+  kind: Type.Optional(Type.Enum(["password", "token"], { description: "password = 20 chars, letters/digits/symbols; token = 32 hex chars. Default password." })),
 });
 
 function generateCredential(kind: "password" | "token"): string {

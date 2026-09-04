@@ -1,4 +1,4 @@
-import { Type, type Static } from "@earendil-works/pi-ai";
+import { Type, type Static } from "@miro/schema-engine/typebox";
 
 // The API surface a generated extension (one file, extension.ts - PLAN.md §5.13) is allowed to
 // use - everything else is denied by extensions/validate.ts's forbidden-import allowlist scan.

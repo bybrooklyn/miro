@@ -11,9 +11,11 @@ import {
   type ClientMessage,
   type ServerEvent,
 } from "@miro/protocol";
-import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import type { Agent } from "@earendil-works/pi-agent-core";
+import type { Agent } from "@miro/agent-core";
+import { Effort, type Model } from "@miro/model-client";
+import { getBundledModel } from "@miro/model-catalog";
 import { createMiroAgent, pickDefaultModel, runTurn, PROVIDER_CATALOG, ROUTING_POLICIES, type RoutingPolicy } from "./agent";
+import { createModelRegistry } from "./agent/models";
 import { registerOllamaIfReachable } from "./agent/ollama";
 import { ensureTimelineTable, recordEvent } from "./timeline";
 import { createSecretStore } from "./secrets";
@@ -30,9 +32,7 @@ import { ensureNodeModulesSymlink, extensionDir, MIROD_NODE_MODULES } from "./ex
 import type { CodegenSelection } from "./extensions/learn";
 import { maybeTriggerRepair, reprobeExtensions, type RepairTrigger } from "./extensions/repair";
 import { requiresArguments } from "./extensions/validate";
-import { createCodexCredentialStore, importCodexCredentialFromCli } from "./agent/codex-auth";
-import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
-import type { Model } from "@earendil-works/pi-ai";
+import { createCodexAuth, importCodexCredentialFromCli } from "./agent/codex-auth";
 
 const OPERATION_KINDS = allOperationKinds((ref) => secretStore.getSecret(db, ref), (ref, value) => secretStore.setSecret(db, ref, value));
 
@@ -102,8 +102,8 @@ function storedCodegenPolicy(): RoutingPolicy | null {
   return (ROUTING_POLICIES as readonly string[]).includes(stored ?? "") ? (stored as RoutingPolicy) : null;
 }
 
-const codexCredentials = createCodexCredentialStore(db, secretStore);
-const models = builtinModels({ credentials: codexCredentials });
+const codexAuth = createCodexAuth(db, secretStore);
+const models = createModelRegistry(getStoredKey, codexAuth.accessToken);
 
 // One-time import of a credential logged in via pi-ai's own CLI (`login openai-codex`), so the
 // daemon doesn't need its own interactive OAuth login UX yet. Idempotent - re-importing a fresh
@@ -132,7 +132,7 @@ await reconcileOperations(db, OPERATION_KINDS);
 // "best" routing budget, never blocks the operation/chat turn that triggered it.
 function reflect(trigger: ReflectionTrigger): void {
   resolveReflectionModel()
-    .then((model) => (model ? reflectOnOperation(db, models, model, getStoredKey, trigger) : undefined))
+    .then((model) => (model ? reflectOnOperation(db, models, model, trigger) : undefined))
     .catch((err) => console.error("[mirod] reflection failed", err));
 }
 
@@ -182,8 +182,8 @@ function cancelPending(state: ConnState): void {
  * (that setting only matters as a fallback when Codex isn't connected). Shared by the interactive
  * resolver below and the autonomous one Dreaming's repair pass uses. */
 async function resolveCodegenSelection(policy: RoutingPolicy): Promise<CodegenSelection | null> {
-  if (await codexCredentials.read("openai-codex")) {
-    return { model: getBuiltinModel("openai-codex", "gpt-5.6-luna"), reasoning: "medium" };
+  if (codexAuth.isConnected()) {
+    return { model: getBundledModel("openai-codex", "gpt-5.6-luna"), reasoning: Effort.Medium };
   }
   const model = pickDefaultModel(models, getStoredKey, policy);
   return model ? { model } : null;
@@ -194,7 +194,7 @@ async function resolveCodegenSelection(policy: RoutingPolicy): Promise<CodegenSe
  * via the same generic pendingAnswers round-trip an operation confirmation uses, and saves the
  * answer so it's never asked again. */
 async function resolveCodegenModel(state: ConnState, send: (event: ServerEvent) => void): Promise<CodegenSelection | null> {
-  if (await codexCredentials.read("openai-codex")) return resolveCodegenSelection("best"); // policy arg unused on the Codex path
+  if (codexAuth.isConnected()) return resolveCodegenSelection("best"); // policy arg unused on the Codex path
   let policy = storedCodegenPolicy();
   if (!policy) {
     send({
@@ -278,8 +278,8 @@ setInterval(discover, REPROBE_INTERVAL_MS);
  * was too volatile to rely on, so it is never left as codegen-only while chat has nothing. With no
  * Codex login, the cost-tier routing_policy over the other connected providers applies as before. */
 async function resolveChatSelection(): Promise<CodegenSelection | null> {
-  if (await codexCredentials.read("openai-codex")) {
-    return { model: getBuiltinModel("openai-codex", "gpt-5.6-luna"), reasoning: "medium" };
+  if (codexAuth.isConnected()) {
+    return { model: getBundledModel("openai-codex", "gpt-5.6-luna"), reasoning: Effort.Medium };
   }
   const model = pickDefaultModel(models, getStoredKey, routingPolicy());
   return model ? { model } : null;
@@ -321,7 +321,7 @@ async function handleChat(text: string, send: (event: ServerEvent) => void, stat
   if (state.lastReply && isLikelyCorrection(text)) {
     const reflectionModel = await resolveReflectionModel();
     if (reflectionModel) {
-      reflectOnCorrection(db, models, reflectionModel, getStoredKey, state.lastReply, text).catch((err) =>
+      reflectOnCorrection(db, models, reflectionModel, state.lastReply, text).catch((err) =>
         console.error("[mirod] reflection failed", err),
       );
     }

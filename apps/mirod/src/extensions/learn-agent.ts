@@ -1,8 +1,9 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Agent, type AgentTool, type AgentToolResult } from "@earendil-works/pi-agent-core";
-import { Type, type Model, type Static, type ThinkingLevel } from "@earendil-works/pi-ai";
-import type { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import { Agent, type AgentTool, type AgentToolResult } from "@miro/agent-core";
+import { streamSimple, type Effort, type Model } from "@miro/model-client";
+import { Type, type Static } from "@miro/schema-engine/typebox";
+import type { ModelRegistry } from "../agent/models";
 import type { Database } from "bun:sqlite";
 import type { ServerEvent } from "@miro/protocol";
 import { AGENT_TOOLS } from "../agent/tools";
@@ -11,7 +12,7 @@ import { AGENT_TOOLS } from "../agent/tools";
 // extensions/learn-agent.ts -> agent/index.ts, the exact circular import model-utils.ts exists to
 // avoid (see its own comment). It happened to still work via ESM's lazy live-binding resolution
 // when tried, but that's fragile luck, not a real fix - this is the correct, leaf-module import.
-import { resolveApiKey, runTurn } from "../agent/model-utils";
+import { limitTurns, runTurn } from "../agent/model-utils";
 import { buildReadTools } from "../agent/read-tools";
 import { buildInteractionTools } from "../agent/interaction-tools";
 import { buildOperationTools } from "../agent/operation-tools";
@@ -319,9 +320,9 @@ export interface LearnAgentOptions {
   hostMgr: ExtensionHostManager;
   setSecret: (ref: string, value: string) => void;
   getSecret: (ref: string) => string | null;
-  models: ReturnType<typeof builtinModels>;
+  models: ModelRegistry;
   model: Model<any>;
-  reasoning?: ThinkingLevel;
+  reasoning?: Effort;
   getStoredKey: (provider: string) => string | null;
   send: (event: ServerEvent) => void;
   waitForAnswer?: (id: string) => Promise<string>;
@@ -385,18 +386,17 @@ export async function spawnLearningAgent(o: LearnAgentOptions): Promise<{ text: 
     recursiveLearn,
   ];
 
-  let turns = 0;
   const maxTurns = o.maxTurns ?? DEFAULT_MAX_TURNS;
   const refs = listSecretRefs(o.db, "extension.");
   const systemPrompt = `${LEARN_SYSTEM_PROMPT}\n\nCredentials on file (references only - values are never shown): ${refs.length > 0 ? refs.join(", ") : "none yet"}.`;
   const agent = new Agent({
     // Heterogeneous per-tool parameter schemas can't unify into one array type without erasure -
     // same cast agent/index.ts's own createMiroAgent uses for the exact same reason.
-    initialState: { systemPrompt, model: o.model, tools: tools as AgentTool<any>[] },
-    streamFn: (m, context, options) => o.models.streamSimple(m, context, o.reasoning ? { ...options, reasoning: o.reasoning } : options),
-    getApiKey: async (provider) => resolveApiKey(provider, o.getStoredKey),
-    shouldStopAfterTurn: () => ++turns >= maxTurns,
+    initialState: { systemPrompt: [systemPrompt], model: o.model, tools: tools as AgentTool<any>[] },
+    streamFn: (m, context, options) => streamSimple(m, context, o.reasoning ? { ...options, reasoning: o.reasoning } : options),
+    getApiKey: (m) => o.models.getApiKey(m),
   });
+  limitTurns(agent, maxTurns);
 
   try {
     const text = await runTurn(agent, o.goal, {

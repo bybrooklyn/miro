@@ -1,5 +1,5 @@
-import type { Agent, AgentEvent } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { Agent, AgentEvent } from "@miro/agent-core";
+import type { AssistantMessage } from "@miro/model-client";
 
 // Extracted from agent/index.ts as a leaf module (no dependency on anything that could import it
 // back) - extensions/learn-agent.ts needs resolveApiKey/runTurn too, and agent/index.ts ->
@@ -25,7 +25,15 @@ export function resolveApiKey(provider: string, getStoredKey: (provider: string)
   return entry ? process.env[entry.envVar] : undefined;
 }
 
-// pi-agent-core doesn't throw on a provider error (bad key, rate limit, ...) - it produces an
+/** Caps a worker/learning agent at `maxTurns` model calls. The vendored agent-core dropped
+ * pi-agent-core's shouldStopAfterTurn option in favour of a pre-model-call gate; same budget - call
+ * maxTurns+1 is refused and the loop ends cleanly (no open turn, nothing billed). */
+export function limitTurns(agent: Agent, maxTurns: number): void {
+  let calls = 0;
+  agent.setBeforeModelCall(() => (++calls > maxTurns ? { stop: true, reason: `turn budget (${maxTurns}) spent` } : undefined));
+}
+
+// agent-core doesn't throw on a provider error (bad key, rate limit, ...) - it produces an
 // assistant message with stopReason "error", empty content, and the detail in errorMessage.
 // Surface that instead of silently returning empty text, which would read as Miro ignoring you.
 function textOf(message: AssistantMessage | undefined): string {
@@ -80,7 +88,7 @@ export async function runTurn(agent: Agent, text: string, hooks: TurnHooks | ((l
         parentId: h.parentActivityId,
         label: tool?.label ?? event.toolName,
         status: event.isError ? "failed" : "done",
-        detail: summarizeResult(event.result, event.isError),
+        detail: summarizeResult(event.result, event.isError ?? false),
       });
     } else if (event.type === "message_update" && h.onDelta && event.assistantMessageEvent.type === "text_delta") {
       h.onDelta(event.assistantMessageEvent.delta);

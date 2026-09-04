@@ -1,8 +1,8 @@
-import { Agent, type AgentTool } from "@earendil-works/pi-agent-core";
-import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import type { Model } from "@earendil-works/pi-ai";
+import { Agent, type AgentTool } from "@miro/agent-core";
+import type { Model } from "@miro/model-client";
 import { AGENT_TOOLS } from "./tools";
-import { resolveApiKey, runTurn } from "./index";
+import { limitTurns, runTurn } from "./model-utils";
+import type { ModelRegistry } from "./models";
 
 const WORKER_SYSTEM_PROMPT = `You are a narrow investigation worker spawned by Miro (plan §21).
 You have one goal and a small set of tools. Investigate using only those tools, then report what
@@ -28,29 +28,25 @@ export interface WorkerResult {
  * mutates. ponytail: no recursive worker swarms (plan explicitly rules this out for v1), and no
  * standing pool - one Agent per call, thrown away when done.
  *
- * `models` must be the caller's own registry, not a fresh builtinModels() - live-tested finding:
- * a freshly-built registry doesn't know about dynamically-registered providers (e.g. Ollama, only
- * added via registerOllamaIfReachable on the daemon's one shared registry), so `model.provider`
- * resolves to "Unknown provider" even though the exact same model works fine everywhere else.
+ * `models` must be the daemon's one shared registry (agent/models.ts), never a fresh one - live-
+ * tested finding: a provider registered at runtime (Ollama) is unknown to any other registry, so
+ * the exact same model that works everywhere else has no credential and no provider here.
  */
 export async function spawnWorker(
   goal: string,
   allowedToolNames: string[],
-  models: ReturnType<typeof builtinModels>,
+  models: ModelRegistry,
   model: Model<any>,
-  getStoredKey: (provider: string) => string | null,
   maxTurns = 4,
 ): Promise<WorkerResult> {
   const tools = AGENT_TOOLS.filter((t) => allowedToolNames.includes(t.name));
   const toolCalls: WorkerToolCall[] = [];
-  let turns = 0;
 
   const agent = new Agent({
-    initialState: { systemPrompt: WORKER_SYSTEM_PROMPT, model, tools: tools as AgentTool<any>[] },
-    streamFn: (m, context, options) => models.streamSimple(m, context, options),
-    getApiKey: async (provider) => resolveApiKey(provider, getStoredKey),
-    shouldStopAfterTurn: () => ++turns >= maxTurns,
+    initialState: { systemPrompt: [WORKER_SYSTEM_PROMPT], model, tools: tools as AgentTool<any>[] },
+    getApiKey: (m) => models.getApiKey(m),
   });
+  limitTurns(agent, maxTurns);
 
   agent.subscribe((event) => {
     if (event.type === "tool_execution_start") toolCalls.push({ name: event.toolName, args: event.args });

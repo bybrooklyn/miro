@@ -90,7 +90,7 @@ type InferParse<s extends string> = s extends
 				: s extends "object.json.stringify"
 					? string
 					: s extends "FormData.parse"
-						? Record<string, Bun.FormDataEntryValue | Bun.FormDataEntryValue[]>
+						? Record<string, FormDataEntryValue | FormDataEntryValue[]> /* Vendoring note: the DOM lib type, not Bun's identical alias - this surface is also compiled by the extension validator's tsc program, which has no bun-types (PLAN.md §5.17) */
 						: s extends "parse.boolean"
 							? boolean
 							: s extends "parse.bigint"

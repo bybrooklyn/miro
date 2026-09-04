@@ -1,6 +1,6 @@
-import { Agent, type AgentTool } from "@earendil-works/pi-agent-core";
-import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import type { Model, ThinkingLevel } from "@earendil-works/pi-ai";
+import { Agent, type AgentTool } from "@miro/agent-core";
+import { streamSimple, type Effort, type Model } from "@miro/model-client";
+import type { ModelRegistry } from "./models";
 import { AGENT_TOOLS } from "./tools";
 import { OLLAMA_PROVIDER } from "./ollama";
 import { buildOperationTools } from "./operation-tools";
@@ -92,21 +92,21 @@ function totalCost(model: Model<any>): number {
  * actually need more than "cheap" vs "expensive" to be useful.
  */
 export function pickDefaultModel(
-  models: ReturnType<typeof builtinModels>,
+  models: ModelRegistry,
   getStoredKey: (provider: string) => string | null,
   policy: RoutingPolicy = "cheapest",
 ): Model<any> | null {
   const candidates: Model<any>[] = [];
   for (const { provider } of PROVIDER_CATALOG) {
     if (!resolveApiKey(provider, getStoredKey)) continue;
-    for (const model of models.getModels(provider) ?? []) {
+    for (const model of models.getModels(provider)) {
       // Excludes sentinel/dynamic entries like openrouter's "auto" (negative placeholder cost).
       if (model.cost && totalCost(model) >= 0) candidates.push(model);
     }
   }
   // Ollama needs no key - being registered on `models` at all (done once at startup, only if the
   // local server was reachable) already means "connected", no separate credential check needed.
-  candidates.push(...(models.getModels(OLLAMA_PROVIDER) ?? []));
+  candidates.push(...models.getModels(OLLAMA_PROVIDER));
   if (candidates.length === 0) return null;
 
   const sorted = [...candidates].sort((a, b) => totalCost(a) - totalCost(b));
@@ -116,21 +116,21 @@ export function pickDefaultModel(
 }
 
 export function createMiroAgent(
-  models: ReturnType<typeof builtinModels>,
+  models: ModelRegistry,
   model: Model<any>,
   getStoredKey: (provider: string) => string | null,
   personality: keyof typeof PERSONALITY_TONE = "casual",
   operationCtx?: OperationToolContext,
   learnCtx?: Omit<LearnToolContext, "db" | "send" | "models" | "getStoredKey" | "onPromoted">,
   /** Reasoning effort for models that support it - e.g. Codex logins always run at "medium". */
-  reasoning?: ThinkingLevel,
+  reasoning?: Effort,
   /** The assembled per-turn context (agent/context.ts): server snapshot, operated systems, refusals. */
   contextBlock = "",
 ): Agent {
   const getSecret = learnCtx?.getSecret ?? operationCtx?.getSecret;
   // Hot-load (PLAN.md §5.4 D): after app_learn promotes an extension, swap its tools into THIS
-  // running agent so the same task continues with them - pi-agent-core's state.tools is a setter
-  // and a tool result's addedToolNames marks them usable from that transcript point on.
+  // running agent so the same task continues with them - agent-core re-reads state.tools before
+  // every model call, so tools set mid-turn are callable from the very next call on.
   let agent: Agent | null = null;
   const onPromoted = (app: string): string[] => {
     if (!agent || !operationCtx || !learnCtx) return [];
@@ -138,7 +138,7 @@ export function createMiroAgent(
     if (!row || row.state !== "enabled") return [];
     const fresh = buildToolsForExtension(row, operationCtx.db, learnCtx.hostMgr, learnCtx.getSecret, learnCtx.repair, operationCtx);
     const names = new Set(fresh.map((t) => t.name));
-    agent.state.tools = [...agent.state.tools.filter((t) => !names.has(t.name)), ...(fresh as AgentTool<any>[])];
+    agent.setTools([...agent.state.tools.filter((t) => !names.has(t.name)), ...(fresh as AgentTool<any>[])]);
     return [...names];
   };
   const tools = [
@@ -172,12 +172,10 @@ export function createMiroAgent(
   const memorySummary = operationCtx ? buildSummary(operationCtx.db) : "";
   agent = new Agent({
     // Heterogeneous per-tool parameter schemas can't unify into one array type without erasure -
-    // this is how pi-agent-core's own AgentState.tools is typed.
-    initialState: { systemPrompt: systemPrompt(personality, learnedStyle, memorySummary, contextBlock), model, tools: tools as AgentTool<any>[] },
-    streamFn: (m, context, options) => models.streamSimple(m, context, reasoning ? { ...options, reasoning } : options),
-    // Re-resolved on every request (not just once at Agent construction), so a key added via
-    // /provider after the daemon started takes effect on the very next turn.
-    getApiKey: async (provider) => resolveApiKey(provider, getStoredKey),
+    // this is how agent-core's own AgentState.tools is typed.
+    initialState: { systemPrompt: [systemPrompt(personality, learnedStyle, memorySummary, contextBlock)], model, tools: tools as AgentTool<any>[] },
+    streamFn: (m, context, options) => streamSimple(m, context, reasoning ? { ...options, reasoning } : options),
+    getApiKey: (m) => models.getApiKey(m),
   });
   return agent;
 }

@@ -1,5 +1,5 @@
-import { Type } from "@earendil-works/pi-ai";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { Type } from "@miro/schema-engine/typebox";
+import type { AgentToolResult } from "@miro/agent-core";
 import type { Database } from "bun:sqlite";
 import { getHostInfo } from "../inventory/host";
 import { listContainers } from "../inventory/containers";

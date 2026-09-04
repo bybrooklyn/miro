@@ -1,55 +1,39 @@
 import { test, expect } from "bun:test";
-import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
+import { createMockModel, registerMockApi } from "@miro/model-client";
 import { spawnWorker } from "./worker";
-
-// spawnWorker is thin wiring around Agent + runTurn (same shape as createMiroAgent, proven in
-// index.test.ts) around a real builtinModels() registry that needs a real provider key. This
-// proves the part that's actually non-trivial - the turn budget and tool scoping it sets up -
-// the same way: a local Agent built with the identical options, backed by the faux provider.
-import { Agent, type AgentTool } from "@earendil-works/pi-agent-core";
+import { createModelRegistry } from "./models";
 import { AGENT_TOOLS } from "./tools";
-import { runTurn } from "./index";
+
+registerMockApi();
 
 test("a worker with a turn budget stops after maxTurns even if the model keeps calling tools", async () => {
-  const faux = fauxProvider();
-  const models = createModels();
-  models.setProvider(faux.provider);
-  const model = faux.getModel();
   const maxTurns = 2;
-
   // The model never produces final text - it just keeps calling host_info. If the budget didn't
-  // work, the loop would ask for a 3rd response that was never scripted.
-  faux.setResponses([
-    fauxAssistantMessage([fauxToolCall("host_info", {})], { stopReason: "toolUse" }),
-    fauxAssistantMessage([fauxToolCall("host_info", {})], { stopReason: "toolUse" }),
-  ]);
+  // work, the loop would ask for a 3rd response that was never scripted (and the mock would reject).
+  const call = { content: [{ type: "toolCall" as const, name: "host_info", arguments: {} }] };
+  const model = createMockModel({ responses: [call, call] });
 
-  const toolCalls: { name: string }[] = [];
-  let turns = 0;
-  const agent = new Agent({
-    initialState: {
-      systemPrompt: "worker",
-      model,
-      tools: AGENT_TOOLS.filter((t) => t.name === "host_info") as AgentTool<any>[],
-    },
-    streamFn: (m, context, options) => models.streamSimple(m, context, options),
-    shouldStopAfterTurn: () => ++turns >= maxTurns,
-  });
-  agent.subscribe((event) => {
-    if (event.type === "tool_execution_start") toolCalls.push({ name: event.toolName });
-  });
+  const result = await spawnWorker("keep checking host info forever", ["host_info"], createModelRegistry(() => null), model, maxTurns);
 
-  await runTurn(agent, "keep checking host info forever");
-
-  expect(toolCalls).toHaveLength(maxTurns);
-  expect(faux.getPendingResponseCount()).toBe(0);
+  expect(result.toolCalls.map((c) => c.name)).toEqual(["host_info", "host_info"]);
+  // The budget refused the 3rd model call outright - it was never attempted, not attempted-and-failed.
+  expect(model.calls).toHaveLength(maxTurns);
 });
 
 test("spawnWorker only exposes the tools it's given, and returns structured evidence", async () => {
-  // Direct check of the scoping logic spawnWorker uses (AGENT_TOOLS filtered to allowedToolNames),
-  // since spawnWorker itself always builds a real builtinModels() registry that needs a real key.
-  const allowed = ["host_info", "storage_mounts"];
-  const scoped = AGENT_TOOLS.filter((t) => allowed.includes(t.name));
-  expect(scoped.map((t) => t.name).sort()).toEqual(["host_info", "storage_mounts"]);
-  expect(scoped.length).toBeLessThan(AGENT_TOOLS.length);
+  const model = createMockModel({
+    responses: [
+      { content: [{ type: "toolCall", name: "storage_mounts", arguments: {} }] },
+      { content: ["Two mounts, both under 50% used."] },
+    ],
+  });
+  const result = await spawnWorker("check the disks", ["host_info", "storage_mounts"], createModelRegistry(() => null), model);
+
+  expect(result.goal).toBe("check the disks");
+  expect(result.text).toBe("Two mounts, both under 50% used.");
+  expect(result.toolCalls).toEqual([{ name: "storage_mounts", args: {} }]);
+  // Only the allowed tools were advertised to the model - not the whole read-only set.
+  const advertised = (model.calls[0]!.context.tools ?? []).map((t) => t.name).sort();
+  expect(advertised).toEqual(["host_info", "storage_mounts"]);
+  expect(advertised.length).toBeLessThan(AGENT_TOOLS.length);
 });

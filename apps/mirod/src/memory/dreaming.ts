@@ -1,5 +1,5 @@
-import type { Model } from "@earendil-works/pi-ai";
-import type { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import type { Model } from "@miro/model-client";
+import type { ModelRegistry } from "../agent/models";
 import { spawnWorker } from "../agent/worker";
 import { remember, WRITABLE_MEMORY_CATEGORIES, type MemoryCategory } from "./store";
 import type { Database } from "bun:sqlite";
@@ -37,12 +37,11 @@ export function parseRememberJson(text: string): { category: string; key: string
 
 async function runReflection(
   db: Database,
-  models: ReturnType<typeof builtinModels>,
+  models: ModelRegistry,
   model: Model<any>,
-  getStoredKey: (provider: string) => string | null,
   context: string,
 ): Promise<void> {
-  const result = await spawnWorker(`${INSTRUCTIONS}${context}`, [], models, model, getStoredKey, 1);
+  const result = await spawnWorker(`${INSTRUCTIONS}${context}`, [], models, model, 1);
   for (const item of parseRememberJson(result.text)) {
     if (!WRITABLE_CATEGORIES.has(item.category) || !item.key?.trim() || !item.value?.trim()) continue;
     remember(db, item.category as MemoryCategory, item.key.trim().slice(0, 60), item.value.trim().slice(0, 500), "reflection");
@@ -51,9 +50,8 @@ async function runReflection(
 
 export async function reflectOnOperation(
   db: Database,
-  models: ReturnType<typeof builtinModels>,
+  models: ModelRegistry,
   model: Model<any>,
-  getStoredKey: (provider: string) => string | null,
   trigger: ReflectionTrigger,
 ): Promise<void> {
   const context = `An operation just finished.
@@ -62,21 +60,20 @@ Kind: ${trigger.kind}
 Outcome: ${trigger.outcome}
 Detail: ${trigger.message}
 This is the ${trigger.repeatFailureCount}th time a ${trigger.kind} operation has failed - this may be a pattern worth flagging.`;
-  await runReflection(db, models, model, getStoredKey, context);
+  await runReflection(db, models, model, context);
 }
 
 export async function reflectOnCorrection(
   db: Database,
-  models: ReturnType<typeof builtinModels>,
+  models: ModelRegistry,
   model: Model<any>,
-  getStoredKey: (provider: string) => string | null,
   previousReply: string,
   correction: string,
 ): Promise<void> {
   const context = `The user appears to have corrected Miro's previous reply.
 Miro said: ${previousReply}
 User then said: ${correction}`;
-  await runReflection(db, models, model, getStoredKey, context);
+  await runReflection(db, models, model, context);
 }
 
 const CORRECTION_PATTERNS = [

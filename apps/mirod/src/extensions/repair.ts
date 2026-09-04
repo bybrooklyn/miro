@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import type { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import type { ModelRegistry } from "../agent/models";
 import type { ServerEvent } from "@miro/protocol";
 import type { ExtensionHostManager } from "./host";
 import type { CodegenSelection } from "./learn";
@@ -33,7 +33,7 @@ export async function maybeTriggerRepair(
   hostMgr: ExtensionHostManager,
   setSecret: (ref: string, value: string) => void,
   getSecret: (ref: string) => string | null,
-  models: ReturnType<typeof builtinModels>,
+  models: ModelRegistry,
   resolveCodegenModel: () => Promise<CodegenSelection | null>,
   getStoredKey: (provider: string) => string | null,
   send: (event: ServerEvent) => void,
@@ -99,7 +99,7 @@ export async function reprobeExtensions(
   hostMgr: ExtensionHostManager,
   setSecret: (ref: string, value: string) => void,
   getSecret: (ref: string) => string | null,
-  models: ReturnType<typeof builtinModels>,
+  models: ModelRegistry,
   resolveCodegenModel: () => Promise<CodegenSelection | null>,
   getStoredKey: (provider: string) => string | null,
   send: (event: ServerEvent) => void,

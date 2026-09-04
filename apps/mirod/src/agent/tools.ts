@@ -1,5 +1,5 @@
-import { Type, type Static } from "@earendil-works/pi-ai";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { Type, type Static } from "@miro/schema-engine/typebox";
+import type { AgentToolResult } from "@miro/agent-core";
 import { getHostInfo } from "../inventory/host";
 import { getMounts } from "../inventory/storage";
 import { listContainers, inspectContainer, containerLogs } from "../inventory/containers";
@@ -32,11 +32,7 @@ const fsIndexParams = Type.Object({ root: Type.String({ description: "Absolute d
 // Plain JSON Schema enum, not Type.Union of literals - the anyOf-of-const shape made a real
 // tool-calling model fail to produce valid calls at all (found live, Stage C slice 1; AGENTS.md).
 const fsQueryParams = Type.Object({
-  class: Type.Unsafe<"media" | "config" | "code" | "archive" | "other">({
-    type: "string",
-    enum: ["media", "config", "code", "archive", "other"],
-    description: "Semantic class to filter by",
-  }),
+  class: Type.Enum(["media", "config", "code", "archive", "other"], { description: "Semantic class to filter by" }),
 });
 
 // Read-only Stage 1/2 tool set. Mutating tool groups (operation_*, update_*, backup_*, ...) are

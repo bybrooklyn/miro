@@ -1,5 +1,5 @@
-import { Type } from "@earendil-works/pi-ai";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { Type } from "@miro/schema-engine/typebox";
+import type { AgentToolResult } from "@miro/agent-core";
 import type { Database } from "bun:sqlite";
 import { remember, query, confidenceLabel } from "../memory/store";
 
@@ -9,21 +9,16 @@ function textResult(details: unknown): AgentToolResult<unknown> {
   return { content: [{ type: "text", text: JSON.stringify(details ?? null, null, 2) }], details };
 }
 
-// Plain JSON-Schema `enum` (via Type.Unsafe), not Type.Union-of-Type.Literal's `anyOf`-of-`const`.
-// Live-tested against a real tool-calling model (Ollama gemma4:31b-cloud): the anyOf/const form
-// made the model repeatedly fail to produce a valid category and give up on calling the tool at
-// all - a plain `enum` is the far more universally-supported function-calling schema shape.
-const writableCategoryEnum = Type.Unsafe<"preference" | "server_fact" | "incident" | "capability">({
-  type: "string",
-  enum: ["preference", "server_fact", "incident", "capability"],
+// Plain JSON-Schema `enum` (Type.Enum emits exactly {type:"string", enum:[...]}), not Type.Union-
+// of-Type.Literal's `anyOf`-of-`const`. Live-tested against a real tool-calling model (Ollama
+// gemma4:31b-cloud): the anyOf/const form made the model repeatedly fail to produce a valid category
+// and give up on calling the tool at all - a plain `enum` is the far more universally-supported
+// function-calling schema shape. (Not Type.Unsafe: the vendored schema engine drops raw JSON Schema
+// to `any`, which would silently lose the enum on the wire - found while migrating, PLAN.md §5.17.)
+const writableCategoryEnum = Type.Enum(["preference", "server_fact", "incident", "capability"], {
   description: "capability = the operational model of a system you set up or learned (value is a JSON document: summary, components, dataFlow, credentials as secret refs, verify steps).",
 });
-const anyCategoryEnum = Type.Unsafe<
-  "preference" | "server_fact" | "incident" | "app_knowledge" | "extension_knowledge" | "research" | "capability"
->({
-  type: "string",
-  enum: ["preference", "server_fact", "incident", "app_knowledge", "extension_knowledge", "research", "capability"],
-});
+const anyCategoryEnum = Type.Enum(["preference", "server_fact", "incident", "app_knowledge", "extension_knowledge", "research", "capability"]);
 
 const rememberParams = Type.Object({
   category: writableCategoryEnum,

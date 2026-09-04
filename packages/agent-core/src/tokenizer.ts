@@ -77,7 +77,9 @@ function countTokensNat(
 	} catch (error) {
 		if (
 			!(error instanceof Error) ||
-			(!error.message.includes("does not match any variant of enum") &&
+			// Miro hardfork: no native addon at all degrades the same way as an unknown encoding.
+			(error.name !== "NativeUnavailableError" &&
+				!error.message.includes("does not match any variant of enum") &&
 				!error.message.includes("unknown enum variant"))
 		) {
 			throw error;

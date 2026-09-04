@@ -1,9 +1,12 @@
 import { test, expect } from "bun:test";
 import { hostname } from "node:os";
-import { createModels, fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
-import { Agent, type AgentTool } from "@earendil-works/pi-agent-core";
+import { createMockModel, registerMockApi } from "@miro/model-client";
+import { Agent, type AgentTool } from "@miro/agent-core";
 import { AGENT_TOOLS } from "./tools";
 import { runTurn, systemPrompt } from "./index";
+
+// The scripted "mock" API dispatches through the real streamSimple like every other provider.
+registerMockApi();
 
 // systemPrompt composes plan §37's two Memory-driven additions onto the base personality tone:
 // learnedStyle (communication-style adaptation - one system, not a separate layer) and
@@ -32,24 +35,20 @@ test("systemPrompt appends the memory summary as its own trailing block", () => 
 });
 
 // Proves the Agent + tool-calling mechanism end to end without needing a real provider API key:
-// a scripted (faux) model calls the real `host_info` tool, which reads this machine's real state,
+// a scripted (mock) model calls the real `host_info` tool, which reads this machine's real state,
 // then the model is scripted to summarize. No mocking of our own tool code.
 test("runTurn executes a real tool call and returns the model's follow-up text", async () => {
-  const faux = fauxProvider();
-  const models = createModels();
-  models.setProvider(faux.provider);
-  const model = faux.getModel();
-
-  // setResponses is a FIFO queue: the first response drives the initial request, the second
-  // drives the automatic follow-up request the Agent loop makes after the tool result comes back.
-  faux.setResponses([
-    fauxAssistantMessage([fauxToolCall("host_info", {})], { stopReason: "toolUse" }),
-    fauxAssistantMessage([fauxText("This server looks healthy.")]),
-  ]);
+  // responses is a FIFO queue: the first drives the initial request, the second drives the
+  // automatic follow-up request the Agent loop makes after the tool result comes back.
+  const model = createMockModel({
+    responses: [
+      { content: [{ type: "toolCall", name: "host_info", arguments: {} }] },
+      { content: ["This server looks healthy."] },
+    ],
+  });
 
   const agent = new Agent({
-    initialState: { systemPrompt: systemPrompt("casual"), model, tools: AGENT_TOOLS as AgentTool<any>[] },
-    streamFn: (m, context, options) => models.streamSimple(m, context, options),
+    initialState: { systemPrompt: [systemPrompt("casual")], model, tools: AGENT_TOOLS as AgentTool<any>[] },
   });
 
   let activityLabel = "";
@@ -59,6 +58,7 @@ test("runTurn executes a real tool call and returns the model's follow-up text",
 
   expect(activityLabel).toBe("Host info");
   expect(finalText).toBe("This server looks healthy.");
+  expect(model.calls).toHaveLength(2);
 
   const toolResult = agent.state.messages.find((m) => m.role === "toolResult");
   expect(toolResult).toBeDefined();
@@ -67,23 +67,17 @@ test("runTurn executes a real tool call and returns the model's follow-up text",
   expect(resultText).toContain(hostname());
 });
 
-// Regression test: pi-agent-core doesn't throw on a provider error (e.g. a bad API key) - it
+// Regression test: agent-core doesn't throw on a provider error (e.g. a bad API key) - it
 // produces an assistant message with stopReason "error" and empty content. A live smoke test with
 // a fake Anthropic key first caught this returning "" and getting silently swapped for a canned
 // personality reply, which would have misled the user into thinking Miro replied normally.
 test("runTurn surfaces a provider error instead of returning empty text", async () => {
-  const faux = fauxProvider();
-  const models = createModels();
-  models.setProvider(faux.provider);
-  const model = faux.getModel();
-
-  faux.setResponses([
-    fauxAssistantMessage([], { stopReason: "error", errorMessage: "401 API key is invalid." }),
-  ]);
+  const model = createMockModel({
+    responses: [{ content: [], stopReason: "error", errorMessage: "401 API key is invalid." }],
+  });
 
   const agent = new Agent({
-    initialState: { systemPrompt: systemPrompt("casual"), model, tools: AGENT_TOOLS as AgentTool<any>[] },
-    streamFn: (m, context, options) => models.streamSimple(m, context, options),
+    initialState: { systemPrompt: [systemPrompt("casual")], model, tools: AGENT_TOOLS as AgentTool<any>[] },
   });
 
   const finalText = await runTurn(agent, "hello");

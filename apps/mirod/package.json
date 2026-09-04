@@ -5,9 +5,11 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@earendil-works/pi-agent-core": "^0.84.4",
-    "@earendil-works/pi-ai": "^0.84.4",
+    "@miro/agent-core": "workspace:*",
+    "@miro/model-catalog": "workspace:*",
+    "@miro/model-client": "workspace:*",
     "@miro/protocol": "workspace:*",
+    "@miro/schema-engine": "workspace:*",
     "@miro/sdk": "workspace:*",
     "@number0/iroh": "1.1.0",
     "typescript": "^5.9.3"
