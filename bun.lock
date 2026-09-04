@@ -34,27 +34,35 @@
         "typescript": "^5.9.3",
       },
     },
-    "packages/pi-natives": {
-      "name": "@miro/pi-natives",
-      "version": "0.0.0",
-    },
-    "packages/pi-omptype": {
-      "name": "@miro/pi-omptype",
-      "version": "0.0.0",
-    },
-    "packages/pi-utils": {
-      "name": "@miro/pi-utils",
+    "packages/agent-sys": {
+      "name": "@miro/agent-sys",
       "version": "0.0.0",
       "dependencies": {
-        "@miro/pi-natives": "workspace:*",
+        "@miro/native": "workspace:*",
       },
     },
-    "packages/pi-wire": {
-      "name": "@miro/pi-wire",
+    "packages/agent-wire": {
+      "name": "@miro/agent-wire",
+      "version": "0.0.0",
+    },
+    "packages/model-catalog": {
+      "name": "@miro/model-catalog",
+      "version": "0.0.0",
+      "dependencies": {
+        "@miro/agent-sys": "workspace:*",
+        "@miro/schema-engine": "workspace:*",
+      },
+    },
+    "packages/native": {
+      "name": "@miro/native",
       "version": "0.0.0",
     },
     "packages/protocol": {
       "name": "@miro/protocol",
+      "version": "0.0.0",
+    },
+    "packages/schema-engine": {
+      "name": "@miro/schema-engine",
       "version": "0.0.0",
     },
     "packages/sdk": {
@@ -133,15 +141,17 @@
 
     "@google/genai": ["@google/genai@1.52.0", "", { "dependencies": { "google-auth-library": "^10.3.0", "p-retry": "^4.6.2", "protobufjs": "^7.5.4", "ws": "^8.18.0" }, "peerDependencies": { "@modelcontextprotocol/sdk": "^1.25.2" }, "optionalPeers": ["@modelcontextprotocol/sdk"] }, "sha512-gwSvbpiN/17O9TbsqSsE/OzZcpv5Fo4RQjdngGgogtuB9RsyJ8ZHhX5KjHj1bp5N9snN2eK8LDGXSaWW2hof8Q=="],
 
-    "@miro/pi-natives": ["@miro/pi-natives@workspace:packages/pi-natives"],
+    "@miro/agent-sys": ["@miro/agent-sys@workspace:packages/agent-sys"],
 
-    "@miro/pi-omptype": ["@miro/pi-omptype@workspace:packages/pi-omptype"],
+    "@miro/agent-wire": ["@miro/agent-wire@workspace:packages/agent-wire"],
 
-    "@miro/pi-utils": ["@miro/pi-utils@workspace:packages/pi-utils"],
+    "@miro/model-catalog": ["@miro/model-catalog@workspace:packages/model-catalog"],
 
-    "@miro/pi-wire": ["@miro/pi-wire@workspace:packages/pi-wire"],
+    "@miro/native": ["@miro/native@workspace:packages/native"],
 
     "@miro/protocol": ["@miro/protocol@workspace:packages/protocol"],
+
+    "@miro/schema-engine": ["@miro/schema-engine@workspace:packages/schema-engine"],
 
     "@miro/sdk": ["@miro/sdk@workspace:packages/sdk"],
 

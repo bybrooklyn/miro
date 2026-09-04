@@ -53,7 +53,7 @@ const WINDOWS_RESERVED_BASENAME_RE = /^(?:CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?:\
  * default (empty string, whitespace, or the explicit "default" sentinel) and
  * throws for syntactically invalid or platform-reserved names.
  *
- * Exported so consumers of `@miro/pi-utils/dirs` (CLI bootstrap, tests,
+ * Exported so consumers of `@miro/agent-sys/dirs` (CLI bootstrap, tests,
  * downstream tools) can validate user input without re-deriving the rules.
  */
 export function normalizeProfileName(profile: string | undefined): string | undefined {

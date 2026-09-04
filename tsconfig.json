@@ -8,6 +8,7 @@
     "jsxImportSource": "@opentui/react",
     "strict": true,
     "skipLibCheck": true,
+    "allowArbitraryExtensions": true,
     "types": ["bun-types"]
   }
 }

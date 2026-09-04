@@ -165,7 +165,7 @@ export function wrapFetchForExtraCa(fetchImpl: FetchImpl): FetchImpl {
 
 /**
  * Convenience for options-bag composition (e.g. the stream-entry path in
- * `@miro/pi-ai`'s `stream.ts`, which mirrors `withRequestDebugFetch` so
+ * `@miro/model-client`'s `stream.ts`, which mirrors `withRequestDebugFetch` so
  * the proxy/debug/extra-CA wrappers compose uniformly). No-op when the env
  * var is unset.
  */

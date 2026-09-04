@@ -5,7 +5,7 @@
  *
  * @example
  * ```ts
- * import { isEnoent, isFsError } from "@miro/pi-utils";
+ * import { isEnoent, isFsError } from "@miro/agent-sys";
  *
  * try {
  *     return await Bun.file(path).text();

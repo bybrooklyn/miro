@@ -7,7 +7,7 @@
  * - Convenience helpers: captureText / execText, AbortSignal, timeouts.
  */
 
-import { Process } from "@miro/pi-natives";
+import { Process } from "@miro/native";
 import type { Spawn, Subprocess } from "bun";
 
 type InMask = "pipe" | "ignore" | Buffer | Uint8Array | null;
