@@ -45,6 +45,17 @@
       "name": "@miro/agent-wire",
       "version": "0.0.0",
     },
+    "packages/context-compact": {
+      "name": "@miro/context-compact",
+      "version": "0.0.0",
+      "dependencies": {
+        "@miro/agent-sys": "workspace:*",
+        "@miro/agent-wire": "workspace:*",
+        "@miro/model-catalog": "workspace:*",
+        "@miro/model-client": "workspace:*",
+        "@miro/native": "workspace:*",
+      },
+    },
     "packages/model-catalog": {
       "name": "@miro/model-catalog",
       "version": "0.0.0",
@@ -154,6 +165,8 @@
     "@miro/agent-sys": ["@miro/agent-sys@workspace:packages/agent-sys"],
 
     "@miro/agent-wire": ["@miro/agent-wire@workspace:packages/agent-wire"],
+
+    "@miro/context-compact": ["@miro/context-compact@workspace:packages/context-compact"],
 
     "@miro/model-catalog": ["@miro/model-catalog@workspace:packages/model-catalog"],
 
