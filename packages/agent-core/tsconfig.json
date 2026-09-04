@@ -1,0 +1,8 @@
+{
+  "extends": "../../tsconfig.json",
+  "include": [
+    "src",
+    "../model-client/src/text-assets.d.ts",
+    "../context-compact/src/text-assets.d.ts"
+  ]
+}
