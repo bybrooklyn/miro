@@ -405,7 +405,7 @@ export function redactSecretsInText(text: string): string {
     // /etc/shadow and /etc/gshadow hash lines: `user:$6$…:…` - not keyword-shaped, so caught by structure.
     .replace(/^([^\s:]+:)([$!*][^\s:]*)/gm, "$1[redacted]")
     .replace(/(-----BEGIN [A-Z ]*PRIVATE KEY-----)[\s\S]*?(-----END [A-Z ]*PRIVATE KEY-----)/g, "$1 [redacted] $2");
-  return redacted.replace(/ (\d+) /g, (_, i) => refs[Number(i)] ?? "");
+  return redacted.replace(/\u0000(\d+)\u0000/g, (_, i) => refs[Number(i)] ?? "");
 }
 
 /** Binaries whose read-only use needs the host network namespace (routes, sockets, DNS, local
