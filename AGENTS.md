@@ -60,11 +60,17 @@ No lint config exists anywhere in this repo. Don't invent one unless asked.
   (the Codex provider) rejects tool names outside `^[a-zA-Z0-9_-]+$` - found live, project-wide,
   during Stage C slice 2. `agent/tool-names.test.ts` asserts every static tool-name list matches
   this pattern; keep it passing.
-- **Schemas are TypeBox** via `Type` re-exported from `@earendil-works/pi-ai` (not `typebox`
-  directly) - every tool's `parameters` field is `Type.Object({...})`. For an enum field, use
-  `Type.Unsafe({ type: "string", enum: [...] })` (plain JSON Schema `enum`), not
-  `Type.Union([Type.Literal(...)])` (`anyOf`-of-`const`) - the latter made a real tool-calling model
-  fail to produce valid calls at all; found live.
+- **Schemas are built with `Type` from `@miro/schema-engine/typebox`** (the vendored schema
+  engine's TypeBox-compatible builder; `@miro/sdk` re-exports it for generated extensions) - every
+  tool's `parameters` field is `Type.Object({...})`. For an enum field, use `Type.Enum([...])`,
+  which emits a plain JSON Schema `{ type: "string", enum: [...] }`; not
+  `Type.Union([Type.Literal(...)])` (`anyOf`-of-`const`, which made a real tool-calling model fail
+  to produce valid calls at all; found live), and not `Type.Unsafe(...)` (the engine drops raw JSON
+  Schema to `any`, silently losing the enum on the wire; found during the migration, PLAN.md §5.19).
+  A schema is no longer a plain JSON object: where one must be stored or sent as JSON (the
+  extension manifest), go through `extensions/declarative.ts`'s `objectSchema()`, which also spells a
+  no-argument tool as `{ type: "object", properties: {} }` - a bare `{}` reaches OpenAI as the
+  boolean `true` and is rejected; found live.
 - **Secrets** go through `secrets.ts`'s `SecretStore` (`setSecret`/`getSecret`), keyed by
   `SecretRef` strings in `"<namespace>.<name>"` form (e.g. `"provider.anthropic"`,
   `"extension.gotify.api_key"`, `"oauth.openai-codex"`). Real values are resolved only inside an
