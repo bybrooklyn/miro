@@ -1,6 +1,6 @@
 import * as ts from "typescript";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { ExtensionHostManager } from "./host";
 import type { HostToolSpec } from "./host-protocol";
 import { httpMutationKind } from "../operations/kinds/http-mutation";
@@ -79,35 +79,130 @@ export function requiresArguments(parameters: unknown): boolean {
   return Boolean(schema?.required && schema.required.length > 0);
 }
 
-// --- Compiler-as-teacher (PLAN.md §5.13) ---
-// The failure strings ARE the retry contract with the (possibly weak) learn model. A raw compiler
-// message names the symptom; append the concrete fix so a small model converges instead of looping.
-// Pure and unit-tested (validate.test.ts).
+// --- Structured failures (PLAN.md §5.15: "validator failures become STRUCTURED objects, ordered by
+// the REST→MCP failure taxonomy, passed back verbatim - not appended prose") ---
+// The failures ARE the retry contract with the (possibly weak) learn model. Weak models converge on
+// external, concrete, machine-readable feedback and not on prose; a raw compiler message names the
+// symptom, so the concrete fix rides alongside it as its own field. Pure and unit-tested.
 
-const HINTS: { match: RegExp; fix: string }[] = [
-  { match: /http\s*\.\s*(post|put|patch|delete)|\.(post|put|patch|delete)\s*\(/i, fix: "ctx.http is GET-only. A write is an entry with `bind(args)` returning a { kind: \"http_mutation\", method, url, ... } binding - the daemon runs it through its engine. Never fetch a write from code." },
-  { match: /forbidden import/i, fix: "Only \"@miro/sdk\" and same-directory relative imports are allowed. Delete the import; use ctx.http / ctx.exec / ctx.readFile / ctx.secrets instead." },
-  { match: /must be \"object\"|is not an object schema|is not a schema|non-object properties/i, fix: "For a declarative `read`, OMIT `parameters` (it is derived from the {placeholders} in read.path). For a `code` entry, write a real schema: Type.Object({ field: Type.String() }) from \"@miro/sdk\"." },
-  { match: /no extension\.ts found/i, fix: "Call extension_write with a single `extensionTs` that does `export default { auth?, entries } satisfies ExtensionModule` (import type ExtensionModule from \"@miro/sdk\")." },
-  { match: /has no exported member|Cannot find name|is not exported/i, fix: "Import the symbol from \"@miro/sdk\": ExtensionModule, ExtensionEntry, ExtensionContext, ReadBinding, OperationBinding, Type." },
-  { match: /needs (bind|read\.path|either read)/i, fix: "Each entry carries exactly one of: `read` (declarative GET, preferred), `bind` (a write), or `code` (a read that needs logic). A \"operation\" entry uses bind; a \"tool\"/\"diagnostic\" uses read or code." },
+export type ValidationRule = "typecheck" | "forbidden-import" | "probe-setup" | "schema" | "probe" | "dead-app" | "binding" | "budget";
+
+export interface ValidationFailure {
+  /** The entry (tool/diagnostic/operation name) or `extension.ts:<line>` the failure is about. */
+  entry?: string;
+  /** The field of that entry (`parameters`, `read.path`, `bind`, an import specifier) when known. */
+  field?: string;
+  /** Stable rule id - what kind of check failed. */
+  rule: ValidationRule;
+  /** What is wrong, as reported by the check. */
+  message: string;
+  /** The concrete change that fixes it (compiler-as-teacher, PLAN.md §5.13). */
+  fix?: string;
+  /** A correct example for the rule, when one exists. */
+  example?: string;
+}
+
+export function failure(rule: ValidationRule, message: string, where: { entry?: string; field?: string } = {}): ValidationFailure {
+  return { ...where, rule, message };
+}
+
+const HINTS: { match: RegExp; fix: string; example?: string }[] = [
+  {
+    match: /http\s*\.\s*(post|put|patch|delete)|\.(post|put|patch|delete)\s*\(/i,
+    fix: "ctx.http is GET-only. A write is an entry with `bind(args)` returning a { kind: \"http_mutation\", method, url, ... } binding - the daemon runs it through its engine. Never fetch a write from code.",
+    example: '{ name: "create_widget", kind: "operation", description: "Create a widget.", parameters: Type.Object({ label: Type.String() }), bind: (args: { label: string }) => ({ kind: "http_mutation", goal: `Create widget ${args.label}`, method: "POST", url: "/api/widgets", body: JSON.stringify({ label: args.label }), contentType: "application/json", verifyUrl: "/api/widgets" }) }',
+  },
+  {
+    match: /forbidden import/i,
+    fix: "Only \"@miro/sdk\" and same-directory relative imports are allowed. Delete the import; use ctx.http / ctx.exec / ctx.readFile / ctx.secrets instead.",
+    example: 'import { Type, type ExtensionModule, type ExtensionContext } from "@miro/sdk";',
+  },
+  {
+    match: /must be \"object\"|is not an object schema|is not a schema|non-object properties/i,
+    fix: "For a declarative `read`, OMIT `parameters` (it is derived from the {placeholders} in read.path). For a `code` entry, write a real schema: Type.Object({ field: Type.String() }) from \"@miro/sdk\".",
+    example: 'parameters: Type.Object({ id: Type.String({ description: "Item id" }) })',
+  },
+  {
+    match: /no extension\.ts found/i,
+    fix: "Call extension_write with a single `extensionTs` that does `export default { auth?, entries } satisfies ExtensionModule` (import type ExtensionModule from \"@miro/sdk\").",
+  },
+  {
+    match: /has no exported member|Cannot find name|is not exported/i,
+    fix: "Import the symbol from \"@miro/sdk\": ExtensionModule, ExtensionEntry, ExtensionContext, ReadBinding, OperationBinding, Type.",
+  },
+  {
+    match: /needs (bind|read\.path|either read)/i,
+    fix: "Each entry carries exactly one of: `read` (declarative GET, preferred), `bind` (a write), or `code` (a read that needs logic). A \"operation\" entry uses bind; a \"tool\"/\"diagnostic\" uses read or code.",
+    example: '{ name: "list_widgets", kind: "tool", description: "List all widgets.", read: { path: "/api/widgets", pick: ["id", "label"] } }',
+  },
+  {
+    match: /still succeeds when the app is unreachable/i,
+    fix: "A diagnostic signals a problem by THROWING - the daemon treats any returned value as healthy. Observe the app through ctx.http.get on its baseUrl and let a connection error propagate (or throw when the response is not ok). Something that checks a container, a process or a file is a \"tool\", not a \"diagnostic\".",
+    example: '{ name: "reachable", kind: "diagnostic", description: "App answers on its health endpoint.", read: { path: "/health" } }',
+  },
+  {
+    match: /\b(401|403)\b|unauthori[sz]ed|forbidden(?! import)|invalid (api )?key|authentication/i,
+    fix: "The app rejected the credential. Check the auth SCHEME first: the exact header name the app documents (X-Api-Key vs Authorization vs a vendor header), any required prefix (\"Bearer \", \"MediaBrowser Token=\"), and that the module's auth.secret names a secret you actually stored.",
+    example: 'auth: { header: "X-Emby-Token", secret: "api_key" }',
+  },
+  {
+    match: /ECONNREFUSED|ENOTFOUND|\b404\b|not found|Unable to connect|fetch failed/i,
+    fix: "The URL is wrong before anything else can be. Re-check the base URL (port, http vs https, a path prefix the app serves under) and that read.path is app-relative (\"/api/...\"), then re-run.",
+  },
 ];
 
-/** Append the fix to each failure that matches a known pattern; pass others through unchanged. */
-export function annotateFailures(failures: string[]): string[] {
-  return failures.map((f) => {
-    const hint = HINTS.find((h) => h.match.test(f));
-    return hint ? `${f}\n    → fix: ${hint.fix}` : f;
-  });
+/** Where a failure sits in the REST→MCP failure taxonomy (auth scheme 39%, base URL 22%,
+ * undocumented headers/prefixes 18%, param types 12%, everything else) - the order the model
+ * should fix things in, because the earlier ones make the later ones unobservable. */
+function taxonomyRank(f: ValidationFailure): number {
+  const text = `${f.message} ${f.field ?? ""}`;
+  if (/\b(401|403)\b|unauthori[sz]ed|forbidden(?! import)|invalid (api )?key|authentication|auth\b/i.test(text)) return 0;
+  if (/ECONNREFUSED|ENOTFOUND|\b404\b|not found|Unable to connect|fetch failed|base ?url/i.test(text)) return 1;
+  if (/header|content-type|prefix/i.test(text)) return 2;
+  if (f.rule === "schema" || f.rule === "binding" || /parameter|schema|\btype\b/i.test(text)) return 3;
+  return 4;
+}
+
+/** Attach the concrete fix (and example) to each failure that matches a known pattern, and order
+ * the list most-likely-root-cause first. Stable within a rank, so file order is kept. */
+export function annotateFailures(failures: ValidationFailure[]): ValidationFailure[] {
+  return failures
+    .map((f) => {
+      const hint = HINTS.find((h) => h.match.test(f.message));
+      return hint ? { ...f, fix: f.fix ?? hint.fix, ...(hint.example ? { example: f.example ?? hint.example } : {}) } : f;
+    })
+    .map((f, i) => ({ f, i }))
+    .sort((a, b) => taxonomyRank(a.f) - taxonomyRank(b.f) || a.i - b.i)
+    .map(({ f }) => f);
+}
+
+/** One line per failure for logs and notices - the model gets the objects, humans get this. */
+export function formatFailure(f: ValidationFailure): string {
+  const where = [f.entry, f.field].filter(Boolean).join(".");
+  return `[${f.rule}]${where ? ` ${where}` : ""}: ${f.message}${f.fix ? `\n    → fix: ${f.fix}` : ""}`;
+}
+
+/** `typecheckExtension`'s "<file>:<line>: <message> - in: <text>" strings, as structured failures. */
+function typecheckFailure(text: string): ValidationFailure {
+  const m = /^(.+?\.ts):(\d+): ([\s\S]*)$/.exec(text);
+  return m ? failure("typecheck", m[3]!, { entry: `${basename(m[1]!)}:${m[2]}` }) : failure("typecheck", text);
+}
+
+function importFailure(text: string): ValidationFailure {
+  const m = /forbidden import "([^"]+)"/.exec(text);
+  return failure("forbidden-import", text.replace(/^.*?: /, ""), m ? { entry: "extension.ts", field: `import "${m[1]}"` } : { entry: "extension.ts" });
 }
 
 export interface ValidationResult {
   ok: boolean;
-  failures: string[];
+  failures: ValidationFailure[];
   /** Populated once the live-probe step successfully lists tools - reused by extensions/learn.ts
    * to build the manifest without a second, redundant listTools round-trip. */
   tools?: HostToolSpec[];
 }
+
+/** A URL nothing answers on (the discard port) - the "app is down" the dead-app check simulates. */
+const DEAD_BASE_URL = "http://127.0.0.1:9";
 
 export async function validateExtension(
   dir: string,
@@ -116,10 +211,10 @@ export async function validateExtension(
   secrets: Record<string, string>,
   hostMgr: ExtensionHostManager,
 ): Promise<ValidationResult> {
-  const failures: string[] = [];
+  const failures: ValidationFailure[] = [];
 
-  failures.push(...typecheckExtension(dir));
-  failures.push(...scanForbiddenImports(dir));
+  failures.push(...typecheckExtension(dir).map(typecheckFailure));
+  failures.push(...scanForbiddenImports(dir).map(importFailure));
   // The one hard ordering dependency: never RUN code that doesn't compile or violates the import
   // allowlist. Everything past here is independent and aggregated, so one attempt surfaces every
   // remaining problem at once instead of one class per attempt (audit X1). tests.ts is no longer
@@ -131,7 +226,7 @@ export async function validateExtension(
   try {
     tools = await hostMgr.listTools(dir, app, baseUrl, secrets);
   } catch (err) {
-    failures.push(`live probe setup failed: ${String(err instanceof Error ? err.message : err)}`);
+    failures.push(failure("probe-setup", `live probe setup failed: ${String(err instanceof Error ? err.message : err)}`));
     return { ok: false, failures: annotateFailures(failures) };
   }
 
@@ -139,19 +234,37 @@ export async function validateExtension(
   // `parameters: { name: "string" }` (not a schema) would make the provider reject the whole tool
   // list at the next chat turn - found in a real learn run.
   for (const spec of tools) {
-    const failure = invalidSchema(spec.parameters);
-    if (failure) failures.push(`${spec.kind} ${spec.name}: parameters ${failure} - use Type.Object({ ... }) from "@miro/sdk"`);
+    const why = invalidSchema(spec.parameters);
+    if (why) failures.push(failure("schema", `parameters ${why}`, { entry: spec.name, field: "parameters" }));
   }
 
   // A no-arg diagnostic with a valid schema is probed live; a bad-schema tool is skipped here (its
   // schema failure is already reported) rather than called with an unknown shape.
+  const probed = new Set<string>();
   for (const diag of tools.filter((t) => t.kind === "diagnostic")) {
     if (requiresArguments(diag.parameters) || invalidSchema(diag.parameters)) continue;
     try {
       await hostMgr.call(dir, app, baseUrl, secrets, diag.name, {});
+      probed.add(diag.name);
     } catch (err) {
-      failures.push(`live probe failed for ${diag.name}: ${String(err instanceof Error ? err.message : err)}`);
+      failures.push(failure("probe", `live probe failed: ${String(err instanceof Error ? err.message : err)}`, { entry: diag.name }));
     }
+  }
+
+  // Admission check (PLAN.md §5.15): a diagnostic must FAIL when the app is down. A code diagnostic
+  // that never really observes the app - returns {healthy: true} unconditionally, or swallows the
+  // connection error into a returned value - passes the live probe and would report a dead app as
+  // healthy forever. Probed in a throwaway session against a URL nothing answers on. A declarative
+  // read cannot pass this by construction (its GET fails), so only code diagnostics are checked.
+  for (const diag of tools.filter((t) => t.kind === "diagnostic" && t.impl === "code" && probed.has(t.name))) {
+    let survived = false;
+    try {
+      await hostMgr.probe(dir, app, DEAD_BASE_URL, secrets, diag.name, {});
+      survived = true;
+    } catch {
+      // correct: it failed with the app unreachable
+    }
+    if (survived) failures.push(failure("dead-app", `diagnostic still succeeds when the app is unreachable (${DEAD_BASE_URL}) - it does not actually observe the app`, { entry: diag.name }));
   }
 
   // Operation bindings never execute at validation time, but their bound params are dry-run through
@@ -161,10 +274,10 @@ export async function validateExtension(
     if (requiresArguments(op.parameters) || invalidSchema(op.parameters)) continue;
     try {
       const bound = resolveBindingUrls((await hostMgr.bind(dir, app, baseUrl, secrets, op.name, {})) as { kind?: string; goal?: string } & Record<string, unknown>, baseUrl);
-      const failure = await dryRunBinding(bound);
-      if (failure) failures.push(`operation ${op.name}: ${failure}`);
+      const why = await dryRunBinding(bound);
+      if (why) failures.push(failure("binding", why, { entry: op.name, field: "bind" }));
     } catch (err) {
-      failures.push(`operation ${op.name} failed to bind: ${String(err instanceof Error ? err.message : err)}`);
+      failures.push(failure("binding", `failed to bind: ${String(err instanceof Error ? err.message : err)}`, { entry: op.name, field: "bind" }));
     }
   }
 

@@ -31,6 +31,10 @@ export interface ExtensionHostManager {
   bind(dir: string, app: string, baseUrl: string, secrets: Record<string, string>, tool: string, args: unknown): Promise<unknown>;
   /** Mechanically derives the manifest's tool specs - spawns a fresh init-mode session. */
   listTools(dir: string, app: string, baseUrl: string, secrets: Record<string, string>): Promise<HostToolSpec[]>;
+  /** Like `call`, but in a throwaway session initialised with THIS baseUrl - sessions are keyed by
+   * dir and keep their first init, so a validation check against a different URL (the dead-app
+   * admission check) must not share the live session. */
+  probe(dir: string, app: string, baseUrl: string, secrets: Record<string, string>, tool: string, args: unknown): Promise<unknown>;
   /** Drops the live session for `dir` so the next call loads freshly promoted code. */
   invalidate(dir: string): void;
   /** Browser-automation bridge for the learning agent - keyed by app, not dir (no generated code involved). */
@@ -209,6 +213,21 @@ export function createExtensionHostManager(): ExtensionHostManager {
       sessions.delete(key);
       if (res.type !== "tools") throw new Error(`unexpected response type: ${res.type}`);
       return res.tools;
+    },
+    async probe(dir, app, baseUrl, secrets, tool, args) {
+      const key = `${dir}:probe:${nextId()}`;
+      const session = spawn(key, dir);
+      try {
+        writeLine(session, { type: "init", app, baseUrl, secrets });
+        await waitReady(session);
+        const res = await request(session, { type: "call", id: nextId(), tool, args });
+        if (res.type !== "result") throw new Error(`unexpected response type: ${res.type}`);
+        if (!res.ok) throw new Error(res.error);
+        return res.value;
+      } finally {
+        writeLine(session, { type: "shutdown" });
+        sessions.delete(key);
+      }
     },
     async browserCall(app, tool, args) {
       const key = `learn:${app}`;

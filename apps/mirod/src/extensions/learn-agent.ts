@@ -20,7 +20,8 @@ import type { OperationToolContext } from "../operations/engine";
 import { remember } from "../memory/store";
 import { listSecretRefs } from "../secrets";
 import type { ExtensionHostManager } from "./host";
-import { validateExtension } from "./validate";
+import { validateExtension, failure, formatFailure, type ValidationFailure } from "./validate";
+import { hashExtension } from "./pin";
 import { buildManifest } from "./manifest";
 import * as store from "./store";
 import { stagingDir, extensionDir, ensureNodeModulesSymlink, promoteStagingToLive, discardStaging, MIROD_NODE_MODULES } from "./paths";
@@ -112,8 +113,15 @@ the real thing. Rules:
   from "@miro/sdk", import nothing else.
 - Prefer declarative read entries; use bind for writes; use code only where a read cannot express it.
 - Every name matches ^[a-zA-Z0-9_-]+$ (underscores, never dots).
-extension_write reports ALL problems at once, each with a concrete fix - apply each and call again;
-attempts are limited.
+extension_write reports ALL problems at once as structured failures - { entry, field, rule, message,
+fix, example } - ordered most-likely-root-cause first (auth scheme, then base URL, then headers, then
+parameter types). Apply every fix and call again. You get exactly ONE repair call in this session; if
+it still fails, a fresh session continues from your draft with the same structured failures - so do
+not restart research, fix what is named.
+- A "diagnostic" must observe the app through its own interface (its baseUrl) and signal a problem by
+  THROWING: the daemon treats any returned value as healthy, and checks that every code diagnostic
+  FAILS when the app is unreachable. Something that checks a container, a process or a file is a
+  "tool", not a "diagnostic".
 
 @miro/sdk SURFACE - the only import, exact shapes (write to them, do not guess):
   ExtensionModule = { auth?: { header: string; secret: string }; entries: ExtensionEntry[] }
@@ -245,7 +253,16 @@ const extensionWriteParams = Type.Object({
   extensionTs: Type.String({ description: 'The complete extension.ts: `export default { auth?, entries } satisfies ExtensionModule` (types from "@miro/sdk"). Declarative reads/bindings preferred; code only where a read cannot express it.' }),
 });
 
-const MAX_WRITE_ATTEMPTS = 3;
+/** The write plus ONE targeted repair per session (PLAN.md §5.15): chained repairs on one draft in
+ * one context converge worse than fresh regenerations seeded with the last draft and its structured
+ * failures - extensions/learn.ts runs up to MAX_REGENERATIONS independent sessions. */
+const MAX_WRITE_ATTEMPTS = 2;
+
+/** What the last failed write looked like - a fresh session starts from it instead of from nothing. */
+export interface LearnSeed {
+  draft: string;
+  failures: ValidationFailure[];
+}
 
 function buildExtensionWriteTool(
   app: string,
@@ -255,17 +272,18 @@ function buildExtensionWriteTool(
 ) {
   let attempts = 0;
   let promoted = false;
+  let lastAttempt: LearnSeed | null = null;
 
   const tool = {
     name: "extension_write",
     label: "Write extension",
     description:
-      "Write and validate the local extension for this app. Call once you understand the app well enough. If it reports failures, fix the specific problem and call again - limited attempts.",
+      "Write and validate the local extension for this app. Call once you understand the app well enough. If it reports failures, fix exactly what they name and call again once - you get one repair call in this session.",
     parameters: extensionWriteParams,
     execute: async (_id: string, args: Static<typeof extensionWriteParams>) => {
       attempts++;
       if (attempts > MAX_WRITE_ATTEMPTS) {
-        return textResult({ ok: false, failures: [`Too many attempts (${MAX_WRITE_ATTEMPTS}) - stop and report what's blocking this.`] });
+        return textResult({ ok: false, failures: [failure("budget", `This session's write budget (${MAX_WRITE_ATTEMPTS}: the write plus one repair) is spent - stop and report what is still failing; a fresh session will continue from your last draft.`)] });
       }
 
       const dir = stagingDir(app);
@@ -282,9 +300,10 @@ function buildExtensionWriteTool(
 
       const result = await validateExtension(dir, app, args.baseUrl, secrets, hostMgr);
       if (!result.ok) {
+        lastAttempt = { draft: args.extensionTs, failures: result.failures };
         // Logged, not just returned to the model: a failed learn otherwise leaves no trace of WHY
         // (found post-mortem on a run that burned all attempts).
-        console.log(`[mirod] extension_write(${app}) attempt ${attempts} failed:\n  ${result.failures.join("\n  ")}`);
+        console.log(`[mirod] extension_write(${app}) attempt ${attempts} failed:\n  ${result.failures.map(formatFailure).join("\n  ")}`);
         return textResult({ ok: false, failures: result.failures, attemptsRemaining: MAX_WRITE_ATTEMPTS - attempts });
       }
       console.log(`[mirod] extension_write(${app}) attempt ${attempts} validated`);
@@ -294,10 +313,13 @@ function buildExtensionWriteTool(
       const manifest = buildManifest(app, args.displayName, args.baseUrl, args.secretNames, result.tools ?? [], version);
       writeFileSync(join(dir, "manifest"), JSON.stringify(manifest, null, 2));
 
+      // Pinned as validated (extensions/pin.ts): the rename below preserves the bytes.
+      const contentHash = hashExtension(dir);
       promoteStagingToLive(app);
       hostMgr.invalidate(extensionDir(app)); // the live session (if any) has the old code loaded
-      store.promote(db, app, JSON.stringify(manifest), version, args.baseUrl);
+      store.promote(db, app, JSON.stringify(manifest), version, args.baseUrl, contentHash);
       promoted = true;
+      lastAttempt = null;
 
       return textResult({
         ok: true,
@@ -309,7 +331,7 @@ function buildExtensionWriteTool(
     },
   };
 
-  return { tool, wasPromoted: () => promoted };
+  return { tool, wasPromoted: () => promoted, lastAttempt: () => lastAttempt };
 }
 
 export interface LearnAgentOptions {
@@ -332,12 +354,28 @@ export interface LearnAgentOptions {
   /** This session's tool calls render nested under this activity node (the app_learn call). */
   parentActivityId?: string;
   maxTurns?: number;
+  /** A previous session's last draft and its structured failures: this session starts from them
+   * (an independent regeneration, PLAN.md §5.15) instead of from nothing. */
+  seed?: LearnSeed;
 }
 
 const DEFAULT_MAX_TURNS = 40; // ponytail: a guess, tuned by live runs - research + codegen + operations need more than the old 24
 
-export async function spawnLearningAgent(o: LearnAgentOptions): Promise<{ text: string; promoted: boolean }> {
-  const { tool: writeTool, wasPromoted } = buildExtensionWriteTool(o.app, o.db, o.hostMgr, o.getSecret);
+export interface LearnAgentResult {
+  text: string;
+  promoted: boolean;
+  /** The last failed write, for the next regeneration to start from; null if promoted or never written. */
+  lastAttempt: LearnSeed | null;
+}
+
+/** The seed, phrased for the model: the draft verbatim plus the failures as the same JSON objects
+ * extension_write returns, so a fresh context sees exactly what the last one was told. */
+function seedText(seed: LearnSeed): string {
+  return `\n\nA previous independent attempt already wrote this extension.ts:\n\`\`\`ts\n${seed.draft}\n\`\`\`\nIt failed validation with these structured failures (most likely root cause first):\n${JSON.stringify(seed.failures, null, 2)}\nStart from that draft and fix exactly what is named. Do not restart research unless a failure shows the app differs from what the draft assumes.`;
+}
+
+export async function spawnLearningAgent(o: LearnAgentOptions): Promise<LearnAgentResult> {
+  const { tool: writeTool, wasPromoted, lastAttempt } = buildExtensionWriteTool(o.app, o.db, o.hostMgr, o.getSecret);
 
   // Lazy import breaks the learn.ts <-> learn-agent.ts cycle for recursion: learn.ts imports
   // spawnLearningAgent statically; this side only needs runLearnFlow at call time.
@@ -399,11 +437,11 @@ export async function spawnLearningAgent(o: LearnAgentOptions): Promise<{ text: 
   limitTurns(agent, maxTurns);
 
   try {
-    const text = await runTurn(agent, o.goal, {
+    const text = await runTurn(agent, o.seed ? `${o.goal}${seedText(o.seed)}` : o.goal, {
       parentActivityId: o.parentActivityId,
       onActivity: (node) => o.send({ type: "activity", ...node }),
     });
-    return { text, promoted: wasPromoted() };
+    return { text, promoted: wasPromoted(), lastAttempt: lastAttempt() };
   } finally {
     o.hostMgr.closeBrowserSession(o.app);
   }

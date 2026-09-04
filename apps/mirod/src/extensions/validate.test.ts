@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { typecheckExtension, scanForbiddenImports, resolveBindingUrls, dryRunBinding, annotateFailures } from "./validate";
+import { typecheckExtension, scanForbiddenImports, resolveBindingUrls, dryRunBinding, annotateFailures, failure, formatFailure } from "./validate";
 import { ensureNodeModulesSymlink, MIROD_NODE_MODULES } from "./paths";
 
 test("binding URLs may be app-relative; they resolve against baseUrl before the kind's URL guard", async () => {
@@ -129,19 +129,46 @@ test("scanForbiddenImports denies an arbitrary npm package (dynamic import)", ()
   rmSync(dir, { recursive: true, force: true });
 });
 
-// Compiler-as-teacher (PLAN.md §5.13): a raw failure names the symptom; annotateFailures appends the
-// fix so a weak learn model converges instead of looping. Unit-tested so the hints can't silently rot.
-test("annotateFailures appends the concrete fix for known failure shapes", () => {
-  const [postFix] = annotateFailures([`extension.ts:5: Property 'post' does not exist - in: ctx.http.post("/x")`]);
-  expect(postFix).toMatch(/GET-only/);
-  expect(postFix).toMatch(/bind\(args\)/);
+// Compiler-as-teacher (PLAN.md §5.13, structured per §5.15): a raw failure names the symptom; the
+// concrete fix (and an example) ride alongside as their own fields, so a weak learn model converges
+// instead of looping. Unit-tested so the hints can't silently rot.
+test("annotateFailures attaches the concrete fix and example for known failure shapes", () => {
+  const [postFix] = annotateFailures([failure("typecheck", `Property 'post' does not exist - in: ctx.http.post("/x")`, { entry: "extension.ts:5" })]);
+  expect(postFix!.fix).toMatch(/GET-only/);
+  expect(postFix!.fix).toMatch(/bind\(args\)/);
+  expect(postFix!.example).toMatch(/kind: "operation"/);
+  expect(postFix!.entry).toBe("extension.ts:5");
 
-  const [importFix] = annotateFailures([`extension.ts: forbidden import "node:fs"`]);
-  expect(importFix).toMatch(/@miro\/sdk/);
+  const [importFix] = annotateFailures([failure("forbidden-import", `forbidden import "node:fs"`, { entry: "extension.ts", field: 'import "node:fs"' })]);
+  expect(importFix!.fix).toMatch(/@miro\/sdk/);
 
-  const [schemaFix] = annotateFailures([`tool list: parameters has type "string" - must be "object"`]);
-  expect(schemaFix).toMatch(/OMIT `parameters`|Type\.Object/);
+  const [schemaFix] = annotateFailures([failure("schema", `parameters has type "string" - must be "object"`, { entry: "list", field: "parameters" })]);
+  expect(schemaFix!.fix).toMatch(/OMIT `parameters`|Type\.Object/);
+
+  const [deadApp] = annotateFailures([failure("dead-app", "diagnostic still succeeds when the app is unreachable (http://127.0.0.1:9)", { entry: "health" })]);
+  expect(deadApp!.fix).toMatch(/THROWING/);
 
   // An unrecognised failure is passed through unchanged (no false hint).
-  expect(annotateFailures(["something totally unrelated"])).toEqual(["something totally unrelated"]);
+  const [unknown] = annotateFailures([failure("probe", "something totally unrelated", { entry: "x" })]);
+  expect(unknown).toEqual({ rule: "probe", entry: "x", message: "something totally unrelated" });
+});
+
+// The REST→MCP failure taxonomy (auth scheme, base URL, headers, param types, rest): an auth failure
+// makes everything after it unobservable, so it comes first regardless of where the checks ran.
+test("annotateFailures orders failures most-likely-root-cause first, stable within a rank", () => {
+  const ordered = annotateFailures([
+    failure("schema", `parameters has type "string" - must be "object"`, { entry: "b", field: "parameters" }),
+    failure("probe", "live probe failed: GET /x returned 404, expected 200", { entry: "c" }),
+    failure("probe", "live probe failed: GET /y returned 401, expected 200", { entry: "a" }),
+    failure("probe", "live probe failed: something else entirely", { entry: "d" }),
+    failure("probe", "live probe failed: GET /z returned 403, expected 200", { entry: "e" }),
+  ]);
+  expect(ordered.map((f) => f.entry)).toEqual(["a", "e", "c", "b", "d"]);
+  expect(ordered[0]!.fix).toMatch(/auth SCHEME/);
+  expect(ordered[2]!.fix).toMatch(/base URL/);
+});
+
+test("formatFailure renders one human line per failure", () => {
+  expect(formatFailure({ rule: "schema", entry: "list", field: "parameters", message: "is not an object schema", fix: "use Type.Object" })).toBe("[schema] list.parameters: is not an object schema\n    → fix: use Type.Object");
+  expect(formatFailure({ rule: "probe-setup", message: "live probe setup failed: boom" })).toBe("[probe-setup]: live probe setup failed: boom");
 });

@@ -25,6 +25,13 @@ test("entryParameters derives a required-string schema from read placeholders, e
   expect(entryParameters({ name: "c", kind: "tool", description: "d", parameters: explicit, code: async () => 1 })).toBe(explicit);
 });
 
+test("entrySpec records how an entry is implemented, for the validator's dead-app check", async () => {
+  const { entrySpec } = await import("./declarative");
+  expect(entrySpec({ name: "a", kind: "diagnostic", description: "d", read: { path: "/health" } }).impl).toBe("read");
+  expect(entrySpec({ name: "b", kind: "diagnostic", description: "d", code: async () => 1 }).impl).toBe("code");
+  expect(entrySpec({ name: "c", kind: "operation", description: "d", bind: () => ({ kind: "http_mutation", goal: "g" }) } as any).impl).toBe("bind");
+});
+
 test("objectSchema turns a Type.Object(...) schema into plain JSON Schema and a legacy {} into the canonical empty object schema", async () => {
   const { Type } = await import("@miro/sdk");
   expect(objectSchema(Type.Object({ id: Type.String() }))).toMatchObject({ type: "object", properties: { id: { type: "string" } }, required: ["id"] });

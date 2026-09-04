@@ -71,7 +71,14 @@ export async function runRead(ctx: ExtensionContext, mod: ExtensionModule, read:
 }
 
 export function entrySpec(entry: ExtensionEntry): HostToolSpec {
-  return { name: entry.name, kind: entry.kind, label: entry.label ?? entry.name, description: entry.description, parameters: entryParameters(entry) };
+  return {
+    name: entry.name,
+    kind: entry.kind,
+    label: entry.label ?? entry.name,
+    description: entry.description,
+    parameters: entryParameters(entry),
+    impl: entry.read ? "read" : entry.code ? "code" : "bind",
+  };
 }
 
 /** The model writes whatever it wants; `satisfies ExtensionModule` catches most of it at typecheck,

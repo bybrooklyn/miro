@@ -33,6 +33,10 @@ export interface HostToolSpec {
   label: string;
   description: string;
   parameters: unknown; // a TSchema value, JSON-serialized
+  /** How the entry is implemented - a declarative read, generated code, or a write binding. The
+   * validator's dead-app admission check applies to code diagnostics only. Absent on manifests
+   * written before this field existed. */
+  impl?: "read" | "code" | "bind";
 }
 
 export type HostResponse =

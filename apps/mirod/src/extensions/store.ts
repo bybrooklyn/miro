@@ -18,6 +18,9 @@ export interface ExtensionRecord {
   lastValidatedAt: number | null;
   lastError: string | null;
   successfulRuns: number;
+  /** sha256 of extension.ts + manifest at promotion (extensions/pin.ts); null for rows promoted
+   * before pinning existed, which are pinned as they stand on first use. */
+  contentHash: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -33,6 +36,7 @@ interface Row {
   last_validated_at: number | null;
   last_error: string | null;
   successful_runs: number | null;
+  content_hash: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -49,6 +53,7 @@ function fromRow(row: Row): ExtensionRecord {
     lastValidatedAt: row.last_validated_at,
     lastError: row.last_error,
     successfulRuns: row.successful_runs ?? 0,
+    contentHash: row.content_hash ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -75,6 +80,7 @@ export function ensureExtensionsTable(db: Database): void {
   // Added defensively for databases created before the column existed (no migration framework).
   const cols = (db.query("PRAGMA table_info(extensions)").all() as { name: string }[]).map((c) => c.name);
   if (!cols.includes("successful_runs")) db.run("ALTER TABLE extensions ADD COLUMN successful_runs INTEGER NOT NULL DEFAULT 0");
+  if (!cols.includes("content_hash")) db.run("ALTER TABLE extensions ADD COLUMN content_hash TEXT");
 }
 
 /** Maturity, derived - never stored, never set by hand (plan §29). ponytail: one threshold; the
@@ -88,17 +94,22 @@ export function maturityOf(record: Pick<ExtensionRecord, "successfulRuns" | "rep
 /** A successful generation (fresh learn OR a successful repair) always fully resets both
  * counters - the extension is known-good again either way, no separate "reset repair attempts"
  * call needed at the repair call site. */
-export function promote(db: Database, app: string, manifestJson: string, version: number, baseUrl: string): void {
+export function promote(db: Database, app: string, manifestJson: string, version: number, baseUrl: string, contentHash: string | null = null): void {
   const now = Date.now();
   db.run(
-    `INSERT INTO extensions (app, state, manifest, version, base_url, consecutive_failures, repair_attempts, last_validated_at, last_error, successful_runs, created_at, updated_at)
-     VALUES (?, 'enabled', ?, ?, ?, 0, 0, ?, NULL, 0, ?, ?)
+    `INSERT INTO extensions (app, state, manifest, version, base_url, consecutive_failures, repair_attempts, last_validated_at, last_error, successful_runs, content_hash, created_at, updated_at)
+     VALUES (?, 'enabled', ?, ?, ?, 0, 0, ?, NULL, 0, ?, ?, ?)
      ON CONFLICT(app) DO UPDATE SET
        state = 'enabled', manifest = excluded.manifest, version = excluded.version, base_url = excluded.base_url,
        consecutive_failures = 0, repair_attempts = 0, last_validated_at = excluded.last_validated_at,
-       last_error = NULL, successful_runs = 0, updated_at = excluded.updated_at`,
-    [app, manifestJson, version, baseUrl, now, now, now],
+       last_error = NULL, successful_runs = 0, content_hash = excluded.content_hash, updated_at = excluded.updated_at`,
+    [app, manifestJson, version, baseUrl, now, contentHash, now, now],
   );
+}
+
+/** Pins a row promoted before hashing existed (extensions/pin.ts) - set once, never re-set. */
+export function setContentHash(db: Database, app: string, contentHash: string): void {
+  db.run(`UPDATE extensions SET content_hash = ?, updated_at = ? WHERE app = ? AND content_hash IS NULL`, [contentHash, Date.now(), app]);
 }
 
 /** Bumped by either a real tool-call failure or a failed periodic re-probe (extensions/repair.ts)

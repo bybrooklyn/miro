@@ -1,4 +1,6 @@
 import type { Database } from "bun:sqlite";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { ModelRegistry } from "../agent/models";
 import type { ServerEvent } from "@miro/protocol";
 import type { ExtensionHostManager } from "./host";
@@ -6,6 +8,7 @@ import type { CodegenSelection } from "./learn";
 import type { ExtensionManifest } from "./manifest";
 import { spawnLearningAgent } from "./learn-agent";
 import { extensionDir } from "./paths";
+import { assertPinned, PinMismatchError } from "./pin";
 import * as store from "./store";
 
 // Dreaming's repair half (plan §36, §8 of PLAN.md's self-extension design) - the OTHER real event
@@ -44,6 +47,16 @@ export async function maybeTriggerRepair(
   const ext = store.getExtension(db, trigger.app);
   if (!ext || ext.state !== "enabled") return false; // already disabled (or never existed) - nothing to repair
 
+  // Tampered code is never repaired into trust: the validator never saw what is on disk now.
+  const dir = extensionDir(trigger.app);
+  try {
+    assertPinned(db, trigger.app, dir);
+  } catch (err) {
+    if (!(err instanceof PinMismatchError)) throw err;
+    send({ type: "notice", level: "warn", text: err.message });
+    return false;
+  }
+
   // Circuit breaker, checked BEFORE attempting - never lets a 4th attempt start.
   if (ext.repairAttempts >= MAX_REPAIR_ATTEMPTS) {
     store.disable(db, trigger.app, `Exceeded max repair attempts (${MAX_REPAIR_ATTEMPTS}): ${trigger.error}`);
@@ -59,8 +72,16 @@ export async function maybeTriggerRepair(
 
   const goal = `Extension "${trigger.app}"'s "${trigger.tool}" is failing: ${trigger.error}. Diagnose against the app as
 it runs right now (container_inspect, shell_inspect, http_get, net_capture if needed), re-research if its API or
-interface changed, then call extension_write with corrected versions of every file (tools, diagnostics, operations,
-tests). Keep tool names and behaviour the same wherever the app still supports them.`;
+interface changed, then call extension_write with a corrected extension.ts. Keep entry names and behaviour the
+same wherever the app still supports them.`;
+
+  // The repair agent cannot read its own live extension.ts (the extensions directory is refused to
+  // every read tool as Miro's own state), so the current code is handed to it as the draft to start
+  // from, with the runtime failure in the same structured shape a validation failure has.
+  const livePath = join(dir, "extension.ts");
+  const seed = existsSync(livePath)
+    ? { draft: readFileSync(livePath, "utf8"), failures: [{ rule: "probe" as const, entry: trigger.tool, message: trigger.error }] }
+    : undefined;
 
   const result = await spawnLearningAgent({
     goal,
@@ -76,6 +97,7 @@ tests). Keep tool names and behaviour the same wherever the app still supports t
     getStoredKey,
     send,
     resolveCodegenModel,
+    seed,
     // Autonomous: no user to ask, no operations - a repair regenerates code, it does not reconfigure the app.
   });
 
@@ -108,6 +130,13 @@ export async function reprobeExtensions(
   for (const row of store.listEnabled(db)) {
     const manifest: ExtensionManifest = JSON.parse(row.manifest);
     const dir = extensionDir(manifest.app);
+    try {
+      assertPinned(db, manifest.app, dir);
+    } catch (err) {
+      if (!(err instanceof PinMismatchError)) throw err;
+      send({ type: "notice", level: "warn", text: err.message });
+      continue; // disabled by the check; nothing to probe
+    }
     const secrets: Record<string, string> = {};
     for (const decl of manifest.secrets) {
       const value = getSecret(decl.ref);

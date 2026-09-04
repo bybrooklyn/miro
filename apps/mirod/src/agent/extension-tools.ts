@@ -8,6 +8,7 @@ import type { ExtensionManifest } from "../extensions/manifest";
 import type { ExtensionHostManager } from "../extensions/host";
 import type { RepairTrigger } from "../extensions/repair";
 import { extensionDir } from "../extensions/paths";
+import { assertPinned } from "../extensions/pin";
 import { runOperation, type OperationToolContext, type OperationKind } from "../operations/engine";
 import { allOperationKinds } from "./operation-tools";
 import { resolveBindingUrls } from "../extensions/validate";
@@ -80,6 +81,9 @@ export function buildToolsForExtension(
     description: spec.description,
     parameters: objectSchema(spec.parameters) as any,
     execute: async (_id: string, args: unknown) => {
+      // The code that runs is the code the validator passed (extensions/pin.ts) - checked before
+      // every call, and a mismatch is not a failure to repair, it disables the extension.
+      assertPinned(db, manifest.app, dir);
       const secrets = resolveSecrets(manifest, getSecret);
       try {
         const value = await hostMgr.call(dir, manifest.app, manifest.baseUrl, secrets, spec.name, args);
@@ -108,6 +112,7 @@ export function buildToolsForExtension(
     parameters: objectSchema(spec.parameters) as any,
     execute: async (_id: string, args: unknown) => {
       if (!operationCtx) return textResult({ error: "operations are not available in this context" });
+      assertPinned(db, manifest.app, dir);
       const secrets = resolveSecrets(manifest, getSecret);
       const bound = resolveBindingUrls((await hostMgr.bind(dir, manifest.app, manifest.baseUrl, secrets, spec.name, args)) as { kind?: string; goal?: string } & Record<string, unknown>, manifest.baseUrl);
       const { kind: bindingKind, goal, ...params } = bound;

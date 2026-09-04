@@ -4,7 +4,7 @@ import type { Database } from "bun:sqlite";
 import type { ServerEvent } from "@miro/protocol";
 import type { ExtensionHostManager } from "./host";
 import type { OperationToolContext } from "../operations/engine";
-import { spawnLearningAgent } from "./learn-agent";
+import { spawnLearningAgent, type LearnAgentResult, type LearnSeed } from "./learn-agent";
 import { discoverAppOnBox, formatPresence } from "../discovery";
 
 /** What the codegen model resolver picked, and any reasoning-effort override to apply for it -
@@ -19,6 +19,7 @@ export interface CodegenSelection {
  * qBittorrent, finish those, and resume. Bounded depth, and an in-progress set so a cycle
  * (A needs B needs A) returns immediately instead of spawning forever. */
 export const MAX_LEARN_DEPTH = 3;
+export const MAX_REGENERATIONS = 3;
 const inProgress = new Set<string>();
 
 export interface LearnFlowOptions {
@@ -70,24 +71,41 @@ export async function runLearnFlow(opts: LearnFlowOptions): Promise<{ text: stri
     const presence = await discoverAppOnBox(app);
     const combinedHint = [opts.hint, formatPresence(app, presence)].filter(Boolean).join(" | ");
     const goal = `Learn the self-hosted app "${app}"${combinedHint ? ` (hint: ${combinedHint})` : ""}: identify what it is and how it is best controlled, generate a local extension for it (read tools, diagnostics, and write bindings), and record its operational model.`;
-    return await spawnLearningAgent({
-      goal,
-      app,
-      depth,
-      db: opts.db,
-      hostMgr: opts.hostMgr,
-      setSecret: opts.setSecret,
-      getSecret: opts.getSecret,
-      models: opts.models,
-      model: selection.model,
-      reasoning: selection.reasoning,
-      getStoredKey: opts.getStoredKey,
-      send: opts.send,
-      waitForAnswer: opts.waitForAnswer,
-      operationCtx: opts.operationCtx,
-      resolveCodegenModel: opts.resolveCodegenModel,
-      parentActivityId: opts.parentActivityId,
-    });
+    // The repair budget reshaped (PLAN.md §5.15): up to MAX_REGENERATIONS INDEPENDENT sessions, each
+    // allowed one write plus one targeted repair, the next seeded with the last draft and its
+    // structured failures - never a chain of repairs on one draft in one context, which converges
+    // worse than no repair at all. A session that never wrote anything is not regenerated: with no
+    // draft to seed, a fresh sample would only redo the same research.
+    let seed: LearnSeed | undefined;
+    let last: LearnAgentResult | undefined;
+    for (let regeneration = 1; regeneration <= MAX_REGENERATIONS; regeneration++) {
+      const result = await spawnLearningAgent({
+        goal,
+        app,
+        depth,
+        db: opts.db,
+        hostMgr: opts.hostMgr,
+        setSecret: opts.setSecret,
+        getSecret: opts.getSecret,
+        models: opts.models,
+        model: selection.model,
+        reasoning: selection.reasoning,
+        getStoredKey: opts.getStoredKey,
+        send: opts.send,
+        waitForAnswer: opts.waitForAnswer,
+        operationCtx: opts.operationCtx,
+        resolveCodegenModel: opts.resolveCodegenModel,
+        parentActivityId: opts.parentActivityId,
+        seed,
+      });
+      if (result.promoted || !result.lastAttempt) return { text: result.text, promoted: result.promoted };
+      last = result;
+      seed = result.lastAttempt;
+      if (regeneration < MAX_REGENERATIONS) {
+        opts.send({ type: "notice", level: "warn", text: `Learning ${app}: attempt ${regeneration} of ${MAX_REGENERATIONS} did not validate - starting a fresh attempt from its draft.` });
+      }
+    }
+    return { text: `${last!.text}\n\nGave up learning ${app} after ${MAX_REGENERATIONS} independent attempts; the last failures were: ${last!.lastAttempt!.failures.map((f) => `${f.entry ? `${f.entry}: ` : ""}${f.message}`).join("; ")}`, promoted: false };
   } finally {
     inProgress.delete(app);
   }
