@@ -24,7 +24,18 @@ function ctx(answer = "approve"): { ctx: OperationToolContext; events: ServerEve
   ensureOperationsTable(db);
   ensureMemoryTable(db);
   const events: ServerEvent[] = [];
-  return { events, ctx: { db, send: (e) => events.push(e), waitForAnswer: async () => answer, getSecret: (ref) => (ref === "test.token" ? "s3cret" : null) } };
+  return {
+    events,
+    ctx: {
+      db,
+      send: (e) => events.push(e),
+      waitForAnswer: async () => answer,
+      getSecret: (ref) => (ref === "test.token" ? "s3cret" : null),
+      // Deterministic and free of real subprocess calls - these tests exercise the kinds, not this
+      // machine's actual systemd/docker/disk state.
+      computeSeverity: async () => 0,
+    },
+  };
 }
 
 function planOf(events: ServerEvent[]) {

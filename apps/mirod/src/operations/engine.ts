@@ -3,6 +3,7 @@ import type { ServerEvent } from "@miro/protocol";
 import * as store from "./store";
 import * as memory from "../memory/store";
 import type { CommandClass } from "./classify";
+import { computeSeverity as computeSeverityLive } from "./severity";
 
 export interface OperationPlan {
   summary: string;
@@ -86,6 +87,10 @@ export interface OperationToolContext {
   /** How long a `lifeline` operation waits for the user to confirm they are still reachable
    * before rolling itself back. Injectable for tests; defaults to LIFELINE_CONFIRM_MS. */
   lifelineConfirmMs?: number;
+  /** The severity oracle (PLAN.md §5.15 A / severity.ts). Injectable for tests, which would
+   * otherwise depend on this machine's real, non-deterministic systemd/docker/disk state;
+   * defaults to the real live gather. */
+  computeSeverity?: (db: Database) => Promise<number>;
   /** Optional: triggers a budgeted LLM reflection pass (plan §36-37). Fire-and-forget - never
    * awaited by the caller, never blocks the user-facing operation_result. */
   reflect?: (trigger: ReflectionTrigger) => void;
@@ -171,6 +176,11 @@ export async function runOperation<P, S>(
   // terminal outcome (writer exclusivity), including a lifeline's reachability wait - no other
   // change is stacked on top of an unconfirmed lockout-risk change.
   return withWriteLock(async () => {
+    // Severity oracle (PLAN.md §5.15 A, STRATUS's TNR commit rule): the box's health just before
+    // this operation touches anything - the baseline μ_post is judged against below.
+    const computeSeverity = ctx.computeSeverity ?? computeSeverityLive;
+    const severityBefore = await computeSeverity(db).catch(() => 0);
+
     store.setPhase(db, id, "capturing");
     send({ type: "operation_progress", id, phase: "capturing" });
     const captured = await kind.captureState(params);
@@ -192,7 +202,12 @@ export async function runOperation<P, S>(
 
     store.setPhase(db, id, "verifying");
     send({ type: "operation_progress", id, phase: "verifying" });
-    const ok = await kind.verify(params);
+    const kindVerified = await kind.verify(params);
+    // TNR's commit rule: a kind's own verify() can be narrowly correct (this one unit is active)
+    // while missing a wider regression the same action caused elsewhere. Commit requires BOTH.
+    const severityAfter = kindVerified ? await computeSeverity(db).catch(() => severityBefore) : severityBefore;
+    const severityRegressed = severityAfter > severityBefore;
+    const ok = kindVerified && !severityRegressed;
 
     if (ok) {
       // Lifeline (§39, PLAN.md §5.7 F3): a change that could lock the user out is only committed
@@ -231,22 +246,27 @@ export async function runOperation<P, S>(
       return { outcome: "committed" as const, message };
     }
 
-    // Verify failed. A reversible op is restored to its captured state and honestly called
-    // "rolledback". An irreversible one (a POST with no undo, a completed wizard step) already
-    // changed the server and cannot be undone - its rollback() is a no-op, so "rolled back" would
-    // be a lie. Report applied_unverified so the agent re-inspects instead of blindly retrying a
-    // step the server may already have accepted (found live, run #6: the config and admin writes
-    // had landed, yet each was reported rolled back, and the agent fought them for minutes).
+    // Verify failed - either the kind's own check, or the severity oracle caught a wider
+    // regression a narrowly-correct kind verify() missed (STRATUS's TNR commit rule). A reversible
+    // op is restored to its captured state and honestly called "rolledback". An irreversible one
+    // (a POST with no undo, a completed wizard step) already changed the server and cannot be
+    // undone - its rollback() is a no-op, so "rolled back" would be a lie. Report applied_unverified
+    // so the agent re-inspects instead of blindly retrying a step the server may already have
+    // accepted (found live, run #6: the config and admin writes had landed, yet each was reported
+    // rolled back, and the agent fought them for minutes).
+    const why = !kindVerified
+      ? "verification failed"
+      : `the server got worse during this operation (severity ${severityBefore} -> ${severityAfter})`;
     if (!plan.irreversible) {
       await kind.rollback(params, captured).catch((err) => console.error("[mirod] rollback failed", err));
-      store.setPhase(db, id, "rolledback", "verification failed");
-      const message = `Verification failed - ${goal}, rolled back.`;
+      store.setPhase(db, id, "rolledback", why);
+      const message = `${!kindVerified ? "Verification failed" : "Regressed"} - ${goal}, rolled back${!kindVerified ? "" : ` (${why})`}.`;
       onTerminal("rolledback", message);
       send({ type: "operation_result", id, outcome: "rolledback", message });
       return { outcome: "rolledback" as const, message };
     }
     store.setPhase(db, id, "committed"); // it did apply; there is nothing to reconcile back
-    const message = `Applied - ${goal}, but verification did not confirm it and it cannot be rolled back. Inspect the current state before retrying - the change may already be in effect.`;
+    const message = `Applied - ${goal}, but ${why} and it cannot be rolled back. Inspect the current state before retrying - the change may already be in effect.`;
     onTerminal("committed", message); // recorded as applied, not a rollback; does not trip repeat-failure
     send({ type: "operation_result", id, outcome: "applied_unverified", message });
     return { outcome: "applied_unverified" as const, message };

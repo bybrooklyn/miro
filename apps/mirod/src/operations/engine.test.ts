@@ -23,6 +23,9 @@ function fakeCtx(db: Database, answer?: string): { ctx: OperationToolContext; ev
       send: (event) => events.push(event),
       waitForAnswer: async () => answer ?? "approve",
       reflect: (trigger) => reflections.push(trigger),
+      // Deterministic and free of real subprocess calls - the real severity oracle would depend on
+      // this machine's actual systemd/docker/disk state, which is neither.
+      computeSeverity: async () => 0,
     },
   };
 }
@@ -79,7 +82,7 @@ test("lifeline: committed only after the user confirms they are still reachable"
   const events: ServerEvent[] = [];
   const kind = fakeKind();
   kind.describe = async () => { kind.calls.push("describe"); return { summary: "change firewall", autoApprove: false, class: "lifeline" }; };
-  const ctx: OperationToolContext = { db, send: (e) => events.push(e), waitForAnswer: async () => answers.shift() ?? "keep", lifelineConfirmMs: 5_000 };
+  const ctx: OperationToolContext = { db, send: (e) => events.push(e), waitForAnswer: async () => answers.shift() ?? "keep", lifelineConfirmMs: 5_000, computeSeverity: async () => 0 };
   const result = await runOperation(ctx, kind, "change firewall", { x: 1 });
   expect(result.outcome).toBe("committed");
   expect(kind.calls).toEqual(["describe", "captureState", "apply", "verify"]);
@@ -100,6 +103,7 @@ test("lifeline: no confirmation within the window rolls back on its own", async 
     // First answer approves; the reachability question is never answered (connection gone).
     waitForAnswer: (id) => (++asked === 1 ? Promise.resolve("approve") : new Promise(() => {})),
     lifelineConfirmMs: 200,
+    computeSeverity: async () => 0,
   };
   const result = await runOperation(ctx, kind, "change firewall", { x: 1 });
   expect(result.outcome).toBe("rolledback");
@@ -112,7 +116,7 @@ test("lifeline: an explicit 'roll back' answer rolls back", async () => {
   const answers = ["approve", "rollback"];
   const kind = fakeKind();
   kind.describe = async () => ({ summary: "change sshd", autoApprove: false, class: "lifeline" });
-  const ctx: OperationToolContext = { db, send: () => {}, waitForAnswer: async () => answers.shift() ?? "keep", lifelineConfirmMs: 5_000 };
+  const ctx: OperationToolContext = { db, send: () => {}, waitForAnswer: async () => answers.shift() ?? "keep", lifelineConfirmMs: 5_000, computeSeverity: async () => 0 };
   const result = await runOperation(ctx, kind, "change sshd", { x: 1 });
   expect(result.outcome).toBe("rolledback");
   expect(kind.calls.at(-1)).toBe("rollback");
@@ -444,6 +448,56 @@ test("selector sanity: badWriteScope flags empty, root, and glob roots only", ()
   expect(badWriteScope(["/"])).toBe("/");
   expect(badWriteScope([" "])).toBe(" ");
   expect(badWriteScope(["/opt/*"])).toBe("/opt/*");
+});
+
+// --- Severity oracle (PLAN.md §5.15 A / severity.ts): commit requires kind.verify() AND μ not worse ---
+
+test("severity oracle: a narrowly-passing verify is still rolled back if the box got worse overall", async () => {
+  const db = freshDb();
+  const { ctx, events } = fakeCtx(db);
+  let call = 0;
+  ctx.computeSeverity = async () => (++call === 1 ? 0 : 3); // clean before, worse after - verify() itself passes
+  const kind = fakeKind({ verifyResult: true });
+  const result = await runOperation(ctx, kind, "restart nginx", { x: 1 });
+  expect(result.outcome).toBe("rolledback");
+  expect(result.message).toContain("Regressed");
+  expect(result.message).toContain("severity 0 -> 3");
+  expect(kind.calls).toEqual(["describe", "captureState", "apply", "verify", "rollback"]);
+  const resultEvent = events.find((e) => e.type === "operation_result") as Extract<ServerEvent, { type: "operation_result" }>;
+  expect(resultEvent.outcome).toBe("rolledback");
+});
+
+test("severity oracle: equal or improved severity does not block a commit", async () => {
+  const db = freshDb();
+  const { ctx } = fakeCtx(db);
+  let call = 0;
+  ctx.computeSeverity = async () => (++call === 1 ? 5 : 5); // unchanged - not a regression
+  const kind = fakeKind({ verifyResult: true });
+  const result = await runOperation(ctx, kind, "restart nginx", { x: 1 });
+  expect(result.outcome).toBe("committed");
+});
+
+test("severity oracle: a failing kind.verify still rolls back even if severity improved", async () => {
+  const db = freshDb();
+  const { ctx } = fakeCtx(db);
+  let call = 0;
+  ctx.computeSeverity = async () => (++call === 1 ? 5 : 0); // severity improved, but the kind itself failed
+  const kind = fakeKind({ verifyResult: false });
+  const result = await runOperation(ctx, kind, "restart nginx", { x: 1 });
+  expect(result.outcome).toBe("rolledback");
+  expect(result.message).toContain("Verification failed"); // kind failure names itself, not severity
+});
+
+test("severity oracle: an irreversible op that regresses reports applied_unverified, not a false rollback", async () => {
+  const db = freshDb();
+  const { ctx } = fakeCtx(db);
+  let call = 0;
+  ctx.computeSeverity = async () => (++call === 1 ? 0 : 2);
+  const kind = fakeKind({ verifyResult: true });
+  kind.describe = async () => ({ summary: "wizard step", autoApprove: true, irreversible: true });
+  const result = await runOperation(ctx, kind, "wizard step", { x: 1 });
+  expect(result.outcome).toBe("applied_unverified");
+  expect(result.message).toContain("severity 0 -> 2");
 });
 
 test("selector sanity: a root write scope is refused before anything is planned, asked, or touched", async () => {
