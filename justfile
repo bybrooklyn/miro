@@ -17,10 +17,7 @@ renv:
 
 # Typecheck every package (there is no repo-wide tsc script otherwise).
 check:
-    cd packages/sdk && bunx tsc --noEmit
-    cd packages/protocol && bunx tsc --noEmit
-    cd apps/mirod && bunx tsc --noEmit
-    cd apps/miro && bunx tsc --noEmit
+    for d in packages/* apps/*; do if [ -f "$d/tsconfig.json" ]; then echo "tsc: $d"; (cd "$d" && bunx tsc --noEmit) || exit 1; fi; done
     @echo "✓ all packages typecheck"
 
 # Run the whole test suite (from repo root - bun test paths are cwd-relative).
