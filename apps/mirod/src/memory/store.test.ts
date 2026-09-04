@@ -12,6 +12,8 @@ import {
   forget,
   formatForDisplay,
   confidenceLabel,
+  bumpHelpful,
+  bumpHarmful,
 } from "./store";
 
 function freshDb(): Database {
@@ -128,4 +130,75 @@ test("formatForDisplay groups by category and includes short ids", () => {
   expect(text).toContain("Preferences:");
   expect(text).toContain(rec.id.slice(0, 8));
   expect(text).toContain("/memory forget");
+});
+
+// --- Provenance + outcome-feedback columns (PLAN.md §5.15 B) ---
+
+test("remember: new provenance fields default to null, matching every pre-existing call site", () => {
+  const db = freshDb();
+  const rec = remember(db, "server_fact", "server.containers", "runs 3 containers", "discovery");
+  expect(rec.helpfulCount).toBe(0);
+  expect(rec.harmfulCount).toBe(0);
+  expect(rec.expiresAt).toBeNull();
+  expect(rec.observedAt).toBeNull();
+  expect(rec.appVersion).toBeNull();
+  expect(rec.supersededBy).toBeNull();
+});
+
+test("remember: expiresAt/observedAt/appVersion round-trip through getByKey", () => {
+  const db = freshDb();
+  const observedAt = Date.now() - 1000;
+  const expiresAt = Date.now() + 100_000;
+  remember(db, "capability", "jellyfin", "media server", "learning_agent", null, { expiresAt, observedAt, appVersion: "10.11.11" });
+  const rec = getByKey(db, "capability", "jellyfin")!;
+  expect(rec.expiresAt).toBe(expiresAt);
+  expect(rec.observedAt).toBe(observedAt);
+  expect(rec.appVersion).toBe("10.11.11");
+});
+
+test("remember: re-remembering with no opts clears a previously-set expiry, matching value's own overwrite behavior", () => {
+  const db = freshDb();
+  remember(db, "server_fact", "k", "v1", "discovery", null, { expiresAt: Date.now() + 100_000 });
+  remember(db, "server_fact", "k", "v2", "discovery"); // no opts - defaults to null
+  expect(getByKey(db, "server_fact", "k")!.expiresAt).toBeNull();
+});
+
+test("bumpHelpful / bumpHarmful increment independently of occurrence_count", () => {
+  const db = freshDb();
+  const rec = remember(db, "capability", "jellyfin", "media server", "learning_agent");
+  bumpHelpful(db, rec.id);
+  bumpHelpful(db, rec.id);
+  bumpHarmful(db, rec.id);
+  const after = getByKey(db, "capability", "jellyfin")!;
+  expect(after.helpfulCount).toBe(2);
+  expect(after.harmfulCount).toBe(1);
+  expect(after.occurrenceCount).toBe(1); // unaffected - "seen again" is a separate signal from "worked again"
+});
+
+test("query/listAll/topFacts exclude an expired row by default, but query can opt back in", () => {
+  const db = freshDb();
+  remember(db, "server_fact", "fresh", "still true", "discovery", null, { expiresAt: Date.now() + 100_000 });
+  remember(db, "server_fact", "stale", "no longer true", "discovery", null, { expiresAt: Date.now() - 1000 });
+  const fresh = query(db, { category: "server_fact" });
+  expect(fresh.map((r) => r.key)).toEqual(["fresh"]);
+  const all = listAll(db);
+  expect(all.map((r) => r.key)).toEqual(["fresh"]);
+  const facts = topFacts(db);
+  expect(facts.map((r) => r.key)).toEqual(["fresh"]);
+  const withExpired = query(db, { category: "server_fact", includeExpired: true });
+  expect(withExpired.map((r) => r.key).sort()).toEqual(["fresh", "stale"]);
+});
+
+test("ensureMemoryTable is idempotent across the real upgrade path - a second boot doesn't error on duplicate columns", () => {
+  const db = new Database(":memory:");
+  ensureMemoryTable(db); // simulates the first boot after this change, adding the new columns
+  remember(db, "server_fact", "k", "v", "discovery");
+  expect(() => ensureMemoryTable(db)).not.toThrow(); // every boot after that
+  expect(getByKey(db, "server_fact", "k")!.value).toBe("v"); // data survived
+});
+
+test("a row with no expiry set is never excluded (the default for every existing call site)", () => {
+  const db = freshDb();
+  remember(db, "server_fact", "k", "v", "discovery"); // no expiresAt at all
+  expect(query(db, { category: "server_fact" })).toHaveLength(1);
 });
