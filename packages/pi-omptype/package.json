@@ -1,0 +1,9 @@
+{
+  "name": "@miro/pi-omptype",
+  "license": "MIT",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts"
+}
