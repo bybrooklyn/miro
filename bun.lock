@@ -42,6 +42,13 @@
       "name": "@miro/pi-omptype",
       "version": "0.0.0",
     },
+    "packages/pi-utils": {
+      "name": "@miro/pi-utils",
+      "version": "0.0.0",
+      "dependencies": {
+        "@miro/pi-natives": "workspace:*",
+      },
+    },
     "packages/pi-wire": {
       "name": "@miro/pi-wire",
       "version": "0.0.0",
@@ -129,6 +136,8 @@
     "@miro/pi-natives": ["@miro/pi-natives@workspace:packages/pi-natives"],
 
     "@miro/pi-omptype": ["@miro/pi-omptype@workspace:packages/pi-omptype"],
+
+    "@miro/pi-utils": ["@miro/pi-utils@workspace:packages/pi-utils"],
 
     "@miro/pi-wire": ["@miro/pi-wire@workspace:packages/pi-wire"],
 
