@@ -1,5 +1,5 @@
 import { getBundledModels, type GeneratedProvider } from "@miro/model-catalog";
-import type { Model } from "@miro/model-client";
+import type { ApiKey, Model } from "@miro/model-client";
 import { resolveApiKey } from "./model-utils";
 
 // The one shared model registry (PLAN.md §5.17): the vendored catalog is a static per-provider
@@ -14,14 +14,15 @@ export interface ModelRegistry {
   /** A provider discovered at runtime, with the fixed credential (if any) its requests carry. */
   addProvider(provider: string, models: Model[], apiKey?: string): void;
   /** Re-resolved on every request (not once at Agent construction), so a key added via /provider
-   * after the daemon started takes effect on the very next turn. */
-  getApiKey(model: Model): Promise<string | undefined>;
+   * after the daemon started takes effect on the very next turn. A stored/env key is a plain
+   * string; an OAuth login is a resolver the client re-asks on a 401 (agent/codex-auth.ts). */
+  getApiKey(model: Model): Promise<ApiKey | undefined>;
 }
 
 export function createModelRegistry(
   getStoredKey: (provider: string) => string | null,
-  /** An OAuth access token for a logged-in provider (agent/codex-auth.ts); undefined otherwise. */
-  oauthAccessToken: (provider: string) => Promise<string | undefined> = async () => undefined,
+  /** The ApiKey for a logged-in OAuth provider (agent/codex-auth.ts); undefined otherwise. */
+  oauthApiKey: (provider: string) => ApiKey | undefined = () => undefined,
 ): ModelRegistry {
   const runtime = new Map<string, { models: Model[]; apiKey?: string }>();
   return {
@@ -32,7 +33,7 @@ export function createModelRegistry(
     getApiKey: async (model) => {
       const added = runtime.get(model.provider);
       if (added) return added.apiKey;
-      return resolveApiKey(model.provider, getStoredKey) ?? (await oauthAccessToken(model.provider));
+      return resolveApiKey(model.provider, getStoredKey) ?? oauthApiKey(model.provider);
     },
   };
 }

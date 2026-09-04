@@ -103,7 +103,7 @@ function storedCodegenPolicy(): RoutingPolicy | null {
 }
 
 const codexAuth = createCodexAuth(db, secretStore);
-const models = createModelRegistry(getStoredKey, codexAuth.accessToken);
+const models = createModelRegistry(getStoredKey, codexAuth.apiKey);
 
 // One-time import of a credential logged in via pi-ai's own CLI (`login openai-codex`), so the
 // daemon doesn't need its own interactive OAuth login UX yet. Idempotent - re-importing a fresh
