@@ -32,7 +32,7 @@ import { ensureNodeModulesSymlink, extensionDir, MIROD_NODE_MODULES } from "./ex
 import type { CodegenSelection } from "./extensions/learn";
 import { maybeTriggerRepair, reprobeExtensions, type RepairTrigger } from "./extensions/repair";
 import { requiresArguments } from "./extensions/validate";
-import { createCodexAuth, importCodexCredentialFromCli } from "./agent/codex-auth";
+import { createCodexAuth, importCodexCredentialFromCli, loginCodex } from "./agent/codex-auth";
 
 const OPERATION_KINDS = allOperationKinds((ref) => secretStore.getSecret(db, ref), (ref, value) => secretStore.setSecret(db, ref, value));
 
@@ -368,12 +368,17 @@ async function handleChat(text: string, send: (event: ServerEvent) => void, stat
   send({ type: "reply", text: reply || "(no response)" });
 }
 
+/** The one provider connected by a login rather than a pasted key - offered alongside the key
+ * providers, deliberately not part of PROVIDER_CATALOG (whose entries mean "a stored/env key
+ * connects it"; Codex is connected when its OAuth credential is on file). */
+const CODEX_PROVIDER = "openai-codex";
+
 function startProviderSetup(send: (event: ServerEvent) => void): void {
   send({
     type: "question",
     id: "provider_choice",
     prompt: "Which AI provider do you want to connect?",
-    options: PROVIDER_CATALOG.map((p) => ({ label: p.label, value: p.provider })),
+    options: [...PROVIDER_CATALOG.map((p) => ({ label: p.label, value: p.provider })), { label: "OpenAI Codex (ChatGPT login, no API key)", value: CODEX_PROVIDER }],
   });
 }
 
@@ -391,6 +396,27 @@ function createConnectionState(send: (event: ServerEvent) => void): ConnState {
     } else if (msg.type === "answer" && msg.id === "personality") {
       setSetting("personality", msg.value);
       send(statusEvent());
+    } else if (msg.type === "answer" && msg.id === "provider_choice" && msg.value === CODEX_PROVIDER) {
+      // Device-code login (PLAN.md §5.22): the flow polls for the owner's browser authorization for
+      // minutes, so it runs detached - the connection stays usable, and the outcome arrives as a
+      // notice. The credential lands where the resolver reads it, so the next turn uses it.
+      send({ type: "reply", text: "Starting the OpenAI Codex login - watch for the URL and code." });
+      // The connection may be gone by the time the flow reports (it polls for minutes) - a notice
+      // that cannot be delivered is logged, never thrown into the detached flow.
+      const notify = (text: string) => {
+        console.log(`[mirod] codex login: ${text}`);
+        try {
+          send({ type: "notice", level: "info", text });
+        } catch {
+          // connection closed
+        }
+      };
+      void loginCodex(db, secretStore, notify).then((ok) => {
+        if (ok) {
+          recordEvent(db, "provider", `connected ${CODEX_PROVIDER}`);
+          send(statusEvent());
+        }
+      });
     } else if (msg.type === "answer" && msg.id === "provider_choice") {
       state.pendingProvider = msg.value;
       const entry = PROVIDER_CATALOG.find((p) => p.provider === msg.value);

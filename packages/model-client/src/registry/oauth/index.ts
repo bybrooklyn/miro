@@ -17,6 +17,9 @@ import type {
 export * from "./anthropic";
 export * from "./device-code";
 export type * from "./types";
+// Vendoring note: Miro's daemon runs the Codex device-code login itself (apps/mirod/src/agent/
+// codex-auth.ts) instead of omp's interactive login UI, which is not vendored.
+export { loginOpenAICodexDevice } from "./openai-codex";
 
 const builtInOAuthProviders: OAuthProviderInfo[] = PROVIDER_REGISTRY.filter(
 	provider => provider.login && provider.showInLoginList !== false,

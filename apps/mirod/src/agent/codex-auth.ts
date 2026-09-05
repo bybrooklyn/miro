@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { refreshOAuthToken, type ApiKeyResolver, type OAuthCredentials } from "@miro/model-client";
+import { loginOpenAICodexDevice, refreshOAuthToken, type ApiKeyResolver, type OAuthCredentials } from "@miro/model-client";
 import type { SecretStore } from "../secrets";
 
 // OpenAI Codex (ChatGPT OAuth) login. The vendored model client's openai-codex provider takes the
@@ -91,6 +91,27 @@ export function createCodexAuth(db: Database, secretStore: SecretStore, options:
       };
     },
   };
+}
+
+/** The daemon's own Codex login (PLAN.md §5.22): the vendored client's device-code flow - no
+ * callback server, no browser on the box. `notify` carries the one thing the owner must do (open a
+ * URL, enter a code) and the outcome; the credential lands in the same store the resolver reads,
+ * so the very next turn can use it. Resolves true on success, false on cancel/failure (reported). */
+export async function loginCodex(db: Database, secretStore: SecretStore, notify: (text: string) => void, signal?: AbortSignal): Promise<boolean> {
+  try {
+    const creds = await loginOpenAICodexDevice({
+      signal,
+      onAuth: (info) => notify(`To connect OpenAI Codex, open ${info.url} and ${info.instructions ?? "authorize Miro"}.`),
+      onProgress: (message) => console.log(`[mirod] codex login: ${message}`),
+      onPrompt: async () => "",
+    });
+    secretStore.setSecret(db, `${OAUTH_REF_PREFIX}${CODEX}`, JSON.stringify({ type: "oauth", ...creds }));
+    notify("OpenAI Codex connected - chat and code generation will use it from the next message on.");
+    return true;
+  } catch (err) {
+    notify(`OpenAI Codex login did not complete: ${String(err instanceof Error ? err.message : err)}`);
+    return false;
+  }
 }
 
 /** One-time import of a credential written by the pi-ai CLI's `login openai-codex` (the
