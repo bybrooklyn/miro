@@ -371,7 +371,7 @@ async function handleChat(text: string, send: (event: ServerEvent) => void, stat
     state.lastExtensionVersion !== extensionVersions ||
     state.lastContextBlock !== contextBlock
   ) {
-    const operationCtx: OperationToolContext = { db, send, waitForAnswer: (id) => waitForAnswer(state, id), reflect, getSecret: (ref) => secretStore.getSecret(db, ref), setSecret: (ref, value) => secretStore.setSecret(db, ref, value) };
+    const operationCtx: OperationToolContext = { db, send, waitForAnswer: (id) => waitForAnswer(state, id), reflect, getSecret: (ref) => secretStore.getSecret(db, ref), setSecret: (ref, value) => secretStore.setSecret(db, ref, value), setSetting };
     state.agent = createMiroAgent(models, defaultModel, getStoredKey, personality(), operationCtx, {
       hostMgr,
       setSecret: (ref, value) => secretStore.setSecret(db, ref, value),

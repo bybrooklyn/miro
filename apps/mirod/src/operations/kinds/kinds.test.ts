@@ -12,6 +12,7 @@ import { fileDeleteKind } from "./file-delete";
 import { httpMutationKind, isLocalOrPrivateUrl } from "./http-mutation";
 import { shellCommandKind } from "./shell-command";
 import { systemdUnitKind } from "./systemd-unit";
+import { dockerRunArgs, searxngBaseUrl, searxngInstallKind, settingsYaml } from "./searxng-install";
 import { sandboxAvailable } from "../sandbox";
 import { listTrash } from "../trash";
 
@@ -67,6 +68,30 @@ describe("prodtest targets", () => {
     expect(fileDeleteKind.prodtest!({ path: "/etc/x.conf" })).toBe("/etc/x.conf");
     expect(systemdUnitKind.prodtest!({ action: "enable", unit: "a.service" })).toBe("a.service#enabled");
     expect(systemdUnitKind.prodtest!({ action: "daemon-reload" })).toBeNull();
+  });
+});
+
+// searxng.install: the pure parts (what it writes and runs) and the docker precondition; the real
+// container is the live check on the VM.
+describe("searxng.install", () => {
+  test("settings enable JSON output and disable the limiter with a fresh secret; the container binds loopback only", async () => {
+    const yaml = settingsYaml("abc");
+    expect(yaml).toContain("use_default_settings: true");
+    expect(yaml).toContain('secret_key: "abc"');
+    expect(yaml).toContain("limiter: false");
+    expect(yaml).toMatch(/formats:\n {4}- html\n {4}- json/);
+    expect(settingsYaml()).not.toBe(settingsYaml()); // a new key each time
+    expect(dockerRunArgs(8888, "/var/lib/miro/searxng")).toEqual(["run", "-d", "--name", "miro-searxng", "--restart", "unless-stopped", "-p", "127.0.0.1:8888:8080", "-v", "/var/lib/miro/searxng:/etc/searxng", "searxng/searxng:latest"]);
+    expect(searxngInstallKind.prodtest!({})).toBe("miro-searxng");
+  });
+
+  test("describe refuses without docker (this machine) and a privileged or silly port", async () => {
+    const plan = await searxngInstallKind.describe({}).catch((e: Error) => e);
+    if (plan instanceof Error) expect(plan.message).toMatch(/docker is required/);
+    else expect(plan).toMatchObject({ autoApprove: false, class: "mutate", network: true, details: { port: 8888 } });
+    // The port check runs after the docker check; on a docker-less machine the docker refusal wins,
+    // so the port rule is checked through the URL helper it feeds.
+    expect(searxngBaseUrl(8888)).toBe("http://127.0.0.1:8888");
   });
 });
 

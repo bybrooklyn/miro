@@ -5,7 +5,7 @@ import { getMounts } from "../inventory/storage";
 import { listContainers, inspectContainer, containerLogs } from "../inventory/containers";
 import { listServices, serviceLogs } from "../inventory/systemd";
 import { getNetworkInterfaces, getTailscaleStatus } from "../inventory/network";
-import { searchWeb } from "../capabilities";
+import { fetchWeb, searchWeb } from "../capabilities";
 import { indexRootOnDisk, queryByClassOnDisk } from "../inventory/filesystem";
 import { listInstalledPackages } from "../inventory/packages";
 import { detectGpus } from "../inventory/gpu";
@@ -24,6 +24,10 @@ const containerLogsParams = Type.Object({
   tail: Type.Optional(Type.Number({ description: "Number of lines from the end (default 100)" })),
 });
 const webSearchParams = Type.Object({ query: Type.String({ description: "Search query" }) });
+const webFetchParams = Type.Object({
+  url: Type.String({ description: "A public http(s) URL - a docs page, release notes, an issue thread. Local/private addresses are refused here; use http_get for those." }),
+  maxChars: Type.Optional(Type.Integer({ description: "Cap on the returned text (default 20000)." })),
+});
 const serviceLogsParams = Type.Object({
   unit: Type.String({ description: "systemd unit name, e.g. jellyfin.service" }),
   lines: Type.Optional(Type.Number({ description: "Number of lines from the end (default 100)" })),
@@ -117,6 +121,14 @@ export const AGENT_TOOLS = [
       "Search the current web for information this model's training may not have (release notes, recent bugs, current docs). Routed through Miro's search providers (an Ollama cloud key, a self-hosted SearXNG, public SearXNG nodes) - the answer names which one served it. Reports unavailable if none is configured or reachable.",
     parameters: webSearchParams,
     execute: async (_id: string, params: Static<typeof webSearchParams>) => textResult(await searchWeb(params.query)),
+  },
+  {
+    name: "web_fetch",
+    label: "Web fetch",
+    description:
+      "Fetch a public web page as readable text (title, content, links) - to read a docs page or release notes a web_search turned up. Routed like web_search; the answer names which provider served it.",
+    parameters: webFetchParams,
+    execute: async (_id: string, params: Static<typeof webFetchParams>) => textResult(await fetchWeb(params.url, params.maxChars)),
   },
   {
     name: "filesystem_index",

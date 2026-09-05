@@ -4,6 +4,7 @@ import type { OperationToolContext } from "../operations/engine";
 import { runOperation } from "../operations/engine";
 import { systemdRestartKind } from "../operations/kinds/systemd-restart";
 import { systemdUnitKind, UNIT_ACTIONS, type SystemdUnitParams } from "../operations/kinds/systemd-unit";
+import { searxngInstallKind, searxngBaseUrl, DEFAULT_SEARXNG_PORT, SEARXNG_SETTING } from "../operations/kinds/searxng-install";
 import { shellCommandKind, takeOutput as takeShellOutput, type ShellCommandParams } from "../operations/kinds/shell-command";
 import { fileWriteKind, type FileWriteParams } from "../operations/kinds/file-write";
 import { fileDeleteKind, type FileDeleteParams } from "../operations/kinds/file-delete";
@@ -36,6 +37,11 @@ const shellCommandParams = Type.Object({
   verifyKeeps: Type.Optional(Type.Boolean({ description: "true when verify describes a LASTING state (a mount is read-only, a config line exists) that Miro should re-check periodically and report as drift if it stops holding. false/omitted for a step of a sequence (a wizard is still open, a temporary name exists)." })),
   rollback: Type.Optional(Type.String({ description: "A command that undoes the change. The declared roots are also snapshotted and restored automatically on failure." })),
   cwd: Type.Optional(Type.String()),
+});
+
+const searxngInstallParams = Type.Object({
+  port: Type.Optional(Type.Integer({ description: `Loopback port for the node (default ${DEFAULT_SEARXNG_PORT}).` })),
+  reason: Type.String({ description: "Why, in one line - shown to the user as the goal." }),
 });
 
 const fileWriteParams = Type.Object({
@@ -104,6 +110,21 @@ export function buildOperationTools(ctx: OperationToolContext) {
       execute: async (_id: string, params: SystemdUnitParams & { reason: string }) => {
         const { reason, ...p } = params;
         return textResult(await runOperation(ctx, systemdUnitKind, reason, p));
+      },
+    },
+    {
+      name: "searxng_install",
+      label: "Self-host SearXNG",
+      description:
+        "Set up a self-hosted SearXNG (docker, loopback only, JSON output on) so web_search no longer depends on public nodes or a cloud key - a confirmed operation that pulls the image, starts the container, verifies it answers JSON, and rolls back otherwise. On success web_search uses it first. Needs Docker on this machine.",
+      parameters: searxngInstallParams,
+      execute: async (_id: string, params: { port?: number; reason: string }) => {
+        const { reason, ...p } = params;
+        const result = await runOperation(ctx, searxngInstallKind, reason, p);
+        const baseUrl = searxngBaseUrl(p.port ?? DEFAULT_SEARXNG_PORT);
+        // The commit configures Miro itself: web.search's self-hosted implementation reads this.
+        if (result.outcome === "committed") ctx.setSetting?.(SEARXNG_SETTING, baseUrl);
+        return textResult({ ...result, ...(result.outcome === "committed" ? { baseUrl, setting: SEARXNG_SETTING } : {}) });
       },
     },
     {
@@ -177,6 +198,7 @@ export function allOperationKinds(getSecret: (ref: string) => string | null, set
   return {
     [systemdRestartKind.kind]: systemdRestartKind,
     [systemdUnitKind.kind]: systemdUnitKind,
+    [searxngInstallKind.kind]: searxngInstallKind,
     [shellCommandKind.kind]: shellCommandKind,
     [fileWriteKind.kind]: fileWriteKind,
     [fileDeleteKind.kind]: fileDeleteKind,

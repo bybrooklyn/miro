@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { Registry } from "./registry";
 import { createUsageStore } from "./usage";
 import { installPublicPool, refreshPublicPool, registerWebSearch, searchWeb as searchWebOn, PUBLIC_POOL_SETTING, type PublicPool, type WebSearchAnswer } from "./web-search";
+import { fetchWeb as fetchWebOn, registerWebFetch, type WebFetchAnswer } from "./web-fetch";
 
 // The daemon's one registry (PLAN.md §5.14). The read-only tool list (agent/tools.ts) is static -
 // no context flows into it - so the capability layer is configured once at boot and reached
@@ -19,6 +20,7 @@ let configured: { registry: Registry; deps: CapabilityDeps } | null = null;
 export function configureCapabilities(deps: CapabilityDeps): Registry {
   const registry = new Registry(createUsageStore(deps.db));
   registerWebSearch(registry, deps);
+  registerWebFetch(registry, deps);
   const cached = deps.getSetting(PUBLIC_POOL_SETTING);
   if (cached) {
     try {
@@ -40,6 +42,12 @@ export function capabilityRegistry(): Registry | null {
 export async function searchWeb(query: string, maxResults?: number): Promise<WebSearchAnswer> {
   if (!configured) return { available: false, results: [], source: null, attempts: [] };
   return searchWebOn(configured.registry, query, maxResults);
+}
+
+/** The web_fetch tool's entry point - same unconfigured behaviour as searchWeb. */
+export async function fetchWeb(url: string, maxChars?: number): Promise<WebFetchAnswer> {
+  if (!configured) return { available: false, title: "", content: "", truncated: false, links: [], source: null, attempts: [] };
+  return fetchWebOn(configured.registry, url, maxChars);
 }
 
 /** Re-probe searx.space for JSON-capable public nodes and swap them in. Idle-timer work. */

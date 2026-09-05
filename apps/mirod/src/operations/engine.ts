@@ -104,6 +104,9 @@ export interface OperationToolContext {
    * agent/turn-guard.ts): a plan that already rolled back this turn is refused before anything is
    * planned, and past the cap every plan is, with the trajectory to report. */
   retries?: RetryLedger;
+  /** The daemon's settings table, for an operation whose commit configures Miro itself (a
+   * self-hosted SearXNG's base URL). */
+  setSetting?: (key: string, value: string) => void;
 }
 
 export async function runOperation<P, S>(
