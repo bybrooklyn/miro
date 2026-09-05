@@ -261,9 +261,21 @@ export interface ExtensionEntry<P = any> {
 /** The single generated file's default export: `export default { auth?, entries } satisfies
  * ExtensionModule`. Behavior only - the app's metadata (baseUrl, secrets, displayName) is passed to
  * the daemon out-of-band by extension_write, so the model writes just what the app can do. */
+/** A capability this extension implements (PLAN.md §5.14 slice 3): the named `tool` entry takes
+ * the capability's request and returns its canonical response, and the daemon registers it as a
+ * provider its router can pick alongside Miro's own - a search engine or page reader the owner
+ * already runs becomes a web_search / web_fetch source with no core change.
+ * - `web.search`: the entry takes `{ query }` and returns `{ results: [{ title, url, description }] }`.
+ * - `web.fetch`: the entry takes `{ url }` and returns `{ title, content, links? }`. */
+export interface CapabilityImplementationDecl {
+  capability: "web.search" | "web.fetch";
+  entry: string;
+}
+
 export interface ExtensionModule {
   auth?: AuthSpec;
   entries: ExtensionEntry[];
+  implements?: CapabilityImplementationDecl[];
 }
 
 /** Fixture-based fake HTTP/exec/readFile clients: exact-match routing. Kept for unit tests and for

@@ -21,7 +21,7 @@ export const WEB_FETCH: Capability<WebFetchRequest, WebFetchResponse> = {
   isGood: (r) => r.content.trim().length > 0,
 };
 
-export const WEB_FETCH_POLICY: Policy = { groups: [["ollama"], ["direct"]] };
+export const WEB_FETCH_POLICY: Policy = { groups: [["ollama"], ["ext:*"], ["direct"]] };
 export const OLLAMA_FETCH_URL = "https://ollama.com/api/web_fetch";
 /** Bytes read from a page before extraction; pages past this are truncated, not refused. */
 export const MAX_PAGE_BYTES = 1_000_000;

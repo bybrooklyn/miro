@@ -79,7 +79,9 @@ export const FANOUT_WIDTH = 3;
 export class Registry {
   readonly #capabilities = new Map<string, Capability<any, any>>();
   readonly #policies = new Map<string, Policy>();
-  readonly #impls = new Map<string, Implementation<any, any>>();
+  /** Per capability, by implementation id: "ollama" implements both web.search and web.fetch, and
+   * a global map let the second registration silently replace the first (found by a test). */
+  readonly #impls = new Map<string, Map<string, Implementation<any, any>>>();
 
   constructor(readonly usage: UsageStore) {}
 
@@ -87,17 +89,19 @@ export class Registry {
     toolNameOf(capability.id);
     this.#capabilities.set(capability.id, capability);
     this.#policies.set(capability.id, policy);
+    if (!this.#impls.has(capability.id)) this.#impls.set(capability.id, new Map());
   }
 
   registerImplementation<Req, Res>(impl: Implementation<Req, Res>): void {
-    if (!this.#capabilities.has(impl.capability)) throw new Error(`implementation "${impl.id}" targets unknown capability "${impl.capability}"`);
-    this.#impls.set(impl.id, impl);
+    const family = this.#impls.get(impl.capability);
+    if (!family) throw new Error(`implementation "${impl.id}" targets unknown capability "${impl.capability}"`);
+    family.set(impl.id, impl);
   }
 
-  /** Drops every implementation whose id starts with `prefix` - how a refreshed public pool
-   * replaces the previous one. */
+  /** Drops every implementation whose id starts with `prefix` (in every capability) - how a
+   * refreshed public pool replaces the previous one. */
   unregisterImplementations(prefix: string): void {
-    for (const id of [...this.#impls.keys()]) if (id.startsWith(prefix)) this.#impls.delete(id);
+    for (const family of this.#impls.values()) for (const id of [...family.keys()]) if (id.startsWith(prefix)) family.delete(id);
   }
 
   capabilities(): Capability<any, any>[] {
@@ -105,7 +109,8 @@ export class Registry {
   }
 
   implementations(capabilityId?: string): Implementation<any, any>[] {
-    return [...this.#impls.values()].filter((i) => !capabilityId || i.capability === capabilityId);
+    if (capabilityId) return [...(this.#impls.get(capabilityId)?.values() ?? [])];
+    return [...this.#impls.values()].flatMap((family) => [...family.values()]);
   }
 
   policy(capabilityId: string): Policy | undefined {
@@ -121,8 +126,8 @@ export class Registry {
         const prefix = pattern.slice(0, -1);
         for (const impl of this.implementations(capabilityId)) if (impl.id.startsWith(prefix)) selected.push(impl);
       } else {
-        const impl = this.#impls.get(pattern);
-        if (impl && impl.capability === capabilityId) selected.push(impl);
+        const impl = this.#impls.get(capabilityId)?.get(pattern);
+        if (impl) selected.push(impl);
       }
     }
     const ready: Implementation<any, any>[] = [];

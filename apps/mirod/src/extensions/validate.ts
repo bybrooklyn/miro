@@ -85,7 +85,7 @@ export function requiresArguments(parameters: unknown): boolean {
 // external, concrete, machine-readable feedback and not on prose; a raw compiler message names the
 // symptom, so the concrete fix rides alongside it as its own field. Pure and unit-tested.
 
-export type ValidationRule = "typecheck" | "forbidden-import" | "probe-setup" | "schema" | "probe" | "dead-app" | "binding" | "budget";
+export type ValidationRule = "typecheck" | "forbidden-import" | "probe-setup" | "schema" | "probe" | "dead-app" | "binding" | "capability" | "budget";
 
 export interface ValidationFailure {
   /** The entry (tool/diagnostic/operation name) or `extension.ts:<line>` the failure is about. */
@@ -134,6 +134,11 @@ const HINTS: { match: RegExp; fix: string; example?: string }[] = [
     match: /needs (bind|read\.path|either read)/i,
     fix: "Each entry carries exactly one of: `read` (declarative GET, preferred), `bind` (a write), or `code` (a read that needs logic). A \"operation\" entry uses bind; a \"tool\"/\"diagnostic\" uses read or code.",
     example: '{ name: "list_widgets", kind: "tool", description: "List all widgets.", read: { path: "/api/widgets", pick: ["id", "label"] } }',
+  },
+  {
+    match: /implements web\.(search|fetch) but/i,
+    fix: "An entry that implements web.search takes { query } and returns { results: [{ title, url, description }] }; one that implements web.fetch takes { url } and returns { title, content, links? }. Return exactly that shape (a code entry can reshape the app's response), or drop the implements declaration.",
+    example: 'implements: [{ capability: "web.search", entry: "search" }] with { name: "search", kind: "tool", description: "...", parameters: Type.Object({ query: Type.String() }), code: async (ctx, args: { query: string }) => { const r = await ctx.http.get("/search", { query: { q: args.query, format: "json" } }); return { results: r.json<{ results: { title: string; url: string; content?: string }[] }>().results.map((x) => ({ title: x.title, url: x.url, description: x.content ?? "" })) }; } }',
   },
   {
     match: /still succeeds when the app is unreachable/i,
@@ -199,6 +204,32 @@ export interface ValidationResult {
   /** Populated once the live-probe step successfully lists tools - reused by extensions/learn.ts
    * to build the manifest without a second, redundant listTools round-trip. */
   tools?: HostToolSpec[];
+  /** The module's validated capability implementations, for the manifest. */
+  implements?: { capability: string; entry: string }[];
+}
+
+/** The capabilities an extension may implement, with the request the validator probes each with
+ * and the check on what comes back (PLAN.md §5.14 slice 3). */
+export const IMPLEMENTABLE_CAPABILITIES: Record<string, { probe: (baseUrl: string) => Record<string, unknown> }> = {
+  "web.search": { probe: () => ({ query: "debian" }) },
+  "web.fetch": { probe: (baseUrl) => ({ url: baseUrl }) },
+};
+
+/** Why `value` is not the capability's canonical response, or null. The router's normalizers
+ * (capabilities/extensions.ts) accept exactly what passes here. */
+export function checkCapabilityResult(capability: string, value: unknown): string | null {
+  if (value === null || typeof value !== "object") return `returned ${JSON.stringify(value)} - must return an object`;
+  const v = value as Record<string, unknown>;
+  if (capability === "web.search") {
+    if (!Array.isArray(v.results)) return "must return { results: [...] }";
+    const bad = (v.results as unknown[]).findIndex((r) => !r || typeof r !== "object" || typeof (r as { title?: unknown }).title !== "string" || typeof (r as { url?: unknown }).url !== "string");
+    return bad >= 0 ? `results[${bad}] must be { title: string, url: string, description?: string }` : null;
+  }
+  if (capability === "web.fetch") {
+    if (typeof v.content !== "string") return "must return { title?: string, content: string, links?: [...] }";
+    return null;
+  }
+  return `"${capability}" is not a capability an extension can implement (web.search, web.fetch)`;
 }
 
 /** A URL nothing answers on (the discard port) - the "app is down" the dead-app check simulates. */
@@ -223,8 +254,11 @@ export async function validateExtension(
   if (failures.length > 0) return { ok: false, failures: annotateFailures(failures) };
 
   let tools: HostToolSpec[] = [];
+  let implementsDecls: { capability: string; entry: string }[] = [];
   try {
-    tools = await hostMgr.listTools(dir, app, baseUrl, secrets);
+    const mod = await hostMgr.listModule(dir, app, baseUrl, secrets);
+    tools = mod.tools;
+    implementsDecls = mod.implements;
   } catch (err) {
     failures.push(failure("probe-setup", `live probe setup failed: ${String(err instanceof Error ? err.message : err)}`));
     return { ok: false, failures: annotateFailures(failures) };
@@ -267,6 +301,31 @@ export async function validateExtension(
     if (survived) failures.push(failure("dead-app", `diagnostic still succeeds when the app is unreachable (${DEAD_BASE_URL}) - it does not actually observe the app`, { entry: diag.name }));
   }
 
+  // A declared capability implementation (PLAN.md §5.14 slice 3): the entry must exist as a tool,
+  // the capability must be one an extension can implement, and a live probe with the capability's
+  // request must come back in its canonical shape - a provider the router will pick has to answer
+  // like Miro's own.
+  for (const decl of implementsDecls) {
+    const where = { entry: decl.entry, field: "implements" };
+    const known = IMPLEMENTABLE_CAPABILITIES[decl.capability];
+    if (!known) {
+      failures.push(failure("capability", checkCapabilityResult(decl.capability, {}) ?? `unknown capability ${decl.capability}`, where));
+      continue;
+    }
+    const spec = tools.find((t) => t.name === decl.entry);
+    if (!spec || spec.kind !== "tool") {
+      failures.push(failure("capability", `implements ${decl.capability} names "${decl.entry}", which is not a tool entry of this extension`, where));
+      continue;
+    }
+    try {
+      const value = await hostMgr.call(dir, app, baseUrl, secrets, decl.entry, known.probe(baseUrl));
+      const why = checkCapabilityResult(decl.capability, value);
+      if (why) failures.push(failure("capability", `${decl.entry} implements ${decl.capability} but ${why}`, where));
+    } catch (err) {
+      failures.push(failure("capability", `${decl.entry} implements ${decl.capability} but the probe failed: ${String(err instanceof Error ? err.message : err)}`, where));
+    }
+  }
+
   // Operation bindings never execute at validation time, but their bound params are dry-run through
   // the real kind's describe(): the classifier refuses a forbidden command, the URL guard refuses a
   // public host, a literal credential header is refused - at learn time, not in front of the user.
@@ -281,7 +340,7 @@ export async function validateExtension(
     }
   }
 
-  return { ok: failures.length === 0, failures: annotateFailures(failures), tools };
+  return { ok: failures.length === 0, failures: annotateFailures(failures), tools, implements: implementsDecls };
 }
 
 /** A tool/operation `parameters` value must be a JSON Schema object schema. Returns why it isn't,

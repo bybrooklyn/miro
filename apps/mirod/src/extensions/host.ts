@@ -31,6 +31,8 @@ export interface ExtensionHostManager {
   bind(dir: string, app: string, baseUrl: string, secrets: Record<string, string>, tool: string, args: unknown): Promise<unknown>;
   /** Mechanically derives the manifest's tool specs - spawns a fresh init-mode session. */
   listTools(dir: string, app: string, baseUrl: string, secrets: Record<string, string>): Promise<HostToolSpec[]>;
+  /** The same one-shot introspection, with the module's declared capability implementations. */
+  listModule(dir: string, app: string, baseUrl: string, secrets: Record<string, string>): Promise<{ tools: HostToolSpec[]; implements: { capability: string; entry: string }[] }>;
   /** Like `call`, but in a throwaway session initialised with THIS baseUrl - sessions are keyed by
    * dir and keep their first init, so a validation check against a different URL (the dead-app
    * admission check) must not share the live session. */
@@ -204,6 +206,9 @@ export function createExtensionHostManager(): ExtensionHostManager {
       sessions.delete(dir);
     },
     async listTools(dir, app, baseUrl, secrets) {
+      return (await this.listModule(dir, app, baseUrl, secrets)).tools;
+    },
+    async listModule(dir, app, baseUrl, secrets) {
       const key = `${dir}:list`;
       const session = spawn(key, dir); // always fresh - this is a one-shot introspection, not a reused session
       writeLine(session, { type: "init", app, baseUrl, secrets });
@@ -212,7 +217,7 @@ export function createExtensionHostManager(): ExtensionHostManager {
       writeLine(session, { type: "shutdown" });
       sessions.delete(key);
       if (res.type !== "tools") throw new Error(`unexpected response type: ${res.type}`);
-      return res.tools;
+      return { tools: res.tools, implements: res.implements ?? [] };
     },
     async probe(dir, app, baseUrl, secrets, tool, args) {
       const key = `${dir}:probe:${nextId()}`;

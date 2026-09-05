@@ -106,6 +106,13 @@ SCHEMAS: for a declarative read, OMIT parameters - it is DERIVED from the {place
 Schema built with Type from "@miro/sdk" - parameters: Type.Object({ id: Type.String() }) - or
 Type.Object({}) for none. Never a plain object like { id: "string" }; validation rejects it.
 
+IF THE APP IS A SEARCH ENGINE OR A PAGE READER (a SearXNG or Whoogle instance, a reader/scraper
+service), also declare it as a provider Miro can route web_search / web_fetch through:
+implements: [{ capability: "web.search", entry: "search" }] where the "search" tool entry takes
+{ query } and returns { results: [{ title, url, description }] } (a code entry reshapes the app's
+own response); for web.fetch the entry takes { url } and returns { title, content, links? }. The
+validator probes it and refuses any other shape.
+
 RECURSE WHEN YOU MUST. If operating this app requires another app you do not know (an indexer
 manager, a download client), call app_learn for it, let it finish, then continue here.
 
@@ -317,7 +324,7 @@ function buildExtensionWriteTool(
 
       const existing = store.getExtension(db, app);
       const version = (existing?.version ?? 0) + 1;
-      const manifest = buildManifest(app, args.displayName, args.baseUrl, args.secretNames, result.tools ?? [], version);
+      const manifest = buildManifest(app, args.displayName, args.baseUrl, args.secretNames, result.tools ?? [], version, result.implements ?? []);
       writeFileSync(join(dir, "manifest"), JSON.stringify(manifest, null, 2));
 
       // Pinned as validated (extensions/pin.ts): the rename below preserves the bytes.

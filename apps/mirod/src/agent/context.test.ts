@@ -36,6 +36,15 @@ const manifest = {
   generatedAt: 0,
 };
 
+test("context block names the research providers once the capability layer is configured", async () => {
+  const { configureCapabilities } = await import("../capabilities");
+  configureCapabilities({ db: db(), getStoredKey: () => null, getSetting: (k) => (k === "searxng.base_url" ? "http://127.0.0.1:8888" : null), setSetting: () => {} });
+  const block = buildContextBlock(db(), snapshot);
+  expect(block).toContain("Research providers (web_search / web_fetch route through these, best first):");
+  expect(block).toContain("web_search: ollama (not configured), searxng.selfhosted (ready), searxng.public (2 nodes, ready)");
+  expect(block).toContain("web_fetch: ollama (not configured), direct (ready)");
+});
+
 test("context block: snapshot, no systems yet, refusals", () => {
   const block = buildContextBlock(db(), snapshot);
   expect(block).toContain("jellyfin (jellyfin/jellyfin:latest, running)");

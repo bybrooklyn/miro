@@ -9,6 +9,8 @@ import type { ExtensionHostManager } from "../extensions/host";
 import type { RepairTrigger } from "../extensions/repair";
 import { extensionDir } from "../extensions/paths";
 import { assertPinned } from "../extensions/pin";
+import { capabilityRegistry } from "../capabilities";
+import { registerExtensionImplementations } from "../capabilities/extensions";
 import { runOperation, type OperationToolContext, type OperationKind } from "../operations/engine";
 import { allOperationKinds } from "./operation-tools";
 import { resolveBindingUrls } from "../extensions/validate";
@@ -74,6 +76,10 @@ export function buildToolsForExtension(
   }
   const prefix = `ext_${sanitizeNamePart(manifest.app)}_`;
   const kinds: Record<string, OperationKind<any, any>> = allOperationKinds(getSecret, operationCtx?.setSecret);
+  // Capability implementations this extension declares join the router here - the one place the
+  // extension's tools are (re)built, at agent build and on a hot-load after promotion.
+  const registry = capabilityRegistry();
+  if (registry && manifest.implements?.length) registerExtensionImplementations(registry, row, db, hostMgr, getSecret);
 
   const readTools = [...manifest.tools, ...manifest.diagnostics].map((spec) => ({
     name: `${prefix}${sanitizeNamePart(spec.name)}`,

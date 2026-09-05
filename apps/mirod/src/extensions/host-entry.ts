@@ -156,6 +156,8 @@ function importGenerated(relativePath: string): Promise<any> {
 interface LoadedExtension {
   tools: Map<string, { spec: HostToolSpec; execute: (args: any) => Promise<unknown> }>;
   operations: Map<string, { spec: HostToolSpec; bind: (args: any) => unknown }>;
+  /** The module's declared capability implementations, reported with list_tools for validation. */
+  implements: { capability: string; entry: string }[];
 }
 
 // The declarative-read interpreter + entry validation live in ./declarative (pure, unit-tested).
@@ -175,7 +177,7 @@ async function loadExtension(ctx: ExtensionContext): Promise<LoadedExtension> {
       tools.set(entry.name, { spec, execute: (args) => entry.code!(ctx, args) });
     }
   }
-  return { tools, operations };
+  return { tools, operations, implements: Array.isArray(mod.implements) ? mod.implements : [] };
 }
 
 /** The read-only primitives generated code gets (PLAN.md §5.2 C, adaptive control method): the
@@ -275,7 +277,7 @@ async function handle(req: HostRequest): Promise<void> {
   }
   if (req.type === "list_tools") {
     const tools = loaded ? [...[...loaded.tools.values()].map((e) => e.spec), ...[...loaded.operations.values()].map((e) => e.spec)] : [];
-    send({ type: "tools", id: req.id, tools });
+    send({ type: "tools", id: req.id, tools, implements: loaded?.implements ?? [] });
     return;
   }
   if (req.type === "shutdown") {

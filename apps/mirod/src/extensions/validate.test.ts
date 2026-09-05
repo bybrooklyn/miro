@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { typecheckExtension, scanForbiddenImports, resolveBindingUrls, dryRunBinding, annotateFailures, failure, formatFailure } from "./validate";
+import { typecheckExtension, scanForbiddenImports, resolveBindingUrls, dryRunBinding, annotateFailures, failure, formatFailure, checkCapabilityResult } from "./validate";
 import { ensureNodeModulesSymlink, MIROD_NODE_MODULES } from "./paths";
 
 test("binding URLs may be app-relative; they resolve against baseUrl before the kind's URL guard", async () => {
@@ -166,6 +166,20 @@ test("annotateFailures orders failures most-likely-root-cause first, stable with
   expect(ordered.map((f) => f.entry)).toEqual(["a", "e", "c", "b", "d"]);
   expect(ordered[0]!.fix).toMatch(/auth SCHEME/);
   expect(ordered[2]!.fix).toMatch(/base URL/);
+});
+
+// A declared capability implementation must answer in the canonical shape (PLAN.md §5.14 slice 3).
+test("checkCapabilityResult accepts the canonical shapes and names what is wrong otherwise", () => {
+  expect(checkCapabilityResult("web.search", { results: [{ title: "a", url: "https://a", description: "d" }, { title: "b", url: "https://b" }] })).toBeNull();
+  expect(checkCapabilityResult("web.search", { results: [] })).toBeNull();
+  expect(checkCapabilityResult("web.search", { hits: [] })).toBe("must return { results: [...] }");
+  expect(checkCapabilityResult("web.search", { results: [{ title: "a" }] })).toBe("results[0] must be { title: string, url: string, description?: string }");
+  expect(checkCapabilityResult("web.search", "text")).toMatch(/must return an object/);
+  expect(checkCapabilityResult("web.fetch", { content: "x" })).toBeNull();
+  expect(checkCapabilityResult("web.fetch", { title: "t" })).toMatch(/content: string/);
+  expect(checkCapabilityResult("web.mail", {})).toMatch(/not a capability an extension can implement/);
+  const [hinted] = annotateFailures([failure("capability", "search implements web.search but must return { results: [...] }", { entry: "search", field: "implements" })]);
+  expect(hinted!.fix).toMatch(/takes \{ query \}/);
 });
 
 test("formatFailure renders one human line per failure", () => {

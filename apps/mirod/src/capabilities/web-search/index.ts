@@ -25,7 +25,9 @@ export const WEB_SEARCH: Capability<WebSearchRequest, WebSearchResponse> = {
   isGood: (r) => r.results.length > 0,
 };
 
-export const WEB_SEARCH_POLICY: Policy = { groups: [["ollama"], ["searxng.selfhosted"], ["searxng.public:*"]] };
+/** Extension-declared providers (capabilities/extensions.ts, `ext:<app>:web.search`) sit after the
+ * self-hosted node and before the public pool: an app the owner runs beats a stranger's node. */
+export const WEB_SEARCH_POLICY: Policy = { groups: [["ollama"], ["searxng.selfhosted"], ["ext:*"], ["searxng.public:*"]] };
 
 export const OLLAMA_SEARCH_URL = "https://ollama.com/api/web_search";
 export const MAX_RESULTS = 10;

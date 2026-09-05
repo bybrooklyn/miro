@@ -9,6 +9,7 @@ import * as extensions from "../extensions/store";
 import { listSecretRefs } from "../secrets";
 import type { ExtensionManifest } from "../extensions/manifest";
 import { query as queryMemory } from "../memory/store";
+import { capabilityContextLines, capabilityStatus } from "../capabilities";
 
 // Self-assembling context (PLAN.md §5.9 client decisions: "assembled block + on-demand tool").
 // The agent is handed a map of itself every turn - what is on this server right now, which
@@ -114,6 +115,10 @@ export function buildContextBlock(db: Database, snapshot: ServerSnapshot): strin
       `Credentials on file (references only - values are never shown; use secretHeader { name, ref } or {{secret:<ref>}} in a body/URL; never ask the user for one of these):\n- ${refs.join("\n- ")}`,
     );
   }
+  // Which search/fetch providers actually exist right now (PLAN.md §5.14): the agent should know
+  // whether web_search has a keyed or self-hosted source behind it or only the public pool.
+  const providers = capabilityContextLines();
+  if (providers.length > 0) parts.push(`Research providers (web_search / web_fetch route through these, best first):\n- ${providers.join("\n- ")}`);
   parts.push(REFUSALS);
   return parts.join("\n\n");
 }
@@ -151,6 +156,7 @@ export function buildCapabilitiesTool(db: Database) {
       });
       return textResult({
         systems,
+        capabilityProviders: capabilityStatus(),
         genericOperations: ["shell_command", "file_edit", "file_write", "file_delete", "http_mutation", "service_restart", "service_control", "searxng_install"],
         readTools: ["shell_inspect", "read_file", "http_get", "net_capture", "container_*", "systemd_*", "filesystem_*", "network_info", "hardware_gpu", "packages_list", "web_search", "web_fetch"],
         commandClasses: {

@@ -52,5 +52,20 @@ export default {
         return { healthy: r.ok, status: r.status };
       },
     },
+    // A capability implementation (PLAN.md §5.14 slice 3): this app can search, so the entry takes
+    // web.search's request and answers in its canonical shape; `implements` below makes it a
+    // provider Miro's web_search routes through.
+    {
+      name: "search_widgets",
+      kind: "tool",
+      description: "Search widgets by text.",
+      parameters: Type.Object({ query: Type.String() }),
+      code: async (ctx: ExtensionContext, args: { query: string }) => {
+        const r = await ctx.http.get("/api/search", { query: { q: args.query } });
+        const hits = r.json<{ items: { label: string; href: string; summary?: string }[] }>().items;
+        return { results: hits.map((h) => ({ title: h.label, url: h.href, description: h.summary ?? "" })) };
+      },
+    },
   ],
+  implements: [{ capability: "web.search", entry: "search_widgets" }],
 } satisfies ExtensionModule;

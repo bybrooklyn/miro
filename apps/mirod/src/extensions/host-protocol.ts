@@ -43,5 +43,5 @@ export type HostResponse =
   | { type: "ready" }
   | { type: "result"; id: string; ok: true; value: unknown }
   | { type: "result"; id: string; ok: false; error: string }
-  | { type: "tools"; id: string; tools: HostToolSpec[] }
+  | { type: "tools"; id: string; tools: HostToolSpec[]; implements?: { capability: string; entry: string }[] }
   | { type: "log"; level: "info" | "warn" | "error"; message: string };

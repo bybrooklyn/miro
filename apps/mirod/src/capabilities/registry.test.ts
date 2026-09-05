@@ -133,6 +133,19 @@ test("candidates are the best-scored implementations of a group, at most the fan
   expect(picked).not.toContain("n:4");
 });
 
+test("the same implementation id under two capabilities is two implementations (ollama does both search and fetch)", async () => {
+  const r = registry();
+  const OTHER: Capability<Req, Res> = { id: "test.other", isGood: (x) => x.items.length > 0 };
+  r.registerCapability(LIST, { groups: [["shared"]] });
+  r.registerCapability(OTHER, { groups: [["shared"]] });
+  r.registerImplementation(impl("shared", after(1, { items: ["list"] })));
+  r.registerImplementation({ ...impl("shared", after(1, { items: ["other"] })), capability: OTHER.id });
+  expect((await r.route<Req, Res>(LIST.id, { q: "a" })).result).toEqual({ items: ["list"] });
+  expect((await r.route<Req, Res>(OTHER.id, { q: "a" })).result).toEqual({ items: ["other"] });
+  expect(r.implementations()).toHaveLength(2);
+  expect(r.implementations(LIST.id)).toHaveLength(1);
+});
+
 test("nothing registered or nothing available routes to null with the attempts it made; unregisterImplementations drops a family", async () => {
   const r = registry();
   r.registerCapability(LIST, { groups: [["p:*"]] });

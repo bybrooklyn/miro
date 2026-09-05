@@ -18,6 +18,9 @@ export interface ExtensionManifest {
   /** Declarative write bindings (PLAN.md §5.5 decision 2) - run by the daemon's engine. Absent
    * on extensions promoted before operations existed; readers treat it as []. */
   operations?: HostToolSpec[];
+  /** Capabilities this extension implements (PLAN.md §5.14 slice 3) - validated at learn time,
+   * registered with the capability router when the extension is enabled. */
+  implements?: { capability: string; entry: string }[];
   version: number;
   generatedAt: number;
 }
@@ -29,6 +32,7 @@ export function buildManifest(
   secretNames: { name: string; description: string }[],
   toolSpecs: HostToolSpec[],
   version: number,
+  implementsDecls: { capability: string; entry: string }[] = [],
 ): ExtensionManifest {
   return {
     app,
@@ -38,6 +42,7 @@ export function buildManifest(
     tools: toolSpecs.filter((t) => t.kind === "tool"),
     diagnostics: toolSpecs.filter((t) => t.kind === "diagnostic"),
     operations: toolSpecs.filter((t) => t.kind === "operation"),
+    ...(implementsDecls.length > 0 ? { implements: implementsDecls } : {}),
     version,
     generatedAt: Date.now(),
   };
