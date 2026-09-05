@@ -2784,12 +2784,24 @@ and asserts the first fires, the repeat is suppressed, the new title fires. (The
 message that looked like a sink success was actually the agent's own `http_mutation` attempt, a red
 herring the table dump disambiguated.)
 
+**Self-host ntfy as an operation (added to this slice).** So "set up notifications on my phone" is
+something Miro does, not a chore left to the owner: `ntfy_install` / the `ntfy.install` kind, modeled
+on `searxng-install.ts` - a confirmed docker op that pulls ntfy, starts it with a restart policy,
+publishes a test message to prove it, rolls back otherwise, and on commit configures the ntfy
+channel automatically. Unlike the SearXNG node (daemon-only, loopback) ntfy must be reachable by the
+phone, so it binds all interfaces and the plan shows a subscribe URL on a real address (a tailnet IP
+if present, else the LAN IP); the daemon's own sink still POSTs to loopback. The topic is a fresh
+unguessable string, its secrecy the access control (`ponytail:` no ntfy auth in v1). Live-verified:
+a driven chat had Miro run `ntfy_install` itself; the container came up bound on all interfaces with
+`restart=unless-stopped`, both `notify.ntfy.*` settings were written on commit, and a following
+`needs_attention` notification flowed through the new sink to the topic and the terminal - checked
+against ntfy's own API. The agent surfaced the topic-as-bearer-secret tradeoff in its own plan.
+
 **Not done, by scope.** `notify_configure`'s Gotify path via `ask_user` secretRef is not
 driver-exercisable (the headless driver empties secret prompts), so the token was seeded directly
 for the test; the send path it produces is the same one Gotify fired on. Per-user quiet-competence
-tier thresholds (§3) are now buildable but unbuilt. Miro self-hosting ntfy as an operation (an
-`ntfy-install` docker op like `searxng-install`) is a follow-up - the slice self-hosted it by hand
-for the test. The rest of Stage E (Immich, remaining stack, GitHub backup, power/UPS) is unstarted.
+tier thresholds (§3) are now buildable but unbuilt. The rest of Stage E (Immich, remaining stack,
+GitHub backup, power/UPS) is unstarted.
 
-**State:** 405 pass / 0 fail / 14 skip; every package typechecks (`just check`, 13/13). PRs #3 → …
+**State:** 408 pass / 0 fail / 14 skip; every package typechecks (`just check`, 13/13). PRs #3 → …
 → #10 stacked.
