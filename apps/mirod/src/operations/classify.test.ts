@@ -173,9 +173,6 @@ describe("mutate", () => {
       "docker stop jellyfin",
       "docker pull jellyfin/jellyfin",
       "docker network rm mynet",
-      "systemctl restart jellyfin",
-      "systemctl enable jellyfin",
-      "systemctl stop jellyfin",
       "sed -i 's/a/b/' /opt/app/config.ini",
       "curl -X POST http://127.0.0.1:8096/Startup/Complete",
       "curl -o /tmp/x.tar.gz https://example.com/x.tar.gz",
@@ -280,11 +277,6 @@ describe("lifeline", () => {
       "ifdown eth0",
       "nmcli connection down eth0",
       "wg-quick down wg0",
-      "systemctl stop ssh",
-      "systemctl stop docker",
-      "systemctl disable sshd",
-      "systemctl mask mirod",
-      "systemctl stop systemd-networkd",
       "pkill sshd",
       "killall dockerd",
       "pkill mirod",
@@ -313,6 +305,21 @@ describe("lifeline", () => {
       "docker exec jellyfin sh -c 'echo x > /etc/ssh/sshd_config'",
       "tailscale down",
     ]);
+  });
+});
+
+// systemctl changes are refused as shell commands, not classified mutate/lifeline as they once
+// were: a sandboxed systemctl can never reach systemd (its own PID namespace - found live, PLAN.md
+// §5.23), so the only honest answer is the pointer to the service_restart / service_control kinds.
+// Reads stay reads.
+describe("systemctl", () => {
+  test("every change is refused with the operation kinds as the alternative; reads are still reads", () => {
+    for (const cmd of ["systemctl restart jellyfin", "systemctl enable jellyfin", "systemctl stop jellyfin", "systemctl daemon-reload", "systemctl stop ssh", "systemctl disable sshd", "systemctl mask mirod", "systemctl reboot", "sudo systemctl start docker"]) {
+      const c = classifyCommand(cmd);
+      expect(c.class).toBe("forbidden");
+      expect(c.alternative).toMatch(/service_control/);
+    }
+    expectAll("read", ["systemctl status docker", "systemctl is-enabled ssh", "systemctl list-unit-files", "systemctl show jellyfin -p ActiveState"]);
   });
 });
 
@@ -587,7 +594,10 @@ describe("adversarial review findings (each one was a real bypass)", () => {
     expectAll("read", ["nc -z 127.0.0.1 8096", "curl -s http://127.0.0.1:8096/System/Info/Public", "curl -s http://jellyfin:8096/health", "wget -qO- http://192.168.1.5/"]);
   });
   test("ip batch mode, kill signals, socket units", () => {
-    expectAll("lifeline", ["ip -b -", "ip -b /tmp/cmds", "ip -force -b x", "kill -SIGKILL 1", "kill -9 1", "kill -KILL 1", "kill -1", "systemctl stop ssh.socket", "systemctl stop docker.socket", "systemctl disable ssh.service"]);
+    expectAll("lifeline", ["ip -b -", "ip -b /tmp/cmds", "ip -force -b x", "kill -SIGKILL 1", "kill -9 1", "kill -KILL 1", "kill -1"]);
+    // Socket units used to be the bypass (classified mutate); every systemctl change is now refused
+    // outright (PLAN.md §5.23) - stricter than lifeline, same guarantee: never a silent mutate.
+    expectAll("forbidden", ["systemctl stop ssh.socket", "systemctl stop docker.socket", "systemctl disable ssh.service"]);
     expectAll("mutate", ["kill -SIGKILL 1234", "kill -10 1234", "kill -9 4321"]);
     expectAll("read", ["kill -0 1234", "kill -l", "kill -s 0 1234"]);
   });
@@ -602,7 +612,7 @@ describe("adversarial review findings (each one was a real bypass)", () => {
       "apt -o Dpkg::Options::=--force-confnew purge nginx",
       "apt-get -t bookworm-backports remove nginx",
     ]);
-    expectAll("lifeline", ["systemctl -M x stop ssh", "systemctl --host root@x stop docker"]);
+    expectAll("forbidden", ["systemctl -M x stop ssh", "systemctl --host root@x stop docker"]); // was lifeline; every systemctl change is refused now
   });
   test("docker host binds: the root filesystem is forbidden, any host path is destructive", () => {
     expectAll("forbidden", ["docker run -v /:/host alpine ls", "docker run --mount type=bind,source=/,target=/host alpine", "docker run -v /:/h alpine rm -rf /h"]);

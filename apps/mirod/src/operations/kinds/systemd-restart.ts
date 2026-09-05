@@ -2,9 +2,10 @@ import { run } from "../../inventory/exec";
 import { getServiceState } from "../../inventory/systemd";
 import type { OperationKind } from "../engine";
 
-// Restarting one of these is a `lifeline` operation: the engine forces confirmation and, after
-// apply, requires the user to confirm they are still reachable or rolls back (§39, PLAN.md §5.7).
-const LIFELINE_ADJACENT = new Set([
+// Restarting (or stopping/disabling - systemd-unit.ts) one of these is a `lifeline` operation: the
+// engine forces confirmation and, after apply, requires the user to confirm they are still
+// reachable or rolls back (§39, PLAN.md §5.7).
+export const LIFELINE_ADJACENT = new Set([
   "ssh.service",
   "sshd.service",
   "systemd-networkd.service",

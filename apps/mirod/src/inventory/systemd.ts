@@ -42,6 +42,19 @@ export async function getServiceState(unit: string): Promise<{ active: boolean; 
   return { active: activeState === "active", activeState };
 }
 
+/** Whether a unit starts at boot - for systemd-unit.ts's enable/disable capture and verify.
+ * `systemctl is-enabled` exits non-zero for "disabled" (and for an unknown unit), which is what
+ * the catch is for; only the two enabled states count. */
+export async function getUnitEnabled(unit: string): Promise<boolean> {
+  if (!(await commandExists("systemctl"))) return false;
+  try {
+    const output = (await run("systemctl", ["is-enabled", unit])).trim();
+    return output === "enabled" || output === "enabled-runtime";
+  } catch {
+    return false;
+  }
+}
+
 export interface LogRecord {
   timestamp: string;
   line: string;

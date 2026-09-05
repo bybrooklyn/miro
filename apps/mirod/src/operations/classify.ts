@@ -746,11 +746,15 @@ const RULES: Record<string, Rule> = {
     const { verb, rest } = firstVerb(a.slice(1), ["-M", "--machine", "-H", "--host", "-p", "--property", "-t", "--type", "-n", "--lines", "-o", "--output", "-s", "--signal", "--state", "--job-mode", "--preset-mode"]);
     const unit = rest.find((x) => !x.startsWith("-")) ?? "";
     if (!verb) return "read";
-    if (["reboot", "poweroff", "halt", "kexec", "emergency", "rescue", "suspend", "hibernate"].includes(verb)) return "forbidden";
     if (["status", "show", "cat", "is-active", "is-enabled", "is-failed", "is-system-running", "list-units", "list-unit-files", "list-timers", "list-sockets", "list-dependencies", "list-jobs", "show-environment", "get-default", "help"].includes(verb)) return "read";
-    if (["stop", "disable", "mask", "kill"].includes(verb)) return LIFELINE_UNITS.test(unit) ? "lifeline" : "mutate";
-    if (["start", "restart", "reload", "enable", "reload-or-restart", "try-restart", "daemon-reload", "set-property", "reset-failed", "edit", "link", "unmask", "isolate", "set-default"].includes(verb)) return LIFELINE_UNITS.test(unit) && ["isolate", "set-default", "edit"].includes(verb) ? "lifeline" : "mutate";
-    return "mutate";
+    // Every change: refused as a shell command, with the operation kinds as the alternative. A
+    // sandboxed systemctl can never reach systemd - bubblewrap gives the command its own PID
+    // namespace (on purpose: no host process's environ is readable there) and systemctl refuses to
+    // talk to PID 1 from another one ("Failed to connect to system scope bus", found live). The
+    // restart/unit kinds run in the daemon's namespace with capture/verify/rollback instead; reboot
+    // and friends were never allowed this way (PLAN.md §5.23). `unit` is unused now on purpose.
+    void unit;
+    return "forbidden";
   },
   kill: (a) => {
     const args = a.slice(1);
@@ -1288,8 +1292,10 @@ function alternativeFor(name: string): string {
   switch (baseName(name)) {
     case "rm": case "rmdir": case "unlink": case "shred": case "find": case "rsync": case "tar": case "truncate": case "cp": case "mv":
       return "Use the file_delete operation - it moves the path to Miro's trash (recoverable for 30 days) and can be rolled back.";
-    case "reboot": case "shutdown": case "halt": case "poweroff": case "init": case "telinit": case "systemctl":
+    case "reboot": case "shutdown": case "halt": case "poweroff": case "init": case "telinit":
       return "Use the reboot operation, which records a recovery point and verifies the server comes back.";
+    case "systemctl":
+      return "systemctl cannot change anything from inside the command sandbox (it cannot reach systemd from the sandbox's PID namespace). Restart a unit with the service_restart operation; start, stop, enable, disable or daemon-reload with service_control. A reboot is its own operation.";
     case "mkfs": case "wipefs": case "fdisk": case "sfdisk": case "cfdisk": case "parted": case "gdisk": case "dd":
       return "Miro never formats or overwrites block devices. Ask the user to do this themselves if it is genuinely needed.";
     case "bash": case "sh": case "zsh": case "dash": case "fish": case "sudo": case "su": case "doas":

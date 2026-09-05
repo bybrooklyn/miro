@@ -11,6 +11,7 @@ import { fileWriteKind } from "./file-write";
 import { fileDeleteKind } from "./file-delete";
 import { httpMutationKind, isLocalOrPrivateUrl } from "./http-mutation";
 import { shellCommandKind } from "./shell-command";
+import { systemdUnitKind } from "./systemd-unit";
 import { sandboxAvailable } from "../sandbox";
 import { listTrash } from "../trash";
 
@@ -48,6 +49,33 @@ beforeEach(() => {
 });
 afterEach(() => {
   rmSync(work, { recursive: true, force: true });
+});
+
+// systemd.unit's plan is pure given the unit's state (getServiceState degrades to "unknown" on a
+// machine without systemctl, like this one); the real systemctl calls are the live check on the VM.
+describe("systemd.unit", () => {
+  test("stop/disable of a lifeline-adjacent unit is a lifeline operation; the rest is mutate and auto-approvable", async () => {
+    const stopSsh = await systemdUnitKind.describe({ action: "stop", unit: "ssh.service" });
+    expect(stopSsh.class).toBe("lifeline");
+    expect(stopSsh.autoApprove).toBe(false);
+    expect(stopSsh.warning).toMatch(/drop your connection/);
+    const startSsh = await systemdUnitKind.describe({ action: "start", unit: "ssh.service" });
+    expect(startSsh.class).toBe("mutate");
+    const enableApp = await systemdUnitKind.describe({ action: "enable", unit: "jellyfin.service" });
+    expect(enableApp.class).toBe("mutate");
+    expect(enableApp.autoApprove).toBe(true);
+    expect(enableApp.writes).toContain("/etc/systemd/system");
+    expect(enableApp.expects).toBe("jellyfin.service is enabled at boot");
+  });
+
+  test("daemon-reload needs no unit and never rolls back; every other action refuses a missing or malformed unit name", async () => {
+    const reload = await systemdUnitKind.describe({ action: "daemon-reload" });
+    expect(reload.summary).toMatch(/daemon-reload/);
+    expect(reload.rollbackWhen).toMatch(/^never/);
+    await expect(systemdUnitKind.describe({ action: "start" })).rejects.toThrow(/not a systemd unit name/);
+    await expect(systemdUnitKind.describe({ action: "start", unit: "jellyfin; rm -rf /" })).rejects.toThrow(/not a systemd unit name/);
+    await expect(systemdUnitKind.describe({ action: "enable", unit: "wg-quick@wg0.service" })).resolves.toMatchObject({ class: "mutate" });
+  });
 });
 
 describe("file.write", () => {
