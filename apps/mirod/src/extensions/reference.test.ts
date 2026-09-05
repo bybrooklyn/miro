@@ -10,9 +10,11 @@ import type { ExtensionModule } from "@miro/sdk";
 // the dev VM; these are the checks that run in CI.
 const dir = join(import.meta.dir, "reference");
 
+// A real tsc program over @miro/sdk and the DOM lib: 8-10s cold on this Mac, past bun's 5s default
+// (audit #6 - the suite was red on a cold cache). The same cost every extension_write pays.
 test("the reference extension typechecks cleanly through the real typechecker", () => {
   expect(typecheckExtension(dir)).toEqual([]);
-});
+}, 60_000);
 
 test("the reference extension imports only @miro/sdk (passes the allowlist scan)", () => {
   expect(scanForbiddenImports(dir)).toEqual([]);

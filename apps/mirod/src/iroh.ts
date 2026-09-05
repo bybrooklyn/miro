@@ -1,9 +1,9 @@
 import iroh, { type Connection, type Endpoint } from "@number0/iroh";
-import { IROH_ALPN, alpnBytes } from "@miro/protocol";
+import { IROH_ALPN, utf8Bytes } from "@miro/protocol";
 
 const { SecretKey, EndpointTicket } = iroh;
 const { Endpoint: EndpointClass } = iroh;
-const ALPN = alpnBytes(IROH_ALPN);
+const ALPN = utf8Bytes(IROH_ALPN);
 
 export function generateIrohSecretKey(): number[] {
   return SecretKey.generate().toBytes();

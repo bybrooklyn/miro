@@ -5,6 +5,7 @@ import { classifyCommand, isSensitivePath, isLocalOrPrivateUrl, redactSecretsInT
 import { anchoredView } from "../operations/hashline";
 import { runSandboxed, sandboxAvailable } from "../operations/sandbox";
 import { commandExists, run } from "../inventory/exec";
+import { readTextCapped } from "../fetch-body";
 
 // Read-only primitives that need a little context (PLAN.md §5.4 B): a sandboxed shell for
 // inspection, a file reader with the secret-path guard, an HTTP GET with credentials by reference,
@@ -124,7 +125,7 @@ export function buildReadTools(ctx: ReadToolContext) {
         }
         try {
           const res = await fetch(params.url, { method: "GET", headers, redirect: "manual", signal: AbortSignal.timeout(30_000) });
-          const body = (await res.text()).slice(0, 65_536);
+          const body = await readTextCapped(res, 65_536);
           const resHeaders: Record<string, string> = {};
           res.headers.forEach((v, k) => { if (!/set-cookie|authorization/i.test(k)) resHeaders[k] = v; });
           return textResult({ status: res.status, headers: resHeaders, body: redactSecretsInText(body) });

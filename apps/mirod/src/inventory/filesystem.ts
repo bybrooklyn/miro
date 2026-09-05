@@ -2,6 +2,7 @@ import { readdirSync, statSync } from "node:fs";
 import { extname, join } from "node:path";
 import { Database } from "bun:sqlite";
 import { DB_PATH } from "@miro/protocol";
+import { isSensitivePath } from "../operations/classify";
 
 // Scoped filesystem index (plan §22) - enough to answer "what's on this disk", not the full
 // event-driven/dirty-shutdown-recovery index the plan eventually wants. ponytail: bounded
@@ -75,6 +76,9 @@ export function scanRoot(rootPath: string, options: ScanOptions = {}): FileEntry
       if (child.isDirectory() && SKIP_DIR_NAMES.has(child.name)) continue;
 
       const path = join(dir, child.name);
+      // Names only, but a listing of ~/.ssh or a .env's location is still a map to the secrets
+      // that every other read path refuses to draw (audit C14).
+      if (isSensitivePath(path)) continue;
       let stat: import("node:fs").Stats;
       try {
         stat = statSync(path);

@@ -1,17 +1,12 @@
 import { run } from "../../inventory/exec";
 import { getServiceState } from "../../inventory/systemd";
+import { LIFELINE_UNITS, SELF_UNIT } from "../classify";
 import type { OperationKind } from "../engine";
 
-// Restarting (or stopping/disabling - systemd-unit.ts) one of these is a `lifeline` operation: the
-// engine forces confirmation and, after apply, requires the user to confirm they are still
-// reachable or rolls back (§39, PLAN.md §5.7).
-export const LIFELINE_ADJACENT = new Set([
-  "ssh.service",
-  "sshd.service",
-  "systemd-networkd.service",
-  "NetworkManager.service",
-  "tailscaled.service",
-]);
+// Restarting (or stopping/disabling - systemd-unit.ts) a lifeline unit is a `lifeline` operation:
+// the engine forces confirmation and, after apply, requires the user to confirm they are still
+// reachable or rolls back (§39, PLAN.md §5.7). The unit list is the classifier's LIFELINE_UNITS -
+// one source of truth (audit A7: a five-entry copy here let `stop docker` run unattended).
 
 interface Params {
   unit: string;
@@ -22,12 +17,19 @@ interface Captured {
   activeState: string;
 }
 
+/** Miro's own unit is never an operation target: the daemon dies mid-operation, so it can neither
+ * verify nor roll back, and the crash reconcile at boot would judge a half-done change. */
+export function refuseSelf(unit: string): void {
+  if (SELF_UNIT.test(unit)) throw new Error(`refused: ${unit} is Miro itself - it cannot verify or roll back its own stop/restart; tell the owner to run systemctl themselves`);
+}
+
 export const systemdRestartKind: OperationKind<Params, Captured> = {
   kind: "systemd.restart",
 
   async describe({ unit }) {
+    refuseSelf(unit);
     const state = await getServiceState(unit);
-    const lifeline = LIFELINE_ADJACENT.has(unit);
+    const lifeline = LIFELINE_UNITS.test(unit);
     return {
       summary: `Restart ${unit} (currently ${state.activeState})`,
       autoApprove: !lifeline,

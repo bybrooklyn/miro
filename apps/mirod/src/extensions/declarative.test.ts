@@ -68,6 +68,8 @@ test("validateEntry names the exact shape problem, and accepts well-formed entri
   expect(() => validateEntry({ name: "x", kind: "tool", description: "d" })).toThrow(/either read .* or code/);
   expect(() => validateEntry({ name: "x", kind: "tool", description: "d", read: {} })).toThrow(/needs read\.path/);
   expect(() => validateEntry({ kind: "tool" })).toThrow(/must be \{ name/);
+  // Two forms: the read used to win silently and the code the model wrote was dropped (audit #18).
+  expect(() => validateEntry({ name: "x", kind: "tool", description: "d", read: { path: "/x" }, code: async () => 1 })).toThrow(/exactly one of read\/bind\/code - it has read and code/);
   validateEntry({ name: "ok", kind: "tool", description: "d", read: { path: "/x" } });
   validateEntry({ name: "ok", kind: "operation", description: "d", bind: () => ({ kind: "http_mutation", goal: "g" }) });
 });

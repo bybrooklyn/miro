@@ -65,6 +65,22 @@ test("re-verifies only the latest committed operation per target, records drift 
   expect(listAll(db, 50).find((m) => m.key === "incident.test.target.set_up_b")!.occurrenceCount).toBe(3);
 });
 
+test("a target key is shared across kinds: a later write of a trashed path supersedes the delete instead of drifting forever", async () => {
+  const db = new Database(":memory:");
+  ensureOperationsTable(db);
+  ensureMemoryTable(db);
+  const present = new Set(["/etc/app.conf"]);
+  // file.delete-shaped: verify = the path is GONE; file.write-shaped: verify = the path is THERE.
+  const del: OperationKind<{ target: string }, null> = { ...targetKind(new Set()), kind: "test.delete", verify: async (p) => !present.has(p.target) };
+  const write: OperationKind<{ target: string }, null> = { ...targetKind(new Set()), kind: "test.write", verify: async (p) => present.has(p.target) };
+  present.delete("/etc/app.conf");
+  expect((await runOperation(ctx(db), del, "trash it", { target: "/etc/app.conf" })).outcome).toBe("committed");
+  present.add("/etc/app.conf");
+  expect((await runOperation(ctx(db), write, "write it again", { target: "/etc/app.conf" })).outcome).toBe("committed");
+  // Keyed by kind as well this was two checks, and the delete's failed every sweep (audit A14).
+  expect(await reverifyCommitted(db, { [del.kind]: del, [write.kind]: write })).toEqual({ checked: 1, drifted: [] });
+});
+
 test("an operation with nothing re-runnable (prodtest null), an unknown kind, and a throwing verify", async () => {
   const db = new Database(":memory:");
   ensureOperationsTable(db);

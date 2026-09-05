@@ -57,7 +57,12 @@ export function listTrash(trashDir = TRASH_DIR): TrashEntry[] {
   const byId = new Map<string, TrashEntry>();
   for (const line of readFileSync(index, "utf-8").split("\n")) {
     if (!line.trim()) continue;
-    const rec = JSON.parse(line) as TrashEntry & { action: string };
+    let rec: TrashEntry & { action: string };
+    try {
+      rec = JSON.parse(line);
+    } catch {
+      continue; // a torn last line (a crash mid-append) must not make the trash unlistable for good (audit B4)
+    }
     if (rec.action === "trashed") byId.set(rec.id, { id: rec.id, originalPath: rec.originalPath, trashedPath: rec.trashedPath, trashedAt: rec.trashedAt });
     else byId.delete(rec.id);
   }

@@ -1,9 +1,9 @@
-import { existsSync, readFileSync, statSync, mkdirSync, chmodSync, realpathSync } from "node:fs";
-import { dirname, basename, join } from "node:path";
+import { existsSync, readFileSync, statSync, mkdirSync, chmodSync } from "node:fs";
+import { dirname } from "node:path";
 import type { OperationKind } from "../engine";
-import { isLifelinePath, isSensitivePath } from "../classify";
+import { isLifelinePath, isSensitivePath, realTarget, redactSecretsInText } from "../classify";
 import { trashDestination, moveToTrash } from "../trash";
-import { unifiedDiff } from "../diff";
+import { unifiedDiff, redactDiffForPlan } from "../diff";
 
 // Writing a whole file as a tracked operation. The full new content is in the plan the user sees
 // (alongside the current content, so the change is reviewable), the previous content is captured,
@@ -26,28 +26,8 @@ export interface FileWriteCaptured {
   mode: number | null;
 }
 
-/** The path with symlinks resolved - the file itself if it exists, else its nearest existing
- * ancestor plus the remainder. */
-export function realTarget(path: string): string {
-  if (existsSync(path)) {
-    try {
-      return realpathSync(path);
-    } catch {
-      return path;
-    }
-  }
-  let dir = dirname(path);
-  const rest: string[] = [basename(path)];
-  while (!existsSync(dir) && dir !== dirname(dir)) {
-    rest.unshift(basename(dir));
-    dir = dirname(dir);
-  }
-  try {
-    return join(realpathSync(dir), ...rest);
-  } catch {
-    return path;
-  }
-}
+// realTarget lives in ../classify now, next to isSensitivePath, which resolves symlinks itself.
+export { realTarget };
 
 const PREVIEW_LINES = 60;
 function preview(text: string): string {
@@ -86,10 +66,13 @@ export const fileWriteKind: OperationKind<FileWriteParams, FileWriteCaptured> = 
         existed,
         bytes: Buffer.byteLength(p.content),
         mode: p.mode !== undefined ? `0${p.mode.toString(8)}` : null,
-        current: previous !== null ? preview(previous) : null,
+        // The plan is persisted and sent to every client: the file's CURRENT content is redacted
+        // (an app config's database password is not Miro's to broadcast - audit A10); the proposed
+        // side is the model's own input and stays legible for approval.
+        current: previous !== null ? redactSecretsInText(preview(previous)) : null,
         proposed: preview(p.content),
         // What the client renders as the approval surface: a real diff, not two dumps.
-        diff: unifiedDiff(previous ?? "", p.content, p.path),
+        diff: redactDiffForPlan(unifiedDiff(previous ?? "", p.content, p.path)),
       },
     };
   },

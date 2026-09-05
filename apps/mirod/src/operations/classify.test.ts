@@ -2,7 +2,7 @@ import { test, expect, describe, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, symlinkSync, writeFileSync, chmodSync, rmSync, mkdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { classifyCommand, tokenize, splitSegments, type CommandClass } from "./classify";
+import { classifyCommand, tokenize, splitSegments, redactSecretsInText, type CommandClass } from "./classify";
 
 // The bypass catalogue from PLAN.md §5.7, as executable spec. Every entry there has a case here;
 // the classifier is not done until every case passes. Real filesystem for binary resolution
@@ -654,7 +654,62 @@ describe("forbidden results carry an alternative", () => {
     const got = classifyCommand("rm -rf /srv/x", { resolveBinary: resolve, trustedBinDirs: [binDir], home: "/home/miro" });
     expect(got.alternative).toContain("file_delete");
   });
-  test("reboot points at the reboot operation", () => {
-    expect(classifyCommand("reboot", { resolveBinary: resolve, trustedBinDirs: [binDir], home: "/home/miro" }).alternative).toContain("reboot operation");
+  test("reboot says there is no reboot operation - the owner does it (audit D1: it used to name a kind that does not exist)", () => {
+    expect(classifyCommand("reboot", { resolveBinary: resolve, trustedBinDirs: [binDir], home: "/home/miro" }).alternative).toMatch(/no reboot operation/);
+  });
+});
+
+// Audit 2026-09-05 (A6, A19, B8, B9, A3): code execution and writes that classified as `read`.
+describe("audit 2026-09-05: wrappers, program text, redirects, docker flags", () => {
+  test("env: an assignment that changes how the inner command executes is forbidden; an ordinary one is not", () => {
+    expectAll("forbidden", ["env LD_PRELOAD=/opt/a/e.so cat /etc/hosts", "env GIT_SSH_COMMAND='sh -c id' git ls-remote", "env PATH=/tmp/evil ls", "env BASH_ENV=/tmp/x bash -c ls", "env PYTHONPATH=/tmp python3 -c 1"]);
+    expectAll("read", ["env FOO=bar ls", "env -i TERM=dumb ls"]);
+  });
+  test("ssh: a ProxyCommand/LocalCommand option runs locally and is forbidden", () => {
+    expectAll("forbidden", ["ssh -o ProxyCommand='sh -c id' h cat /etc/hosts", "ssh -oProxyCommand=id h ls", "ssh -o LocalCommand=id -o PermitLocalCommand=yes h ls"]);
+    expectAll("read", ["ssh -p 22 h cat /etc/hosts"]);
+  });
+  test("awk command pipes and sed write commands are writes, not reads", () => {
+    // (/etc/os-release, not /etc/hosts: a mutate touching a lifeline path escalates to lifeline, correctly.)
+    expectAll("mutate", ['awk \'BEGIN{print "x" | "sh -c id"}\'', "awk '{print $1 |& \"cat\"}' /etc/os-release", "sed 'w /tmp/out' /etc/os-release", "sed -n '/x/w /tmp/out' /etc/os-release", "sed 's/a/b/w /tmp/out' /etc/os-release"]);
+    expectAll("lifeline", ["sed 'w /tmp/out' /etc/hosts"]);
+    expectAll("read", ["awk '{print $1}' /etc/hosts", "sed -n 's/a/b/p' /etc/hosts", "sed 's/www/w/' /etc/hosts"]);
+  });
+  test("&> is a redirect of both streams: the command is classified and the target is a write", () => {
+    expectAll("mutate", ["ls &> /tmp/x", "ls &>> /tmp/x"]);
+    expectAll("forbidden", ["ls &> /etc/shadow", "rm -rf /x &> /dev/null"]);
+    expectAll("read", ["ls &> /dev/null"]);
+  });
+  test("docker run flags in every spelling: --privileged=true and --pid host are destructive", () => {
+    expectAll("destructive", ["docker run --privileged=true img", "docker run --pid host img", "docker run --pid=host img", "docker run --volumes-from other img", "docker run --userns host img"]);
+    expectAll("mutate", ["docker run --pid=container:x img", "docker run -d img"]);
+  });
+  test("a content reader aimed by an unresolved expansion is refused, not demoted; other expansions still demote", () => {
+    expectAll("forbidden", ["cat $HOME/.ssh/id_rsa", "grep token $(ls /etc/x)", "head -c 100 ${F}"]);
+    expectAll("mutate", ["echo $HOME", "ls $DIR"]);
+  });
+  test("a hostname that merely starts with fd/fc is public: a read-class curl to it is a mutate", () => {
+    expectAll("mutate", ["curl http://fdsomething.com/x", "curl https://fc2.com/x"]);
+    expectAll("read", ["curl http://[fd12::1]/x", "curl http://192.168.1.2:8096/x"]);
+  });
+});
+
+describe("redactSecretsInText", () => {
+  test("key/value shapes, quoted values whole, flag-form credentials, userinfo in URLs, tokens by structure", () => {
+    const r = redactSecretsInText;
+    expect(r('{"password": "two words here", "user": "bob"}')).toBe('{"password": "[redacted]", "user": "bob"}');
+    expect(r("api_key=abc123 other=x")).toBe("api_key=[redacted] other=x");
+    expect(r("mysql --password=hunter2 -u root db")).toBe("mysql --password=[redacted] -u root db");
+    expect(r("app --token hunter2 --token-file /x")).toBe("app --token [redacted] --token-file /x");
+    expect(r("curl -u admin:hunter2 http://x/")).toBe("curl -u admin:[redacted] http://x/");
+    expect(r("https://user:hunter2@host/x")).toBe("https://user:[redacted]@host/x");
+    expect(r("Authorization: Bearer abcdefgh12345")).toBe("Authorization: [redacted]");
+    expect(r("key sk-abcdefghijklmnop")).toBe("key [redacted]");
+    expect(r("root:$6$saltsalt$hash:19000:0:99999:7:::")).toBe("root:[redacted]:19000:0:99999:7:::");
+    // A reference is not a value: placeholders survive untouched.
+    expect(r('{"token": "{{secret:extension.app.token}}"}')).toBe('{"token": "{{secret:extension.app.token}}"}');
+    // No false positives on ordinary text.
+    expect(r("docker run -p 8080:80 img")).toBe("docker run -p 8080:80 img");
+    expect(r("the passwordless sudo setup")).toBe("the passwordless sudo setup");
   });
 });

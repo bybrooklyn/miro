@@ -1,5 +1,9 @@
 import { ImplementationError, type Capability, type Implementation, type Policy, type Registry, type RouteResult } from "../registry";
 import { mergeDedup, parseOllama, parseSearxng, type WebSearchResult } from "./normalize";
+import { readTextCapped } from "../../fetch-body";
+
+/** A search answer is a few KB; a node that sends megabytes is not answering the question. */
+const MAX_BODY_BYTES = 1_000_000;
 
 // web.search (PLAN.md §5.14 slice 1): the first capability. Client implementations only - the
 // vendored model client can request a provider-hosted search for Anthropic alone (a tool named
@@ -48,7 +52,7 @@ export function ollamaImplementation(getKey: () => string | null, url = OLLAMA_S
         body: JSON.stringify({ query: req.query, max_results: Math.min(req.maxResults ?? MAX_RESULTS, MAX_RESULTS) }),
         signal,
       });
-      const text = await res.text();
+      const text = await readTextCapped(res, MAX_BODY_BYTES);
       if (!res.ok) throw new ImplementationError(`ollama web_search: HTTP ${res.status}${text ? ` ${text.slice(0, 120)}` : ""}`, res.status, resetFromHeaders(res.headers));
       return { results: parseOllama(text, "ollama") };
     },
@@ -66,7 +70,7 @@ export function searxngImplementation(id: string, baseUrl: string, meta: Impleme
     available,
     async run(req, signal) {
       const res = await fetch(`${base}/search?q=${encodeURIComponent(req.query)}&format=json`, { headers: { Accept: "application/json" }, signal });
-      const text = await res.text();
+      const text = await readTextCapped(res, MAX_BODY_BYTES);
       if (!res.ok) throw new ImplementationError(`${id}: HTTP ${res.status}`, res.status, resetFromHeaders(res.headers));
       let results: WebSearchResult[];
       try {
@@ -127,7 +131,7 @@ export async function probeNode(baseUrl: string, timeoutMs = 8_000, fetchImpl: F
   try {
     const res = await fetchImpl(`${baseUrl}/search?q=debian+stable+release&format=json`, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(timeoutMs) });
     if (!res.ok) return null;
-    const body = JSON.parse(await res.text()) as { results?: unknown };
+    const body = JSON.parse(await readTextCapped(res, MAX_BODY_BYTES)) as { results?: unknown };
     return Array.isArray(body.results) ? Date.now() - started : null;
   } catch {
     return null;
@@ -141,7 +145,7 @@ export async function refreshPublicPool(fetchImpl: Fetcher = fetch, concurrency 
   let candidates: string[];
   try {
     const res = await fetchImpl(SEARX_SPACE_URL, { signal: AbortSignal.timeout(20_000), headers: { Accept: "application/json" } });
-    candidates = res.ok ? candidatesFrom(await res.text()) : [];
+    candidates = res.ok ? candidatesFrom(await readTextCapped(res, 16 * MAX_BODY_BYTES)) : []; // instances.json is a few MB
   } catch {
     candidates = [];
   }

@@ -51,10 +51,16 @@ export async function listInstalledPackages(): Promise<PackageListResult> {
   const manager = await detectPackageManager();
   if (!manager) return { available: false, manager: null, packages: [] };
 
-  if (manager === "apt") {
-    const output = await run("apt", ["list", "--installed"]);
-    return { available: true, manager, packages: parseAptList(output) };
+  // Degrades like every sibling reader: a broken dpkg database or a held lock is "unavailable",
+  // not a throw into the tool (audit B14).
+  try {
+    if (manager === "apt") {
+      const output = await run("apt", ["list", "--installed"]);
+      return { available: true, manager, packages: parseAptList(output) };
+    }
+    const output = await run("dnf", ["list", "installed"]);
+    return { available: true, manager, packages: parseDnfList(output) };
+  } catch {
+    return { available: false, manager, packages: [] };
   }
-  const output = await run("dnf", ["list", "installed"]);
-  return { available: true, manager, packages: parseDnfList(output) };
 }

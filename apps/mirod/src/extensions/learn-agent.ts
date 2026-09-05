@@ -307,11 +307,15 @@ function buildExtensionWriteTool(
       }
 
       const result = await validateExtension(dir, app, args.baseUrl, secrets, hostMgr);
+      // Validation ran generated code in a session keyed on the staging dir; that session holds the
+      // draft loaded and would otherwise live until the reaper (audit C9). Dropped either way.
+      hostMgr.invalidate(dir);
       if (!result.ok) {
         lastAttempt = { draft: args.extensionTs, failures: result.failures };
         // Logged, not just returned to the model: a failed learn otherwise leaves no trace of WHY
         // (found post-mortem on a run that burned all attempts).
         console.log(`[mirod] extension_write(${app}) attempt ${attempts} failed:\n  ${result.failures.map(formatFailure).join("\n  ")}`);
+        discardStaging(app); // the draft lives in lastAttempt; on disk it was an orphan (audit C8)
         return textResult({ ok: false, failures: result.failures, attemptsRemaining: MAX_WRITE_ATTEMPTS - attempts });
       }
       console.log(`[mirod] extension_write(${app}) attempt ${attempts} validated`);

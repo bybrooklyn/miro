@@ -48,24 +48,33 @@ function substituteSecrets(value: string, secrets: Record<string, string>): stri
 
 /** Real client - used by extensions/host-entry.ts's `init`/`learn_init` modes. Per-call headers
  * merge over the client's fixed auth headers; `{{secret:<ref>}}` placeholders in the path, query
- * and per-call headers are substituted from `secrets`. */
+ * and per-call headers are substituted from `secrets`.
+ *
+ * Same-origin only: the fixed headers carry the app's real credential, and `new URL(path, base)`
+ * follows an absolute or protocol-relative `path` anywhere - so a generated read (steered by the
+ * docs the learn agent read) could send the token to a host of its choosing. The daemon's write
+ * path already refuses a public URL for exactly this reason; reads now do too (audit 2026-09-05 #1). */
 export function createHttpClient(baseUrl: string, headers: Record<string, string>, secrets: Record<string, string> = {}): HttpClient {
+  const origin = new URL(baseUrl).origin;
   const substituted = (values?: Record<string, string>) =>
     values && Object.fromEntries(Object.entries(values).map(([key, value]) => [key, substituteSecrets(value, secrets)]));
   return {
     async get(path, opts) {
-      const res = await fetch(new URL(withQuery(substituteSecrets(path, secrets), substituted(opts?.query)), baseUrl), {
-        headers: { ...headers, ...substituted(opts?.headers) },
-      });
-      return response(res.status, await res.text());
+      const url = new URL(withQuery(substituteSecrets(path, secrets), substituted(opts?.query)), baseUrl);
+      if (url.origin !== origin) throw new Error(`refused: ${url.origin} is not this extension's app (${origin}) - ctx.http reaches the app only; anything else is not this extension's business`);
+      const res = await fetch(url, { headers: { ...headers, ...substituted(opts?.headers) }, redirect: "manual" });
+      return response(res.status, (await res.text()).slice(0, MAX_BODY_CHARS));
     },
   };
 }
 
+/** A read's body as handed to generated code - an app answer, not a download. */
+const MAX_BODY_CHARS = 4 * 1024 * 1024;
+
 /** Fixture-based fake client - deterministic, no real network. A fixture value is the response body
  * (an object is JSON-encoded, a string used verbatim); wrap it as `{ status, body }` to fix a
- * non-200. Exact-path match only (query string ignored). Used by unit tests and, from slice 2, to
- * replay a captured trace against a declarative read as its own canary (PLAN.md §5.13). */
+ * non-200. Exact-path match only (query string ignored). Used by the declarative interpreter's unit
+ * tests; a captured-trace replay (PLAN.md §5.13 slice 2) would sit on the same shape. */
 export function createFakeHttpClient(routes: Record<string, unknown> = {}): HttpClient {
   return {
     async get(path) {
@@ -106,15 +115,6 @@ export interface BrowserSession {
   read(selector?: string): Promise<ReadResult>;
   wait(selector: string, timeoutMs?: number): Promise<void>;
   close(): void;
-}
-
-export interface ExtensionTool<P = any> {
-  name: string;
-  /** Human label for the UI; defaults to `name` when omitted (generated code rarely sets it). */
-  label?: string;
-  description: string;
-  parameters: unknown; // a TSchema (Type.Object(...)) - kept as unknown here to avoid a hard TypeBox type dependency in generated code's own signatures
-  execute: (args: P) => Promise<unknown>;
 }
 
 export interface ExecResult {
@@ -223,7 +223,6 @@ export interface ExtensionOperation<P = any> {
  * defaults to [200]. A captured HTTP trace maps onto one of these one-to-one, which is what lets a
  * discovered API become an extension with no generated code. */
 export interface ReadBinding {
-  method?: "GET";
   path: string;
   query?: Record<string, string>;
   headers?: Record<string, string>;
@@ -258,9 +257,6 @@ export interface ExtensionEntry<P = any> {
   code?: (ctx: ExtensionContext, args: P) => Promise<unknown>;
 }
 
-/** The single generated file's default export: `export default { auth?, entries } satisfies
- * ExtensionModule`. Behavior only - the app's metadata (baseUrl, secrets, displayName) is passed to
- * the daemon out-of-band by extension_write, so the model writes just what the app can do. */
 /** A capability this extension implements (PLAN.md §5.14 slice 3): the named `tool` entry takes
  * the capability's request and returns its canonical response, and the daemon registers it as a
  * provider its router can pick alongside Miro's own - a search engine or page reader the owner
@@ -272,25 +268,11 @@ export interface CapabilityImplementationDecl {
   entry: string;
 }
 
+/** The single generated file's default export: `export default { auth?, entries } satisfies
+ * ExtensionModule`. Behavior only - the app's metadata (baseUrl, secrets, displayName) is passed to
+ * the daemon out-of-band by extension_write, so the model writes just what the app can do. */
 export interface ExtensionModule {
   auth?: AuthSpec;
   entries: ExtensionEntry[];
   implements?: CapabilityImplementationDecl[];
-}
-
-/** Fixture-based fake HTTP/exec/readFile clients: exact-match routing. Kept for unit tests and for
- * replaying captured traces against a declarative read (PLAN.md §5.13 slice 2). */
-export function createFakeExec(routes: Record<string, Partial<ExecResult>> = {}): ExtensionContext["exec"] {
-  return async (command) => {
-    if (!(command in routes)) throw new Error(`No fixture for exec ${JSON.stringify(command)}`);
-    const r = routes[command];
-    return { exitCode: r.exitCode ?? 0, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
-  };
-}
-
-export function createFakeReadFile(files: Record<string, string> = {}): ExtensionContext["readFile"] {
-  return async (path) => {
-    if (!(path in files)) throw new Error(`No fixture for file ${path}`);
-    return files[path];
-  };
 }

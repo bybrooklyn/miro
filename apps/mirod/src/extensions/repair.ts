@@ -128,14 +128,18 @@ export async function reprobeExtensions(
   requiresArguments: (parameters: unknown) => boolean,
 ): Promise<void> {
   for (const row of store.listEnabled(db)) {
-    const manifest: ExtensionManifest = JSON.parse(row.manifest);
-    const dir = extensionDir(manifest.app);
+    // One extension's corrupt manifest or vanished directory must not end the sweep for every
+    // other extension (audit B4): reported, skipped, next.
+    let manifest: ExtensionManifest;
+    let dir: string;
     try {
+      manifest = JSON.parse(row.manifest);
+      dir = extensionDir(manifest.app);
       assertPinned(db, manifest.app, dir);
     } catch (err) {
-      if (!(err instanceof PinMismatchError)) throw err;
-      send({ type: "notice", level: "warn", text: err.message });
-      continue; // disabled by the check; nothing to probe
+      const text = err instanceof PinMismatchError ? err.message : `extension "${row.app}" skipped by the health sweep: ${String(err instanceof Error ? err.message : err)}`;
+      send({ type: "notice", level: "warn", text });
+      continue; // disabled by the check, or unreadable; nothing to probe
     }
     const secrets: Record<string, string> = {};
     for (const decl of manifest.secrets) {
@@ -146,7 +150,7 @@ export async function reprobeExtensions(
       if (requiresArguments(diag.parameters)) continue;
       try {
         await hostMgr.call(dir, manifest.app, manifest.baseUrl, secrets, diag.name, {});
-        store.recordSuccess(db, manifest.app);
+        store.recordProbeSuccess(db, manifest.app);
       } catch (err) {
         await maybeTriggerRepair(
           { app: manifest.app, tool: diag.name, error: String(err instanceof Error ? err.message : err) },

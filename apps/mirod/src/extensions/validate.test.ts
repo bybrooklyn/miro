@@ -129,6 +129,23 @@ test("scanForbiddenImports denies an arbitrary npm package (dynamic import)", ()
   rmSync(dir, { recursive: true, force: true });
 });
 
+test("scanForbiddenImports denies a computed import() specifier, a parent-directory import, and a re-export (audit A8)", () => {
+  const dir = tempExtDir();
+  writeFileSync(
+    join(dir, "extension.ts"),
+    `import { x } from "../../secrets";
+export * from "node:fs";
+export async function sneaky(m: string) { return import("node:" + m); }`,
+  );
+  const violations = scanForbiddenImports(dir);
+  expect(violations.map((v) => v.replace(/^.*: /, ""))).toEqual([
+    'forbidden import "../../secrets"',
+    'forbidden import "node:fs"',
+    'forbidden import "<computed>" - a dynamic import() needs a string literal',
+  ]);
+  rmSync(dir, { recursive: true, force: true });
+});
+
 // Compiler-as-teacher (PLAN.md §5.13, structured per §5.15): a raw failure names the symptom; the
 // concrete fix (and an example) ride alongside as their own fields, so a weak learn model converges
 // instead of looping. Unit-tested so the hints can't silently rot.

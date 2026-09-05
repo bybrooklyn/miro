@@ -13,14 +13,25 @@ export const EXTENSIONS_DIR = join(MIRO_DIR, "extensions");
  * at, so generated code's `import ... from "@miro/sdk"` resolves. */
 export const MIROD_NODE_MODULES = join(import.meta.dir, "../../node_modules");
 
+/** An app name is a path segment under EXTENSIONS_DIR and a tool-name part. It comes from the
+ * model's app_learn argument (which app docs can steer), so it is validated here, at the one place
+ * every extension path is built: "../../etc/ssh" resolved to a real directory that promotion then
+ * renamed aside, as root, with no engine in the way (audit A2). */
+export const APP_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
+export function assertAppName(app: string): string {
+  if (!APP_NAME.test(app)) throw new Error(`"${app}" is not an app name (lowercase letters, digits, - and _, up to 64 characters)`);
+  return app;
+}
+
 export function extensionDir(app: string): string {
-  return join(EXTENSIONS_DIR, app);
+  return join(EXTENSIONS_DIR, assertAppName(app));
 }
 export function stagingDir(app: string): string {
-  return join(EXTENSIONS_DIR, `${app}.staging`);
+  return join(EXTENSIONS_DIR, `${assertAppName(app)}.staging`);
 }
 export function prevDir(app: string): string {
-  return join(EXTENSIONS_DIR, `${app}.prev`);
+  return join(EXTENSIONS_DIR, `${assertAppName(app)}.prev`);
 }
 
 /** Generated code does `import ... from "@miro/sdk"` - normal resolution needs a node_modules to

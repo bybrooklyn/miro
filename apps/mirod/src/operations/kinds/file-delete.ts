@@ -1,10 +1,9 @@
 import { existsSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import type { OperationKind } from "../engine";
-import { isLifelinePath, isSensitivePath } from "../classify";
+import { isLifelinePath, isSensitivePath, realTarget } from "../classify";
 import { trashDestination, moveToTrash, restoreFromTrash, TRASH_DIR, type TrashEntry } from "../trash";
 import { sizeOf } from "../snapshot";
-import { realTarget } from "./file-write";
 
 // The only way anything gets deleted (PLAN.md §5.7): a move into Miro's trash, recoverable, with
 // rollback being the move back. The destination is computed in captureState and carried in the
@@ -25,6 +24,8 @@ export interface FileDeleteCaptured {
  * destination chosen in captureState is parked here by path until apply consumes it. */
 const pending = new Map<string, TrashEntry>();
 
+const SIZE_CAP = 1_000_000_000;
+
 export const fileDeleteKind: OperationKind<FileDeleteParams, FileDeleteCaptured> = {
   kind: "file.delete",
   // Prodtest: the path is still gone. Same target key as file.write, so a later write of the same
@@ -39,8 +40,12 @@ export const fileDeleteKind: OperationKind<FileDeleteParams, FileDeleteCaptured>
     }
     const st = statSync(p.path);
     const lifeline = isLifelinePath(p.path) || isLifelinePath(real);
+    // Once, capped: an uncapped recursive walk of /var/lib/docker ran for minutes before the owner
+    // was even asked (audit B10). Past the cap the plan says so rather than counting on.
+    const bytes = sizeOf(p.path, SIZE_CAP);
+    const size = bytes > SIZE_CAP ? `more than ${Math.round(SIZE_CAP / 1e9)} GB` : `${bytes} bytes`;
     return {
-      summary: `Move ${p.path} to trash (${st.isDirectory() ? "directory" : "file"}, ${sizeOf(p.path)} bytes)`,
+      summary: `Move ${p.path} to trash (${st.isDirectory() ? "directory" : "file"}, ${size})`,
       autoApprove: false,
       class: lifeline ? "lifeline" : "destructive",
       writes: [dirname(p.path), TRASH_DIR],
@@ -50,14 +55,14 @@ export const fileDeleteKind: OperationKind<FileDeleteParams, FileDeleteCaptured>
       rollbackWhen: "verify fails or the move throws - restored from the trash",
       scopeEvidence: "the path's parent directory and the trash directory, nothing else",
       dryRunFidelity: "exact",
-      details: { path: p.path, type: st.isDirectory() ? "directory" : "file", bytes: sizeOf(p.path) },
+      details: { path: p.path, type: st.isDirectory() ? "directory" : "file", bytes, sizeCapped: bytes > SIZE_CAP },
     };
   },
 
   async captureState(p) {
     const entry = trashDestination(p.path);
     pending.set(p.path, entry);
-    return { entry, wasDirectory: statSync(p.path).isDirectory(), bytes: sizeOf(p.path) };
+    return { entry, wasDirectory: statSync(p.path).isDirectory(), bytes: sizeOf(p.path, SIZE_CAP) };
   },
 
   async apply(p) {

@@ -9,6 +9,7 @@ import { fetchWeb, searchWeb } from "../capabilities";
 import { indexRootOnDisk, queryByClassOnDisk } from "../inventory/filesystem";
 import { listInstalledPackages } from "../inventory/packages";
 import { detectGpus } from "../inventory/gpu";
+import { listTrash } from "../operations/trash";
 
 // Schemas are named so `execute` can reference `Static<typeof schema>` explicitly - TS can't
 // infer a sibling property's type from another property within the same object literal.
@@ -146,5 +147,14 @@ export const AGENT_TOOLS = [
     description: "List installed system packages via apt or dnf, whichever this distro uses.",
     parameters: Type.Object({}),
     execute: async () => textResult(await listInstalledPackages()),
+  },
+  {
+    name: "trash_list",
+    label: "List trash",
+    description:
+      "List what Miro has moved to its trash (file_delete never deletes - it moves): each entry's original path, where it sits now, and when. Use it to find something to bring back; restoring is a shell_command move the owner approves.",
+    parameters: Type.Object({}),
+    // Deleted things were unrecoverable through Miro's own surface even though the trash kept them (audit C3).
+    execute: async () => textResult(listTrash().map((e) => ({ originalPath: e.originalPath, trashedPath: e.trashedPath, trashedAt: new Date(e.trashedAt).toISOString() }))),
   },
 ];

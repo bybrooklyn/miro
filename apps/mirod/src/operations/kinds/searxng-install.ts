@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { MIRO_DIR } from "@miro/protocol";
 import { commandExists, run } from "../../inventory/exec";
+import { readTextCapped } from "../../fetch-body";
 import type { OperationKind } from "../engine";
 import { moveToTrash, trashDestination } from "../trash";
 
@@ -51,7 +52,8 @@ function resolved(p: SearxngInstallParams): { port: number; dataDir: string } {
 }
 
 async function containerExists(): Promise<boolean> {
-  const out = await run("sudo", ["docker", "ps", "-a", "--filter", `name=^/${SEARXNG_CONTAINER}$`, "--format", "{{.Names}}"]).catch(() => "");
+  // -n: a read that may run at describe time must never sit on a sudo password prompt.
+  const out = await run("sudo", ["-n", "docker", "ps", "-a", "--filter", `name=^/${SEARXNG_CONTAINER}$`, "--format", "{{.Names}}"], { timeoutMs: 10_000 }).catch(() => "");
   return out.trim() === SEARXNG_CONTAINER;
 }
 
@@ -61,7 +63,7 @@ export async function probeJson(baseUrl: string, timeoutMs = 5_000): Promise<boo
   try {
     const res = await fetch(`${baseUrl}/search?q=debian&format=json`, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(timeoutMs) });
     if (!res.ok) return false;
-    const body = JSON.parse(await res.text()) as { results?: unknown };
+    const body = JSON.parse(await readTextCapped(res, 1_000_000)) as { results?: unknown };
     return Array.isArray(body.results);
   } catch {
     return false;
@@ -74,16 +76,25 @@ export const searxngInstallKind: OperationKind<SearxngInstallParams, Captured> =
   async describe(p) {
     if (!(await commandExists("docker"))) throw new Error("refused: docker is required for a self-hosted SearXNG - install Docker first, or point searxng.base_url at a node you already run");
     const { port, dataDir } = resolved(p);
+    // A container of that name already there is REPLACED by apply (rm -f) and rollback removes
+    // the replacement, never restores the original - so the plan says so and the engine treats
+    // it as irreversible (audit A18: it used to promise a rollback it could not give).
+    const replaces = await containerExists();
     return {
       summary: `Run a self-hosted SearXNG (${SEARXNG_IMAGE}) on 127.0.0.1:${port} for web_search, JSON output on`,
       autoApprove: false,
       class: "mutate",
       writes: [dataDir, "/var/run/docker.sock"],
       network: true,
-      warning: "pulls the image if it is not present (minutes on a slow link)",
-      details: { container: SEARXNG_CONTAINER, image: SEARXNG_IMAGE, port, dataDir, baseUrl: searxngBaseUrl(port) },
+      irreversible: replaces || undefined,
+      warning: replaces
+        ? `a container named ${SEARXNG_CONTAINER} already exists and will be removed and replaced - its own configuration is not restored on rollback; pulls the image if it is not present`
+        : "pulls the image if it is not present (minutes on a slow link)",
+      details: { container: SEARXNG_CONTAINER, image: SEARXNG_IMAGE, port, dataDir, baseUrl: searxngBaseUrl(port), replacesExisting: replaces },
       expects: `${searxngBaseUrl(port)}/search?format=json answers with a results array`,
-      rollbackWhen: "no JSON answer within 90s - the container is removed and a data directory this operation created is moved to the trash",
+      rollbackWhen: replaces
+        ? "never - the existing container is replaced, not preserved; a failed verify removes the new one"
+        : "no JSON answer within 90s - the container is removed and a data directory this operation created is moved to the trash",
       scopeEvidence: "the SearXNG data directory (settings.yml) and the docker socket; the container listens on loopback only",
       dryRunFidelity: "partial",
     };

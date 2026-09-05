@@ -1,6 +1,6 @@
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync, readFileSync, realpathSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ServerEvent } from "@miro/protocol";
@@ -12,6 +12,7 @@ import { fileDeleteKind } from "./file-delete";
 import { httpMutationKind, isLocalOrPrivateUrl } from "./http-mutation";
 import { shellCommandKind } from "./shell-command";
 import { systemdUnitKind } from "./systemd-unit";
+import { systemdRestartKind } from "./systemd-restart";
 import { dockerRunArgs, searxngBaseUrl, searxngInstallKind, settingsYaml } from "./searxng-install";
 import { fileEditKind } from "./file-edit";
 import { applyEdits, lineHash } from "../hashline";
@@ -154,6 +155,14 @@ describe("systemd.unit", () => {
     expect(enableApp.autoApprove).toBe(true);
     expect(enableApp.writes).toContain("/etc/systemd/system");
     expect(enableApp.expects).toBe("jellyfin.service is enabled at boot");
+    // The classifier's LIFELINE_UNITS is the one list (audit A7): docker, nftables, tailscaled ...
+    for (const unit of ["docker.service", "nftables.service", "containerd", "wg-quick@wg0.service"]) {
+      expect((await systemdUnitKind.describe({ action: "stop", unit })).class).toBe("lifeline");
+    }
+    // Miro's own unit is never stopped or restarted by Miro.
+    await expect(systemdUnitKind.describe({ action: "stop", unit: "mirod.service" })).rejects.toThrow(/Miro itself/);
+    await expect(systemdRestartKind.describe({ unit: "mirod" })).rejects.toThrow(/Miro itself/);
+    expect((await systemdUnitKind.describe({ action: "start", unit: "mirod.service" })).class).toBe("mutate");
   });
 
   test("daemon-reload needs no unit and never rolls back; every other action refuses a missing or malformed unit name", async () => {
@@ -232,10 +241,12 @@ describe("file.delete", () => {
 
 describe("http.mutation", () => {
   test("private-only URL guard", () => {
-    for (const ok of ["http://127.0.0.1:8096/x", "http://localhost/x", "http://10.0.0.5/x", "http://192.168.1.2/x", "http://172.16.0.1/x", "http://jellyfin:8096/x", "http://nas.local/x", "http://[::1]/x"]) {
+    for (const ok of ["http://127.0.0.1:8096/x", "http://localhost/x", "http://10.0.0.5/x", "http://192.168.1.2/x", "http://172.16.0.1/x", "http://jellyfin:8096/x", "http://nas.local/x", "http://[::1]/x", "http://[fd12::1]/x", "http://[::ffff:127.0.0.1]/x", "http://0.0.0.0:8096/x"]) {
       expect(isLocalOrPrivateUrl(ok)).toBe(true);
     }
-    for (const bad of ["http://example.com/x", "http://8.8.8.8/x", "http://172.32.0.1/x", "ftp://127.0.0.1/x", "not a url"]) {
+    // fdsomething.com / fc2.com: the IPv6 ULA prefixes used to match any hostname (audit A3), so a
+    // read-class curl to them left the LAN.
+    for (const bad of ["http://example.com/x", "http://8.8.8.8/x", "http://172.32.0.1/x", "ftp://127.0.0.1/x", "not a url", "http://fdsomething.com/x", "http://fc2.com/x", "http://fe80cafe.example/x"]) {
       expect(isLocalOrPrivateUrl(bad)).toBe(false);
     }
   });
@@ -373,6 +384,28 @@ describe("shell.command", () => {
     expect(plan.class).toBe("lifeline");
     expect(plan.warning).toContain("SSH");
     expect(plan.autoApprove).toBe(false);
+  });
+
+  test("write scope: a root that holds secret material is refused, a lifeline root escalates, a symlink is judged by its target, a file-looking new root is refused", async () => {
+    // /etc, /var, /root, /home: a plain mutate used to get shadow/sudoers/miro.db bind-mounted rw (audit A4).
+    for (const root of ["/etc", "/var", "/var/lib", "/root", "/home", "/home/miro"]) {
+      await expect(shellCommandKind.describe({ command: "true", writes: [root], network: false })).rejects.toThrow(/contains, Miro's own state or secret material/);
+    }
+    // Narrower is fine, and a lifeline path (or a root that contains lifeline paths) is a lifeline change.
+    expect((await shellCommandKind.describe({ command: "touch x", writes: [join(work, "app")], network: false })).class).toBe("mutate");
+    expect((await shellCommandKind.describe({ command: "touch x", writes: ["/etc/nginx"], network: false })).class).toBe("mutate");
+    expect((await shellCommandKind.describe({ command: "true", writes: ["/etc/ssh"], network: false })).class).toBe("lifeline");
+    expect((await shellCommandKind.describe({ command: "true", writes: ["/usr"], network: false })).class).toBe("lifeline");
+    // A symlink at an innocent path pointing into secret material is judged by its target, not its
+    // name (audit A5). The target is a .miro dir of the test's own - portable, unlike /etc, which
+    // macOS resolves to /private/etc.
+    mkdirSync(join(work, ".miro"), { recursive: true });
+    const link = join(work, "data");
+    symlinkSync(join(work, ".miro"), link);
+    await expect(shellCommandKind.describe({ command: "true", writes: [link], network: false })).rejects.toThrow(/secret material/);
+    // A non-existent root named like a file would be created as a directory by the sandbox (audit B3).
+    await expect(shellCommandKind.describe({ command: "true", writes: [join(work, "app", "config.ini")], network: false })).rejects.toThrow(/looks like a file/);
+    expect((await shellCommandKind.describe({ command: "touch x", writes: [join(work, "conf.d")], network: false })).class).toBe("mutate");
   });
 
   test.skipIf(!sandboxOk)("runs sandboxed, snapshots the declared root, and a failed verify restores it", async () => {

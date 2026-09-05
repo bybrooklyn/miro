@@ -473,8 +473,10 @@ test("cooldown: a user cancellation is not a rollback and does not trip it", asy
   expect(events.some((e) => e.type === "question")).toBe(false); // still ran unattended
 });
 
-test("selector sanity: badWriteScope flags empty, root, and glob roots only", () => {
+test("selector sanity: badWriteScope flags empty, root, glob, and kernel/device roots", () => {
   expect(badWriteScope(["/opt/x", "/etc/nginx"])).toBeNull();
+  for (const bad of ["/proc", "/sys", "/dev", "/dev/", "/dev/sda", "/dev/nvme0n1p2"]) expect(badWriteScope([bad])).toBe(bad);
+  expect(badWriteScope(["/dev/shm/app"])).toBeNull();
   expect(badWriteScope(undefined)).toBeNull();
   expect(badWriteScope(["/"])).toBe("/");
   expect(badWriteScope([" "])).toBe(" ");

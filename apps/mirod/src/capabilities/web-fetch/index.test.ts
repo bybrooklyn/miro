@@ -34,6 +34,11 @@ function server() {
       if (url.pathname === "/refresh") return new Response(`<html><head><meta http-equiv="refresh" content="0; url=/moved"></head><body></body></html>`, { headers: { "content-type": "text/html" } });
       if (url.pathname === "/loop") return new Response(`<html><head><meta http-equiv="refresh" content="0; url=/loop2"></head></html>`, { headers: { "content-type": "text/html" } });
       if (url.pathname === "/loop2") return new Response(`<html><head><meta http-equiv="refresh" content="0; url=/loop"></head></html>`, { headers: { "content-type": "text/html" } });
+      // SSRF shapes: a 302 into a private address, and an empty stub whose canonical link names one.
+      if (url.pathname === "/to-private") return Response.redirect("http://127.0.0.1:9/admin", 302);
+      if (url.pathname === "/canonical-private") return new Response(`<!doctype html><html><head><link rel="canonical" href="http://10.0.0.5:8096/System/Info" /></head></html>`, { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/hops") return Response.redirect(`${url.origin}/hops`, 302);
+      if (url.pathname === "/big") return new Response("x".repeat(3_000_000), { headers: { "content-type": "text/plain" } });
       if (url.pathname === "/api/web_fetch") {
         if (req.headers.get("authorization") !== "Bearer k-1") return new Response("no", { status: 401 });
         const body = (await req.json()) as { url: string };
@@ -48,7 +53,9 @@ function server() {
 test("direct implementation: HTML is extracted, JSON passes through, redirects are followed, a 404 is an implementation error", async () => {
   const s = server();
   try {
-    const direct = directFetchImplementation();
+    // The fixture is on loopback, which the real guard refuses on every hop - so the happy paths
+    // run with the guard off; the SSRF test below runs with it on.
+    const direct = directFetchImplementation(() => false);
     const page = await direct.run({ url: `${s.base}/page` }, AbortSignal.timeout(5000));
     expect(page.title).toBe("Hardware & Acceleration | Jellyfin");
     expect(page.content).toContain("Intel Quick Sync");
@@ -59,6 +66,20 @@ test("direct implementation: HTML is extracted, JSON passes through, redirects a
     expect((await direct.run({ url: `${s.base}/moved` }, AbortSignal.timeout(5000))).title).toContain("Jellyfin");
     expect((await direct.run({ url: `${s.base}/refresh` }, AbortSignal.timeout(5000))).content).toContain("Intel Quick Sync");
     expect((await direct.run({ url: `${s.base}/loop` }, AbortSignal.timeout(5000))).content).toBe("");
+    // A server-side redirect loop ends at the hop cap; a 3MB body is read to the cap, not whole.
+    await expect(direct.run({ url: `${s.base}/hops` }, AbortSignal.timeout(5000))).rejects.toThrow(/more than 8 redirects/);
+    expect((await direct.run({ url: `${s.base}/big` }, AbortSignal.timeout(5000))).content).toHaveLength(1_000_000);
+  } finally {
+    s.stop();
+  }
+});
+
+test("a redirect - HTTP or client-side - into a local or private address is refused, never fetched (SSRF)", async () => {
+  const s = server();
+  try {
+    const direct = directFetchImplementation(); // the real guard
+    await expect(direct.run({ url: `${s.base}/to-private` }, AbortSignal.timeout(5000))).rejects.toThrow(/redirects to http:\/\/127\.0\.0\.1:9\/admin, a local or private address/);
+    await expect(direct.run({ url: `${s.base}/canonical-private` }, AbortSignal.timeout(5000))).rejects.toThrow(/redirects to http:\/\/10\.0\.0\.5:8096\/System\/Info/);
   } finally {
     s.stop();
   }
@@ -86,18 +107,21 @@ test("fetchWeb: refuses non-http and private addresses without routing, prefers 
     expect((await fetchWeb(registry, "not a url")).refused).toMatch(/not a URL/);
     expect((await fetchWeb(registry, "http://192.168.1.10:8096/")).refused).toMatch(/use http_get/);
 
-    // The fixture server is on 127.0.0.1, which fetchWeb rightly refuses - so exercise the route
-    // through the direct implementation pointed at a public-looking URL the fixture cannot serve...
-    // instead: route directly, which is what fetchWeb does after its guards.
-    const direct = await registry.route<{ url: string }, { title: string; content: string }>("web.fetch", { url: `${s.base}/page` });
-    expect(direct.impl).toBe("direct");
-    expect(direct.result!.title).toContain("Jellyfin");
+    // The fixture server is on loopback, so fetchWeb's own entry guard is turned off for the rest.
+    const direct = await fetchWeb(registry, `${s.base}/page`, 40, () => false);
+    expect(direct.source).toBe("direct");
+    expect(direct.title).toContain("Jellyfin");
+    expect(direct.content).toHaveLength(40);
+    expect(direct.truncated).toBe(true);
+    const whole = await fetchWeb(registry, `${s.base}/page`, undefined, () => false);
+    expect(whole.truncated).toBe(false);
+    expect(whole.content).toContain("Intel Quick Sync");
 
     key = "k-1";
-    const keyed = await registry.route<{ url: string }, { title: string; content: string; links: unknown[] }>("web.fetch", { url: `${s.base}/page` });
-    expect(keyed.impl).toBe("ollama");
-    expect(keyed.result).toMatchObject({ title: "Ollama fetched", content: `cleaned content of ${s.base}/page` });
-    expect(keyed.result!.links).toEqual([{ text: "", url: "https://a.example/1" }, { text: "two", url: "https://a.example/2" }]);
+    const keyed = await fetchWeb(registry, `${s.base}/page`, undefined, () => false);
+    expect(keyed.source).toBe("ollama");
+    expect(keyed).toMatchObject({ title: "Ollama fetched", content: `cleaned content of ${s.base}/page` });
+    expect(keyed.links).toEqual([{ text: "", url: "https://a.example/1" }, { text: "two", url: "https://a.example/2" }]);
     expect(keyed.attempts).toEqual([{ impl: "ollama", ok: true, ms: expect.any(Number) }]);
   } finally {
     s.stop();

@@ -92,6 +92,11 @@ export function validateEntry(entry: any): asserts entry is ExtensionEntry {
   if (!entry || typeof entry.name !== "string" || typeof entry.description !== "string" || !["tool", "diagnostic", "operation"].includes(entry.kind)) {
     throw new Error(`each entry must be { name, kind: "tool"|"diagnostic"|"operation", description, and one of read/bind/code } - got keys [${Object.keys(entry ?? {}).join(", ")}]`);
   }
+  // "Exactly one" as the SDK documents: an entry with both `read` and `code` used to run the read
+  // and silently drop the code the model wrote (audit #18). A missing form gets the specific
+  // message below, which names what that kind needs.
+  const forms = ["read", "bind", "code"].filter((k) => entry[k] !== undefined);
+  if (forms.length > 1) throw new Error(`entry "${entry.name}" must have exactly one of read/bind/code - it has ${forms.join(" and ")}; keep the one that does the work`);
   if (entry.kind === "operation") {
     if (typeof entry.bind !== "function") throw new Error(`operation "${entry.name}" needs bind(args) returning a { kind, goal, ... } binding`);
   } else if (entry.read) {

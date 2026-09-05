@@ -3,12 +3,15 @@
 // one process per app, communicating over stdin/stdout via @miro/protocol's encodeLine/
 // createLineBuffer JSON-line framing. This file is fixed and hand-written - never generated - and
 // deliberately has no import path to bun:sqlite/secrets.ts/operations/engine.ts, so nothing
-// generated code does can reach those, regardless of what it tries to import. (The second layer
-// of the same boundary is extensions/validate.ts's forbidden-import allowlist scan, run before
-// any generated code is ever loaded here.)
+// generated code IMPORTS can reach those. Stated honestly (audit A1): the import allowlist
+// (extensions/validate.ts) governs imports only; a `code` entry runs with the full global scope of
+// this process - `fetch`, `Bun.spawn`, `process.env` need no import. What actually bounds it: this
+// process runs as the unprivileged `miro` user with a scrubbed env (extensions/host.ts), the code
+// was validated and hash-pinned before it was ever loaded (extensions/pin.ts), and ctx.exec /
+// ctx.readFile go through the daemon's classifier and sandbox. Replacing the globals with guarded
+// versions is the named upgrade path (PLAN.md §5.28), not something to imply is already done.
 
 import { join } from "node:path";
-import { readFileSync } from "node:fs";
 import { encodeLine, createLineBuffer } from "@miro/protocol";
 import { createHttpClient, type ExtensionContext, type ExtensionModule, type BrowserSession, type SnapshotNode, type ReadResult } from "@miro/sdk";
 import type { HostRequest, HostResponse, HostToolSpec } from "./host-protocol";
@@ -22,6 +25,11 @@ import { runSandboxed, sandboxAvailable } from "../operations/sandbox";
 function send(res: HostResponse): void {
   process.stdout.write(encodeLine(res));
 }
+
+// stdout is the framing channel. A generated `code` entry that console.logs would write plain text
+// into it and break the daemon's reader (audit A16); stderr is inherited and lands in the daemon log.
+console.log = console.error;
+console.info = console.error;
 
 // --- BrowserSession, backed by Bun.WebView (research finding: Playwright doesn't work under
 // Bun; Bun.WebView is the confirmed-working native replacement - live-verified against real
@@ -188,14 +196,17 @@ function createReadPrimitives(): Pick<ExtensionContext, "exec" | "readFile"> {
       const c = classifyCommand(command);
       if (c.class !== "read") throw new Error(`refused: ${command} is ${c.class} (${c.reasons.join("; ")}) - extension code may only read; writes are operation bindings`);
       if (!(await sandboxAvailable())) throw new Error("refused: sandbox unavailable");
-      // Network only for network-inspecting commands, like shell_inspect - generated code holding
-      // ctx.secrets must not be able to curl them anywhere (adversarial review).
+      // Network only for network-inspecting commands, like shell_inspect. The classifier lets a
+      // read-class curl reach local/private addresses only, so a LAN host is reachable this way and
+      // the internet is not (audit C10: this used to claim no egress at all).
       const r = await runSandboxed(["sh", "-c", command], { writableRoots: [], network: c.needsNetwork, timeoutMs: 60_000 });
       return { exitCode: r.exitCode, stdout: redactSecretsInText(r.stdout), stderr: redactSecretsInText(r.stderr) };
     },
     async readFile(path) {
+      // isSensitivePath resolves symlinks itself; the cap is read from disk, not sliced after
+      // loading the whole file (a multi-GB log OOMed the host - audit A17).
       if (isSensitivePath(path)) throw new Error(`refused: ${path} is secret material`);
-      return redactSecretsInText(readFileSync(path).subarray(0, 256 * 1024).toString("utf-8"));
+      return redactSecretsInText(await Bun.file(path).slice(0, 256 * 1024).text());
     },
   };
 }

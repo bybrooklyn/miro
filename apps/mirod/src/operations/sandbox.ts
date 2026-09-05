@@ -16,8 +16,9 @@ import { mkdirSync, existsSync } from "node:fs";
 // (the docker socket, /run/systemd) is declared like any other writable root.
 
 export interface SandboxOptions {
-  /** Paths the command may write. Files, directories, or sockets - bind-mounted read-write.
-   * A directory that does not exist yet is created (declaring it writable is declaring it). */
+  /** Paths the command may write - directories, sockets, or EXISTING files - bind-mounted
+   * read-write. A root that does not exist yet is created as a directory (declaring it writable is
+   * declaring it), which is why shell.command refuses a non-existent root named like a file. */
   writableRoots: string[];
   /** Paths that must be visible but read-only - e.g. an operation's declared roots during its
    * verify step. Matters under /tmp, which the sandbox otherwise replaces with a fresh tmpfs. */

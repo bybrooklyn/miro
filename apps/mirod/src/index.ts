@@ -7,7 +7,7 @@ import {
   DB_PATH,
   encodeLine,
   createLineBuffer,
-  alpnBytes,
+  utf8Bytes,
   type ClientMessage,
   type ServerEvent,
 } from "@miro/protocol";
@@ -396,7 +396,7 @@ async function handleChat(text: string, send: (event: ServerEvent) => void, stat
     state.lastExtensionVersion !== extensionVersions ||
     state.lastContextBlock !== contextBlock
   ) {
-    const operationCtx: OperationToolContext = { db, send, waitForAnswer: (id) => waitForAnswer(state, id), reflect, getSecret: (ref) => secretStore.getSecret(db, ref), setSecret: (ref, value) => secretStore.setSecret(db, ref, value), setSetting };
+    const operationCtx: OperationToolContext = { db, send, waitForAnswer: (id) => waitForAnswer(state, id), cancelAnswer: (id) => state.pendingAnswers.delete(id), reflect, getSecret: (ref) => secretStore.getSecret(db, ref), setSecret: (ref, value) => secretStore.setSecret(db, ref, value), setSetting };
     state.agent = createMiroAgent(models, defaultModel, getStoredKey, personality(), operationCtx, {
       hostMgr,
       setSecret: (ref, value) => secretStore.setSecret(db, ref, value),
@@ -655,7 +655,7 @@ acceptLoop(irohEndpoint, (conn) => {
   (async () => {
     const bi = await conn.acceptBi();
     const state = createConnectionState((event) => {
-      bi.send.writeAll(alpnBytes(encodeLine(event))).catch((err) => {
+      bi.send.writeAll(utf8Bytes(encodeLine(event))).catch((err) => {
         console.error("[mirod] iroh send failed", err);
       });
     });

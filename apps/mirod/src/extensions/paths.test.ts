@@ -13,7 +13,7 @@ import {
 
 // Real filesystem, real ~/.miro/extensions/ - same "no mocks, real everything" convention as
 // secrets.test.ts's real temp key files. Uses a throwaway app name, cleaned up after every test.
-const APP = "__paths_test_app__";
+const APP = "paths-test-app"; // must satisfy APP_NAME - a path segment the model chooses (audit A2)
 
 afterEach(() => {
   for (const dir of [extensionDir(APP), stagingDir(APP), prevDir(APP)]) {
@@ -92,4 +92,15 @@ test("extensionDir/stagingDir/prevDir are distinct, stable paths for the same ap
   expect(extensionDir("gotify")).not.toBe(prevDir("gotify"));
   expect(stagingDir("gotify")).toContain("gotify.staging");
   expect(prevDir("gotify")).toContain("gotify.prev");
+});
+
+// The app name comes from the model's app_learn argument; "../../etc/ssh" used to resolve to a real
+// directory that promotion renamed aside as root (audit A2). Every path builder refuses it.
+test("an app name that is not a plain path segment is refused by every path builder", () => {
+  for (const bad of ["../../etc/ssh", "..", "a/b", "Jellyfin", "-lead", "with space", "x".repeat(65), ""]) {
+    expect(() => extensionDir(bad)).toThrow(/is not an app name/);
+    expect(() => stagingDir(bad)).toThrow(/is not an app name/);
+    expect(() => prevDir(bad)).toThrow(/is not an app name/);
+  }
+  for (const ok of ["jellyfin", "home-assistant", "qbittorrent_nox", "7days"]) expect(extensionDir(ok)).toContain(`/${ok}`);
 });

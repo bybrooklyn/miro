@@ -1,9 +1,23 @@
+import { redactSecretsInText } from "./classify";
+
 // A unified diff for the plan the user approves (PLAN.md client decision: file changes render as
 // a real diff). Line-based LCS - O(n·m) memory on the two files' line counts, fine for config
 // files; a config file that is not fine here is not something to eyeball-approve anyway.
 // ponytail: no Myers, no word-level; upgrade if a real plan ever hits the cap below.
+// 1500 lines: the table is (n+1)(m+1) uint32 - 9 MB at the cap, where 4000 was 64 MB per plan
+// (audit B11), and nobody eyeball-approves a 1500-line config change.
 
-const MAX_LINES = 4000;
+const MAX_LINES = 1500;
+
+/** The plan's diff with the file's EXISTING lines (context and removals) redacted - those are the
+ * app's secrets, persisted with the plan and sent to every client. The `+` side is the model's own
+ * input and stays legible: that is what the owner is approving (audit A10). */
+export function redactDiffForPlan(diff: string): string {
+  return diff
+    .split("\n")
+    .map((line) => (line.startsWith("+") || line.startsWith("@@") ? line : redactSecretsInText(line)))
+    .join("\n");
+}
 
 export function unifiedDiff(before: string, after: string, path: string, context = 3): string {
   const a = before.length === 0 ? [] : before.split("\n");

@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
 import irohPkg from "@number0/iroh";
-import { encodeLine, createLineBuffer, IROH_ALPN, alpnBytes, type ServerEvent } from "@miro/protocol";
+import { encodeLine, createLineBuffer, IROH_ALPN, utf8Bytes, type ServerEvent } from "@miro/protocol";
 import { generateIrohSecretKey, startIrohEndpoint, ticketFor, acceptLoop } from "./iroh";
 
 const { EndpointTicket } = irohPkg;
@@ -22,7 +22,7 @@ test("a persistent Iroh connection survives multiple round trips", async () => {
       for (let i = 0; i < 3; i++) {
         const chunk = await bi.recv.read(1024);
         feed(Buffer.from(chunk));
-        await bi.send.writeAll(alpnBytes(`ack${i}\n`));
+        await bi.send.writeAll(utf8Bytes(`ack${i}\n`));
       }
     })().catch(() => {});
   }).catch(() => {});
@@ -31,10 +31,10 @@ test("a persistent Iroh connection survives multiple round trips", async () => {
   // message (the send happens after the push) - so awaiting this alone is enough synchronization.
   const clientTurns = (async () => {
     const addr = EndpointTicket.fromString(ticket).endpointAddr();
-    const conn = await client.connect(addr, alpnBytes(IROH_ALPN));
+    const conn = await client.connect(addr, utf8Bytes(IROH_ALPN));
     const bi = await conn.openBi();
     for (let i = 0; i < 3; i++) {
-      await bi.send.writeAll(alpnBytes(encodeLine({ type: "reply", text: `turn${i}` })));
+      await bi.send.writeAll(utf8Bytes(encodeLine({ type: "reply", text: `turn${i}` })));
       await bi.recv.read(1024);
     }
   })();

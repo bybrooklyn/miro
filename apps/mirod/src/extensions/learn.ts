@@ -6,6 +6,7 @@ import type { ExtensionHostManager } from "./host";
 import type { OperationToolContext } from "../operations/engine";
 import { spawnLearningAgent, type LearnAgentResult, type LearnSeed } from "./learn-agent";
 import { discoverAppOnBox, formatPresence } from "../discovery";
+import { APP_NAME } from "./paths";
 
 /** What the codegen model resolver picked, and any reasoning-effort override to apply for it -
  * e.g. Codex logins always resolve to gpt-5.6-luna at "medium" reasoning (confirmed preference),
@@ -48,6 +49,9 @@ export interface LearnFlowOptions {
  * decision (main agent or a learning agent recursing), never a user command. */
 export async function runLearnFlow(opts: LearnFlowOptions): Promise<{ text: string; promoted: boolean }> {
   const app = opts.app.trim().toLowerCase();
+  if (!APP_NAME.test(app)) {
+    return { text: `"${opts.app}" is not usable as an app name - use lowercase letters, digits, - and _ (e.g. "jellyfin", "home-assistant").`, promoted: false };
+  }
   const depth = opts.depth ?? 0;
   if (inProgress.has(app)) {
     return { text: `${app} is already being learned (a dependency cycle or a concurrent request) - continue without it for now.`, promoted: false };

@@ -1,5 +1,6 @@
 import type { OperationKind } from "../engine";
 import { isLocalOrPrivateUrl, redactSecretsInText } from "../classify";
+import { readTextCapped } from "../../fetch-body";
 
 // The generic HTTP write (PLAN.md §5.4 B). This is how a learned extension's declarative write
 // bindings, and the main agent directly, change an app's state through its API: the plan shows
@@ -73,7 +74,7 @@ async function request(
   // redirect: "manual" - a compromised local app must not be able to 302 the secret header to a
   // public host (adversarial review). A redirect is reported as its 3xx status, never followed.
   const res = await fetch(url, { method, headers, body: opts.body, redirect: "manual", signal: AbortSignal.timeout(opts.timeoutMs ?? 30_000) });
-  return { status: res.status, body: (await res.text()).slice(0, 64 * 1024) };
+  return { status: res.status, body: await readTextCapped(res, 64 * 1024) };
 }
 
 /** `{{secret:<ref>}}` anywhere in a body, URL, or header value - resolved at request time only.
@@ -117,6 +118,15 @@ export function httpMutationKind(
     return h;
   };
   const resolved = (s: string | undefined) => (s === undefined ? undefined : substituteSecrets(s, getSecret));
+  // The URL the request actually goes to, checked AFTER substitution: describe() judged the
+  // literal (a placeholder in the authority does not even parse), this judges what a secret
+  // resolved to - the credential header must never leave the LAN whatever a stored value says
+  // (audit A9, defence in depth).
+  const target = (label: string, s: string): string => {
+    const url = resolved(s)!;
+    if (!isLocalOrPrivateUrl(url)) throw new Error(`refused: ${label} resolves to a public address after secret substitution`);
+    return url;
+  };
 
   return {
     kind: "http.mutation",
@@ -176,11 +186,11 @@ export function httpMutationKind(
 
     async captureState(p) {
       if (!p.captureUrl) return { before: null };
-      return { before: await request("GET", resolved(p.captureUrl)!, { headers: authHeaders(p), timeoutMs: p.timeoutMs }) };
+      return { before: await request("GET", target("captureUrl", p.captureUrl), { headers: authHeaders(p), timeoutMs: p.timeoutMs }) };
     },
 
     async apply(p) {
-      const r = await request(p.method, resolved(p.url)!, { headers: authHeaders(p), body: resolved(p.body), contentType: p.contentType, timeoutMs: p.timeoutMs });
+      const r = await request(p.method, target("url", p.url), { headers: authHeaders(p), body: resolved(p.body), contentType: p.contentType, timeoutMs: p.timeoutMs });
       outputs.set(p, { status: r.status, body: r.body });
       // Any 2xx is an applied write, whatever the plan predicted: a plan saying expectStatus
       // [200] against Jellyfin's real 204 rolled back an admin account the server had in fact
@@ -209,7 +219,7 @@ export function httpMutationKind(
 
     async verify(p) {
       if (!p.verifyUrl) return true;
-      const r = await request("GET", resolved(p.verifyUrl)!, { headers: authHeaders(p), timeoutMs: p.timeoutMs });
+      const r = await request("GET", target("verifyUrl", p.verifyUrl), { headers: authHeaders(p), timeoutMs: p.timeoutMs });
       if (r.status < 200 || r.status >= 300) return false;
       return p.verifyExpect ? r.body.includes(p.verifyExpect) : true;
     },
@@ -217,9 +227,9 @@ export function httpMutationKind(
     async rollback(p, captured) {
       try {
         if (p.rollback) {
-          await request(p.rollback.method, resolved(p.rollback.url)!, { headers: authHeaders(p), body: resolved(p.rollback.body), contentType: p.rollback.contentType, timeoutMs: p.timeoutMs });
+          await request(p.rollback.method, target("rollback URL", p.rollback.url), { headers: authHeaders(p), body: resolved(p.rollback.body), contentType: p.rollback.contentType, timeoutMs: p.timeoutMs });
         } else if (p.method === "PUT" && captured.before && captured.before.status >= 200 && captured.before.status < 300) {
-          await request("PUT", resolved(p.url)!, { headers: authHeaders(p), body: captured.before.body, contentType: p.contentType ?? "application/json", timeoutMs: p.timeoutMs });
+          await request("PUT", target("url", p.url), { headers: authHeaders(p), body: captured.before.body, contentType: p.contentType ?? "application/json", timeoutMs: p.timeoutMs });
         }
       } catch (err) {
         console.error("[mirod] http rollback failed", err);

@@ -129,6 +129,13 @@ export function recordSuccess(db: Database, app: string): void {
   );
 }
 
+/** A passed idle-timer probe: the extension is healthy again, but a timer is not a real call and
+ * must not walk the maturity ladder - ten probes used to make an extension "trusted" with zero
+ * use (audit B13). */
+export function recordProbeSuccess(db: Database, app: string): void {
+  db.run(`UPDATE extensions SET consecutive_failures = 0, last_validated_at = ?, updated_at = ? WHERE app = ?`, [Date.now(), Date.now(), app]);
+}
+
 export function incrementRepairAttempts(db: Database, app: string): number {
   db.run(`UPDATE extensions SET repair_attempts = repair_attempts + 1, updated_at = ? WHERE app = ?`, [Date.now(), app]);
   return getExtension(db, app)?.repairAttempts ?? 0;

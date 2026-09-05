@@ -1,10 +1,9 @@
 import { chmodSync, existsSync, readFileSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import type { OperationKind } from "../engine";
-import { isLifelinePath, isSensitivePath } from "../classify";
-import { unifiedDiff } from "../diff";
+import { isLifelinePath, isSensitivePath, realTarget } from "../classify";
+import { unifiedDiff, redactDiffForPlan } from "../diff";
 import { applyEdits, type AnchoredEdit } from "../hashline";
-import { realTarget } from "./file-write";
 
 // Hash-anchored edits of an existing file (operations/hashline.ts) as a tracked operation. The
 // tool computes `content` from the edits at call time, so the params are self-contained: verify,
@@ -51,8 +50,9 @@ export const fileEditKind: OperationKind<FileEditParams, Captured> = {
       details: {
         path: p.path,
         edits: p.edits.map((e) => `${e.op} ${e.anchor}${e.to ? `..${e.to}` : ""}`),
-        // The approval surface: the diff, not two dumps of a 500-line config.
-        diff: unifiedDiff(previous, p.content, p.path),
+        // The approval surface: the diff, not two dumps of a 500-line config. Existing lines are
+        // redacted (they are the app's secrets, not the model's input - audit A10).
+        diff: redactDiffForPlan(unifiedDiff(previous, p.content, p.path)),
       },
     };
   },

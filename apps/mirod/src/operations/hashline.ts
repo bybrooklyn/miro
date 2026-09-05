@@ -10,6 +10,10 @@ import { createHash } from "node:crypto";
 
 export const ANCHOR = /^(\d+):([0-9a-f]{4})$/;
 
+/** 16 bits of hash. An anchor is the line NUMBER and the hash together, so a stale anchor is
+ * accepted only if the line at that exact index changed to different text with the same 4 hex
+ * digits - one in 65,536 per edited line. ponytail: acceptable for config edits the owner reviews
+ * as a diff anyway; widen to 6 digits (and ANCHOR) if a silent stale match is ever seen (audit C12). */
 export function lineHash(text: string): string {
   return createHash("sha1").update(text).digest("hex").slice(0, 4);
 }

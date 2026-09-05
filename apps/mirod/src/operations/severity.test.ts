@@ -16,7 +16,6 @@ test("severityFrom: a clean box scores zero", () => {
     services: [service("nginx.service"), service("docker.service")],
     containers: [container("jellyfin"), container("radarr")],
     mounts: [mount("/", 40)],
-    recentIncidentCount: 0,
   });
   expect(score).toBe(0);
 });
@@ -26,7 +25,6 @@ test("severityFrom: counts failed units, not merely-inactive ones", () => {
     services: [service("nginx.service", "failed"), service("oneshot.service", "inactive")],
     containers: [],
     mounts: [],
-    recentIncidentCount: 0,
   });
   expect(score).toBe(1); // only the failed one counts - inactive is not a regression signal
 });
@@ -36,7 +34,6 @@ test("severityFrom: counts a crash-looping (restarting) container, not a stopped
     services: [],
     containers: [container("jellyfin", "restarting"), container("old", "exited")],
     mounts: [],
-    recentIncidentCount: 0,
   });
   expect(score).toBe(1);
 });
@@ -46,14 +43,8 @@ test("severityFrom: counts a mount at or above the critical threshold, not below
     services: [],
     containers: [],
     mounts: [mount("/", 89), mount("/data", 90), mount("/backup", 99)],
-    recentIncidentCount: 0,
   });
   expect(score).toBe(2);
-});
-
-test("severityFrom: recent incidents add directly to the score", () => {
-  const score = severityFrom({ services: [], containers: [], mounts: [], recentIncidentCount: 3 });
-  expect(score).toBe(3);
 });
 
 test("severityFrom: dimensions sum, matching PLAN.md's 'AND μ_post ≤ μ_pre' commit-gate design", () => {
@@ -61,7 +52,6 @@ test("severityFrom: dimensions sum, matching PLAN.md's 'AND μ_post ≤ μ_pre' 
     services: [service("a.service", "failed"), service("b.service", "failed")],
     containers: [container("c", "restarting")],
     mounts: [mount("/", 95)],
-    recentIncidentCount: 2,
   });
-  expect(score).toBe(2 + 1 + 1 + 2);
+  expect(score).toBe(2 + 1 + 1);
 });

@@ -84,6 +84,8 @@ export async function listContainers(): Promise<{ available: boolean; containers
 
 export function parseDockerInspect(json: string): ContainerDetail {
   const [raw] = JSON.parse(json) as any[];
+  // `docker inspect <unknown>` exits non-zero AND prints `[]`; a partial id can also match nothing.
+  if (!raw) throw new Error("no such container");
   const ports: ContainerDetail["ports"] = [];
   for (const [containerPort, bindings] of Object.entries(raw.NetworkSettings?.Ports ?? {})) {
     const list = (bindings as { HostPort?: string }[] | null) ?? [null];

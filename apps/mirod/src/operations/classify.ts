@@ -1,5 +1,5 @@
-import { accessSync, constants, realpathSync } from "node:fs";
-import { join, posix } from "node:path";
+import { accessSync, constants, existsSync, realpathSync } from "node:fs";
+import { basename, dirname, join, posix } from "node:path";
 import { homedir } from "node:os";
 
 // The command classifier (PLAN.md §5.7). Every agent-issued shell command - main agent, learn
@@ -82,7 +82,7 @@ type Token =
   | { kind: "redirect"; fd: number | null; op: string; target: string };
 
 const CONTROL_OPS = ["||", "&&", "|", ";", "&", "\n"] as const;
-const REDIRECT_OPS = [">>", ">|", "&>", ">&", "<>", "<<", ">", "<"] as const;
+const REDIRECT_OPS = [">>", ">|", ">&", "<>", "<<", ">", "<"] as const; // `&>`/`&>>` are handled ahead of the control operators
 
 function decodeAnsiC(body: string): string {
   return body.replace(/\\([nrt\\'"]|x[0-9a-fA-F]{2}|[0-7]{1,3})/g, (_, esc: string) => {
@@ -122,6 +122,16 @@ export function tokenize(input: string): Token[] {
     if (c === "\n") { tokens.push({ kind: "op", value: "\n" }); i++; continue; }
     if (c === "#") { while (i < n && input[i] !== "\n") i++; continue; }
 
+    // `&>` / `&>>` (redirect both streams) before the control operators, or the `&` half reads as
+    // "background" and the `>` as a bare truncation - a harmless idiom refused with the wrong reason,
+    // and the command itself never classified (audit A19).
+    if (input.startsWith("&>", i)) {
+      const rop = input.startsWith("&>>", i) ? "&>>" : "&>";
+      tokens.push({ kind: "redirect", fd: null, op: rop, target: "" });
+      i += rop.length;
+      continue;
+    }
+
     // Control operators.
     const op = CONTROL_OPS.find((o) => input.startsWith(o, i));
     if (op) {
@@ -155,7 +165,7 @@ export function tokenize(input: string): Token[] {
     if (rop) {
       j += rop.length;
       // `>&1` / `2>&1` / `>&2` - duplication target is a digit or `-`.
-      if (rop === ">&" || rop === "<>" || rop === "&>") {
+      if (rop === ">&" || rop === "<>") {
         let k = j;
         while (k < n && /[0-9-]/.test(input[k])) k++;
         if (k > j) {
@@ -380,12 +390,57 @@ export function isLifelinePath(path: string, home = homedir()): boolean {
   return LIFELINE_PATHS.some((re) => re.test(p));
 }
 
+/** The path with symlinks resolved - the file itself if it exists, else its nearest existing
+ * ancestor plus the remainder. What the kernel will open, as opposed to what the string says. */
+export function realTarget(path: string): string {
+  if (existsSync(path)) {
+    try {
+      return realpathSync(path);
+    } catch {
+      return path;
+    }
+  }
+  let dir = dirname(path);
+  const rest: string[] = [basename(path)];
+  while (!existsSync(dir) && dir !== dirname(dir)) {
+    rest.unshift(basename(dir));
+    dir = dirname(dir);
+  }
+  try {
+    return join(realpathSync(dir), ...rest);
+  } catch {
+    return path;
+  }
+}
+
 /** Exported for the file kinds and read tools: Miro's own secret material, private keys, and
  * credential files - never read into model context, never written or deleted through any
- * generic kind. */
+ * generic kind. Judged on the string AND on what it resolves to: a symlink at an innocent path
+ * pointing into ~/.ssh used to pass (audit S4 - `ln` is a confirmable mutate, so an agent could
+ * plant one). A string-only check is what the pure classifier tests exercise; it still holds. */
 export function isSensitivePath(path: string, home = homedir()): boolean {
   const p = normalizePath(path, home);
-  return SENSITIVE_READ_PATHS.some((re) => re.test(p));
+  if (SENSITIVE_READ_PATHS.some((re) => re.test(p))) return true;
+  const real = normalizePath(realTarget(p), home);
+  return real !== p && SENSITIVE_READ_PATHS.some((re) => re.test(real));
+}
+
+/** Directories whose subtree holds Miro's own state or secret material. Declaring one writable
+ * hands a sandboxed command the secrets themselves: `writes: ["/etc"]` was a plain mutate with
+ * shadow, sudoers and the SSH host keys bind-mounted read-write (audit A4). */
+export function holdsSecretMaterial(path: string, home = homedir()): boolean {
+  return holdsSecrets(normalizePath(path, home), home);
+}
+
+/** Top-level directories that contain lifeline paths without being one: `/usr` holds every
+ * binary, `/run` the systemd and Miro sockets. A write scope this wide is a lifeline change. */
+const LIFELINE_ROOTS = new Set(["/usr", "/bin", "/sbin", "/lib", "/lib64", "/run", "/etc/systemd", "/etc/systemd/system", "/var/lib/docker"]);
+export function isLifelineRoot(path: string, home = homedir()): boolean {
+  return LIFELINE_ROOTS.has(normalizePath(path, home));
+}
+
+export function isBlockDevicePath(path: string): boolean {
+  return BLOCK_DEVICE.test(path);
 }
 
 /** Masks credential-shaped values in text bound for model context (tool output, captures).
@@ -397,7 +452,17 @@ export function redactSecretsInText(text: string): string {
   const refs: string[] = [];
   const guarded = text.replace(/\{\{secret:[^}]+\}\}/g, (m) => "\u0000" + (refs.push(m) - 1) + "\u0000");
   const redacted = guarded
-    .replace(/("?(?:password|passwd|pw|token|api_?key|secret|authorization|x-emby-token|x-mediabrowser-token|x-api-key|access_?key|private_?key|cookie|set-cookie|session(?:_?id)?|jwt|refresh_?token|client_?secret)"?\s*[:=]\s*"?)([^"&\s,}]+)/gi, "$1[redacted]")
+    // key: value / key=value - a quoted value is taken whole (`"password": "two words"` used to leave
+    // ` words"` behind - audit B7); an unquoted one runs to the next delimiter.
+    // (\u0000 excluded from every value class: that is the guarded placeholder marker above.)
+    .replace(/("?(?:password|passwd|pw|token|api_?key|secret|authorization|x-emby-token|x-mediabrowser-token|x-api-key|access_?key|private_?key|cookie|set-cookie|session(?:_?id)?|jwt|refresh_?token|client_?secret)"?\s*[:=]\s*)("[^"\n\u0000]*"|'[^'\n\u0000]*'|[^"'&\s,}\u0000]+)/gi, (_, k: string, v: string) => `${k}${v[0] === '"' || v[0] === "'" ? `${v[0]}[redacted]${v[0]}` : "[redacted]"}`)
+    // Flag-form credentials on a command line: --password X, --password=X, --token X, --api-key X.
+    // Bare -p stays (it is also a port flag); the same value in the command's own output is caught
+    // by the shapes below. (audit B7)
+    .replace(/(--?(?:password|passwd|pass|token|api[-_]?key|secret|access[-_]?key|client[-_]?secret)(?:=|\s+))([^\s"'\u0000]+|"[^"\n\u0000]*"|'[^'\n\u0000]*')/gi, "$1[redacted]")
+    // curl -u user:pass, and userinfo in a URL: user:pass@host.
+    .replace(/(\s-u\s+[^\s:@]+:)(\S+)/g, "$1[redacted]")
+    .replace(/(\/\/[^/\s:@]+:)([^@\s/]+)@/g, "$1[redacted]@")
     .replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, "[redacted]")
     .replace(/(Authorization:\s*)(\S.*)/gi, "$1[redacted]")
     .replace(/(MediaBrowser[^"\n]*Token=")([^"]+)/gi, "$1[redacted]")
@@ -422,25 +487,49 @@ export function isLocalOrPrivateUrl(raw: string): boolean {
     return false;
   }
   if (u.protocol !== "http:" && u.protocol !== "https:") return false;
-  const h = u.hostname.replace(/^\[|\]$/g, "");
+  let h = u.hostname.replace(/^\[|\]$/g, "").toLowerCase();
   if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".lan") || h.endsWith(".home.arpa") || h.endsWith(".internal")) return true;
-  if (h === "::1" || h.startsWith("fe80:") || h.startsWith("fd") || h.startsWith("fc")) return true;
+  // An IPv4-mapped IPv6 literal reaches the v4 address; judge the v4 part. `new URL` renders
+  // [::ffff:127.0.0.1] as [::ffff:7f00:1], so the hex pair is turned back into dotted form.
+  if (h.startsWith("::ffff:")) {
+    const rest = h.slice(7);
+    if (rest.includes(".")) h = rest;
+    else {
+      const [hi = 0, lo = 0] = rest.split(":").map((x) => parseInt(x || "0", 16));
+      h = `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+    }
+  }
+  // The ULA/link-local prefixes are IPv6 literals only: tested against any hostname, `fdsomething.com`
+  // and `fc2.com` counted as private and a read-class curl egressed to them (audit A3).
+  if (h.includes(":")) return h === "::1" || h === "::" || h.startsWith("fe80:") || h.startsWith("fd") || h.startsWith("fc");
   const m = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
   if (!m) return !h.includes("."); // a bare single-label hostname is a LAN name
   const [a, b] = [Number(m[1]), Number(m[2])];
-  return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
+  return a === 0 || a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
 }
 
-const LIFELINE_UNITS = /^(ssh|sshd|docker|containerd|mirod|networking|systemd-networkd|systemd-resolved|NetworkManager|wg-quick@.*|tailscaled|firewalld|nftables|ufw)(\.(service|socket|target|timer))?$/;
+/** Units whose stop/disable/restart can drop the owner's connection or Miro itself - the source
+ * of truth for the systemd operation kinds (audit A7: the kinds carried a five-entry subset, so
+ * stopping docker, nftables or mirod ran unattended as a plain mutate). */
+export const LIFELINE_UNITS = /^(ssh|sshd|docker|containerd|mirod|networking|systemd-networkd|systemd-resolved|NetworkManager|wg-quick@.*|tailscaled|firewalld|nftables|ufw)(\.(service|socket|target|timer))?$/;
+/** Miro's own unit: it cannot verify or roll back its own stop, so that is never an operation. */
+export const SELF_UNIT = /^mirod(\.service)?$/;
 const LIFELINE_PROCESSES = /^(mirod|sshd|dockerd|containerd|systemd|init|NetworkManager|systemd-networkd)$/;
 
 /** Wrappers that run another command: classify the inner one. Each returns the inner argv, or
  * null when the invocation itself is the problem (interactive shell, no command). */
+/** Environment variables that change WHAT the inner command executes - a preloaded library, a
+ * different PATH, an interpreter startup file, git's ssh command. `env LD_PRELOAD=x cat f` is code
+ * execution wearing a read's clothes, and the assignment was skipped unread (audit A6). */
+const DANGEROUS_ENV = /^(LD_[A-Z0-9_]*|DYLD_[A-Z0-9_]*|GIT_[A-Z0-9_]*|BASH_ENV|ENV|SHELLOPTS|BASHOPTS|PERL5OPT|PERL5LIB|PYTHONPATH|PYTHONSTARTUP|PYTHONHOME|NODE_OPTIONS|NODE_PATH|BUN_[A-Z0-9_]*|RUBYOPT|RUBYLIB|IFS|PATH|GCONV_PATH|LOCPATH|NLSPATH|PROMPT_COMMAND|PS4)$/i;
+
 const WRAPPERS: Record<string, (argv: string[]) => { inner: string[] } | { forbidden: string } | null> = {
   env: (a) => {
     let i = 1;
     while (i < a.length && (a[i] === "-i" || a[i] === "-" || a[i].startsWith("-u") || a[i].startsWith("--") || /^[A-Za-z_][A-Za-z0-9_]*=/.test(a[i]))) {
       if ((a[i] === "-u" || a[i] === "--unset") && i + 1 < a.length) i++;
+      const name = a[i].includes("=") && !a[i].startsWith("-") ? a[i].slice(0, a[i].indexOf("=")) : "";
+      if (name && DANGEROUS_ENV.test(name)) return { forbidden: `env ${name}=… changes how the inner command executes (a preloaded library, PATH, an interpreter hook) - run the command without it` };
       i++;
     }
     return i < a.length ? { inner: a.slice(i) } : null;
@@ -559,6 +648,10 @@ const WRAPPERS: Record<string, (argv: string[]) => { inner: string[] } | { forbi
   ssh: (a) => {
     let i = 1;
     while (i < a.length && a[i].startsWith("-")) {
+      // -o ProxyCommand=… / LocalCommand=… run a LOCAL command before the remote one - read as the
+      // inner command's class, they were code execution mislabeled read (audit A6).
+      const opt = a[i] === "-o" ? a[i + 1] ?? "" : a[i].startsWith("-o") ? a[i].slice(2) : "";
+      if (/^\s*(ProxyCommand|LocalCommand|PermitLocalCommand|ProxyUseFdpass|KnownHostsCommand)\b/i.test(opt)) return { forbidden: `ssh -o ${opt.split(/[=\s]/)[0]} runs a local command outside the classifier` };
       if (/^-[bcDEeFIiJLlmOopQRSWw]$/.test(a[i])) i++;
       i++;
     }
@@ -609,6 +702,10 @@ const PLAIN_READERS = new Set([
   "gzip", "gunzip", "xz", "unzip", "zip", "base64", "tail", "watch", "true", "yes", "crontab", "kill",
   "pkill", "killall",
 ]);
+
+/** Readers whose argument is a FILE whose contents come back - the ones an unresolved expansion
+ * must not be allowed to aim (see classifySegment). */
+const CONTENT_READERS = new Set(["cat", "head", "tail", "tac", "nl", "less", "more", "grep", "egrep", "fgrep", "rg", "ag", "jq", "yq", "xxd", "hexdump", "od", "strings", "base64", "diff", "cmp", "wc", "sort", "uniq", "cut", "tr", "awk", "gawk", "mawk", "sed", "sqlite3"]);
 
 /** Flag present, including inside a combined short-flag cluster (`-bn1` contains `-b`, `-rf`
  * contains `-r`). Long flags match exactly or as `--flag=value`. A cluster only counts when it is
@@ -795,8 +892,11 @@ const RULES: Record<string, Rule> = {
     if (sub === "rm" || sub === "rmi") return "destructive";
     if (sub === "run" || sub === "create") {
       // The daemon does the container's work on the far side of a socket, outside any sandbox:
-      // a host bind mount is the host filesystem handed to whatever the container runs.
-      if (subArgs.some((x) => x === "--privileged" || x.startsWith("--pid=host") || x.startsWith("--cap-add") || x.startsWith("--security-opt") || x.startsWith("--userns=host") || x.startsWith("--ipc=host") || x.startsWith("--device"))) return "destructive";
+      // a host bind mount is the host filesystem handed to whatever the container runs. Flags in
+      // every spelling: `--privileged=true`, `--pid host` (space form) used to read as mutate (audit B9).
+      const flagName = (x: string) => x.split("=")[0];
+      const hostNs = subArgs.some((x, i) => ["--pid", "--ipc", "--userns"].includes(flagName(x)) && (x.includes("=") ? x.split("=")[1] : subArgs[i + 1]) === "host");
+      if (hostNs || subArgs.some((x) => ["--privileged", "--cap-add", "--security-opt", "--device", "--volumes-from"].includes(flagName(x)))) return "destructive";
       const binds = subArgs.flatMap((x, i) => (x === "-v" || x === "--volume" || x === "--mount" ? [subArgs[i + 1] ?? ""] : x.startsWith("-v") || x.startsWith("--volume=") || x.startsWith("--mount=") ? [x.replace(/^(-v|--volume=|--mount=)/, "")] : []));
       if (binds.some((b) => /^\/(:|$)/.test(b) || /(^|,)(source|src)=\/(,|$)/.test(b))) return "forbidden"; // the root filesystem itself
       if (binds.some((b) => /^\/(etc|root|home|boot|var\/lib\/miro|usr|bin|sbin|lib|proc|sys|dev)(:|\/|$)/.test(b) || /docker\.sock/.test(b) || /(^|,)(source|src)=\/(etc|root|home|boot|var\/lib\/miro|usr|bin|sbin|lib|proc|sys|dev)(,|\/|$)/.test(b))) return "destructive";
@@ -827,8 +927,12 @@ const RULES: Record<string, Rule> = {
     if (args.some((x) => x.startsWith("-fprint") || x === "-fls")) return "mutate";
     return "read";
   },
-  sed: (a) => (hasFlag(a, "-i", "--in-place") || a.slice(1).some((x) => /^-[a-zA-Z]*i/.test(x) && !x.startsWith("--")) ? "mutate" : "read"),
-  awk: (a) => (a.slice(1).some((x) => /\bprint[f]?\s*[^;]*>\s*"/.test(x) || /\bsystem\s*\(/.test(x) || x === "-i" || x.startsWith("-i")) ? "mutate" : "read"),
+  // sed's `w file` / `W file` commands and the `s///w file` flag write a file with no -i; awk's
+  // `print | "cmd"` and `|& "cmd"` pipe into a shell command - both were invisible to the rules,
+  // which looked only at -i and at `> "file"` (audit A6).
+  sed: (a) =>
+    hasFlag(a, "-i", "--in-place") || a.slice(1).some((x) => (/^-[a-zA-Z]*i/.test(x) && !x.startsWith("--")) || /(^|[;{\n])\s*[wW]\s+\S/.test(x) || /\/[gpiImM0-9]*w\s+\S/.test(x)) ? "mutate" : "read",
+  awk: (a) => (a.slice(1).some((x) => /\bprint[f]?\s*[^;]*>\s*"/.test(x) || /\|&?\s*"/.test(x) || /\bsystem\s*\(/.test(x) || x === "-i" || x.startsWith("-i")) ? "mutate" : "read"),
   gawk: (a) => RULES.awk(a, undefined as any),
   mawk: (a) => RULES.awk(a, undefined as any),
   curl: (a) => {
@@ -1241,7 +1345,13 @@ function classifySegment(segment: Segment, env: Env): SegmentClassification {
   // `read` needs a clean segment and a trusted binary; anything else demotes to mutate.
   if (cls === "read") {
     if (segment.background) { cls = "mutate"; reason = "backgrounded with &"; }
-    else if (segment.hasExpansion) { cls = "mutate"; reason = "unresolved shell expansion"; }
+    else if (segment.hasExpansion) {
+      // A content reader whose path is an expansion (`cat $HOME/.ssh/id_rsa`) hides the path from
+      // the secret rules above; demoted to mutate it became a confirmed operation that READ the
+      // file with the host filesystem visible. Refused instead, with the fix (audit B8).
+      if (CONTENT_READERS.has(name)) return { segment, effectiveArgv: argv, class: "forbidden", reason: `${name} with an unresolved shell expansion in its arguments - a variable can hide a secret path; write the literal path` };
+      cls = "mutate"; reason = "unresolved shell expansion";
+    }
     else if (segment.globInCommand) { cls = "mutate"; reason = "glob in command position"; }
     else if (EXFIL_NET_TOOLS.has(name)) {
       const pub = networkProbePublicTarget(argv);

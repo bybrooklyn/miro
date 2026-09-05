@@ -34,7 +34,14 @@ export function listSecretRefs(db: Database, prefix = ""): SecretRef[] {
 
 export function createSecretStore(keyPath: string): SecretStore {
   function loadOrCreateKey(): Buffer {
-    if (existsSync(keyPath)) return readFileSync(keyPath);
+    if (existsSync(keyPath)) {
+      const key = readFileSync(keyPath);
+      // A truncated key file (a crash during the first write) would otherwise surface as
+      // "Invalid key length" from every encrypt/decrypt for the process's whole life, with nothing
+      // pointing at the file (audit B6). Named here, once, at boot.
+      if (key.length !== 32) throw new Error(`${keyPath} is not a 32-byte key (${key.length} bytes) - the file is truncated or not a key; move it aside to start fresh (secrets encrypted with the original key are unreadable without it)`);
+      return key;
+    }
     const key = randomBytes(32);
     writeFileSync(keyPath, key, { mode: 0o600 });
     return key;

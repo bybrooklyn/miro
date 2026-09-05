@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import type { ServerEvent } from "@miro/protocol";
 import * as store from "./store";
 import * as memory from "../memory/store";
-import type { CommandClass } from "./classify";
+import { isBlockDevicePath, type CommandClass } from "./classify";
 import { computeSeverity as computeSeverityLive } from "./severity";
 import type { RetryLedger } from "./retry-ledger";
 
@@ -84,6 +84,10 @@ export interface OperationToolContext {
   db: Database;
   send: (event: ServerEvent) => void;
   waitForAnswer: (id: string) => Promise<string>;
+  /** Forgets a pending answer the engine stopped waiting for (a lifeline window that timed out) -
+   * without it the resolver stayed registered forever and a late answer resolved into nothing
+   * (audit B2). Optional: a test context without it merely leaks a closure. */
+  cancelAnswer?: (id: string) => void;
   /** Secret resolution for kinds that inject a credential by reference at apply time (never in a
    * plan, never in model-visible output) - e.g. http_mutation's auth header. */
   getSecret?: (ref: string) => string | null;
@@ -201,7 +205,18 @@ export async function runOperation<P, S>(
 
     store.setPhase(db, id, "capturing");
     send({ type: "operation_progress", id, phase: "capturing" });
-    const captured = await kind.captureState(params);
+    let captured: S;
+    try {
+      captured = await kind.captureState(params);
+    } catch (err) {
+      // Nothing has touched the server yet, so no rollback and no incident - but the client and
+      // the row must both learn the outcome: a throw here used to leave the operation in
+      // "capturing" and the client's pending operation unresolved until the next boot (audit B1).
+      store.setPhase(db, id, "rolledback", `capture failed: ${String(err)}`);
+      const message = `Could not capture the current state - ${goal}: ${String(err)}. Nothing was changed.`;
+      send({ type: "operation_result", id, outcome: "rolledback", message });
+      return { outcome: "rolledback" as const, message };
+    }
     store.setCapturedAndApplying(db, id, JSON.stringify(captured), JSON.stringify(captured));
 
     send({ type: "operation_progress", id, phase: "applying" });
@@ -247,6 +262,7 @@ export async function runOperation<P, S>(
           timeoutMs: windowMs,
         });
         const answer = await Promise.race([waitForAnswer(`lifeline_confirm:${id}`), Bun.sleep(windowMs).then(() => "timeout" as const)]);
+        if (answer === "timeout") ctx.cancelAnswer?.(`lifeline_confirm:${id}`);
         if (answer !== "keep") {
           await kind.rollback(params, captured).catch((err) => console.error("[mirod] rollback failed", err));
           const why = answer === "timeout" ? "no reachability confirmation within the window" : "rolled back at the user's request";
@@ -313,8 +329,10 @@ function unattendedGate(db: Database): string | null {
  * a glob. Returns the offending entry, or null. Exported so a kind can refuse in describe() too. */
 export function badWriteScope(writes: string[] | undefined): string | null {
   for (const w of writes ?? []) {
-    const t = w.trim();
+    const t = w.trim().replace(/\/+$/, "") || "/";
     if (t === "" || t === "/" || /[*?[]/.test(t)) return w;
+    // Kernel and device trees: a writable /dev is every block device (audit A4).
+    if (t === "/proc" || t === "/sys" || t === "/dev" || isBlockDevicePath(t)) return w;
   }
   return null;
 }
@@ -380,8 +398,19 @@ export async function reconcileOperations(db: Database, kinds: Record<string, Op
       memory.recordIncident(db, { kind: op.kind, goal: op.goal, phase: "rolledback", error });
       continue;
     }
-    const params = JSON.parse(op.params);
-    const captured = JSON.parse(op.capturedState);
+    let params: unknown;
+    let captured: unknown;
+    try {
+      params = JSON.parse(op.params);
+      captured = JSON.parse(op.capturedState);
+    } catch (err) {
+      // A torn row (the crash hit mid-write) must not abort reconciliation for every later crashed
+      // operation (audit B4): recorded as unrecoverable, on to the next.
+      const error = `reconciled after crash: unreadable recovery data (${String(err instanceof Error ? err.message : err)})`;
+      store.setPhase(db, op.id, "rolledback", error);
+      memory.recordIncident(db, { kind: op.kind, goal: op.goal, phase: "rolledback", error });
+      continue;
+    }
     try {
       if (await kind.verify(params)) {
         // A lifeline change (a firewall/SSH edit that could lock the user out) is only committed

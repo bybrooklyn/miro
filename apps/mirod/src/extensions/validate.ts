@@ -23,6 +23,10 @@ const COMPILER_OPTIONS: ts.CompilerOptions = {
   strict: true,
   skipLibCheck: true,
   noEmit: true,
+  // No ambient @types/*: without this every @types package in the monorepo (react, csstype ...) is
+  // pulled into every validation - measured 23s → 17s on the reference extension (audit #7). The
+  // DOM lib stays: @miro/sdk's schema engine references File/FormDataEntryValue (Vendoring note).
+  types: [],
 };
 
 export function typecheckExtension(dir: string): string[] {
@@ -55,12 +59,19 @@ export function scanForbiddenImports(dir: string): string[] {
       let specifier: string | null = null;
       if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
         specifier = node.moduleSpecifier.text;
+      } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+        specifier = node.moduleSpecifier.text; // `export * from "x"` is an import too
       } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
         const arg = node.arguments[0];
+        // A computed specifier (`import("node:" + "fs")`) cannot be judged, so it is refused
+        // outright rather than passed as unseen (audit A8).
         if (arg && ts.isStringLiteral(arg)) specifier = arg.text;
+        else violations.push(`${file}: forbidden import "<computed>" - a dynamic import() needs a string literal`);
       }
       if (specifier !== null) {
-        const isRelative = specifier.startsWith("./") || specifier.startsWith("../");
+        // Same-directory only, as documented: "../" walked out of the extension directory and
+        // into the daemon's own source, which tsc resolved happily (audit A8).
+        const isRelative = /^\.\/[^/]+$/.test(specifier);
         if (!isRelative && !ALLOWED_MODULES.has(specifier)) {
           violations.push(`${file}: forbidden import "${specifier}"`);
         }
@@ -326,9 +337,11 @@ export async function validateExtension(
     }
   }
 
-  // Operation bindings never execute at validation time, but their bound params are dry-run through
+  // Operation bindings never execute at validation time, but the NO-ARGUMENT ones are dry-run through
   // the real kind's describe(): the classifier refuses a forbidden command, the URL guard refuses a
   // public host, a literal credential header is refused - at learn time, not in front of the user.
+  // A binding that takes arguments is bound for the first time when the agent calls it and meets
+  // the same checks then (audit C7: the comment used to claim every binding was dry-run).
   for (const op of tools.filter((t) => t.kind === "operation")) {
     if (requiresArguments(op.parameters) || invalidSchema(op.parameters)) continue;
     try {

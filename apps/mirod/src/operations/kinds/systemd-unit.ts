@@ -1,7 +1,8 @@
 import { run } from "../../inventory/exec";
 import { getServiceState, getUnitEnabled } from "../../inventory/systemd";
+import { LIFELINE_UNITS } from "../classify";
 import type { OperationKind } from "../engine";
-import { LIFELINE_ADJACENT } from "./systemd-restart";
+import { refuseSelf } from "./systemd-restart";
 
 // Every systemctl change other than a restart (PLAN.md §5.23). It exists because `systemctl` can
 // never run as a sandboxed shell command: bubblewrap gives the command its own PID namespace
@@ -27,7 +28,7 @@ interface Captured {
 
 /** Unit names are passed as argv (never through a shell), so this is a sanity check, not an
  * injection guard: a stray space or quote is a model mistake worth naming early. */
-const UNIT_NAME = /^[A-Za-z0-9@._:\\-]+$/;
+const UNIT_NAME = /^[A-Za-z0-9@._:-]+$/;
 
 function unitFor(p: SystemdUnitParams): string {
   if (p.action === "daemon-reload") return "";
@@ -53,7 +54,8 @@ export const systemdUnitKind: OperationKind<SystemdUnitParams, Captured> = {
         dryRunFidelity: "exact",
       };
     }
-    const lifeline = LIFELINE_ADJACENT.has(unit) && (p.action === "stop" || p.action === "disable");
+    if (p.action === "stop" || p.action === "disable") refuseSelf(unit);
+    const lifeline = LIFELINE_UNITS.test(unit) && (p.action === "stop" || p.action === "disable");
     const state = await getServiceState(unit);
     const enabled = await getUnitEnabled(unit);
     const expects: Record<UnitAction, string> = {

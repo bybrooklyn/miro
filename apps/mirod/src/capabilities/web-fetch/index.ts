@@ -1,5 +1,6 @@
 import { ImplementationError, type Capability, type Implementation, type Policy, type Registry, type RouteResult } from "../registry";
 import { isLocalOrPrivateUrl, redactSecretsInText } from "../../operations/classify";
+import { readTextCapped } from "../../fetch-body";
 
 // web.fetch (PLAN.md §5.14 slice 2): a public web page as readable text, for research. Two
 // implementations: Ollama cloud's web_fetch (cleaned content, links - when a key is on file) and a
@@ -43,7 +44,7 @@ export function ollamaFetchImplementation(getKey: () => string | null, url = OLL
         body: JSON.stringify({ url: req.url }),
         signal,
       });
-      const text = await res.text();
+      const text = await readTextCapped(res, MAX_PAGE_BYTES);
       if (!res.ok) throw new ImplementationError(`ollama web_fetch: HTTP ${res.status}`, res.status);
       const body = JSON.parse(text) as { title?: string; content?: string; links?: (string | { text?: string; url?: string })[] };
       return {
@@ -55,7 +56,9 @@ export function ollamaFetchImplementation(getKey: () => string | null, url = OLL
   };
 }
 
-export function directFetchImplementation(): Implementation<WebFetchRequest, WebFetchResponse> {
+/** `isPrivate` is injectable for the fixture server in tests (which is on loopback, exactly what
+ * the real guard refuses); the daemon always uses the classifier's guard. */
+export function directFetchImplementation(isPrivate: (url: string) => boolean = isLocalOrPrivateUrl): Implementation<WebFetchRequest, WebFetchResponse> {
   return {
     id: "direct",
     capability: WEB_FETCH.id,
@@ -64,22 +67,34 @@ export function directFetchImplementation(): Implementation<WebFetchRequest, Web
     available: () => true,
     timeoutMs: 15_000,
     async run(req, signal) {
+      // fetchWeb refuses a private ENTRY url; every hop after it is checked here, because a public
+      // page may 30x - or meta-refresh, or canonical-link - to 127.0.0.1:8096 and hand an
+      // unauthenticated local service's body to the model (audit S1, reproduced with two local
+      // servers). redirect: "manual" so the target is inspected before it is fetched.
       // Client-side redirects (a meta refresh, a canonical link, `window.location.href = ...`) are how
       // docs sites move pages - found live: jellyfin.org's hardware-acceleration URL is a 448-byte JS
       // stub whose real page is 40KB. An empty body with such a pointer is followed, a few hops at most.
       let url = req.url;
+      let clientHops = 0;
       for (let hop = 0; ; hop++) {
-        const res = await fetch(url, { headers: { Accept: "text/html,application/xhtml+xml,text/plain,application/json;q=0.9,*/*;q=0.5", "User-Agent": "Miro/0.0 (+self-hosted server agent)" }, redirect: "follow", signal });
+        if (hop > 0 && isPrivate(url)) throw new ImplementationError(`refused: ${req.url} redirects to ${url}, a local or private address`);
+        if (hop > MAX_HOPS) throw new ImplementationError(`GET ${req.url}: more than ${MAX_HOPS} redirects`);
+        const res = await fetch(url, { headers: { Accept: "text/html,application/xhtml+xml,text/plain,application/json;q=0.9,*/*;q=0.5", "User-Agent": "Miro/0.0 (+self-hosted server agent)" }, redirect: "manual", signal });
+        if (res.status >= 300 && res.status < 400) {
+          const location = res.headers.get("location");
+          if (!location) throw new ImplementationError(`GET ${url}: HTTP ${res.status} with no location`, res.status);
+          url = new URL(location, url).toString();
+          continue;
+        }
         if (!res.ok) throw new ImplementationError(`GET ${url}: HTTP ${res.status}`, res.status);
-        const raw = await res.text();
-        const body = raw.length > MAX_PAGE_BYTES ? raw.slice(0, MAX_PAGE_BYTES) : raw;
+        const body = await readTextCapped(res, MAX_PAGE_BYTES);
         const type = res.headers.get("content-type") ?? "";
         if (!(/html|xml/.test(type) || /^\s*<(!doctype|html)/i.test(body))) return { title: "", content: body, links: [] };
-        const landed = res.url || url;
-        const page = extractReadable(body, landed);
-        if (page.content.length > 0 || hop >= MAX_CLIENT_REDIRECTS) return page;
-        const next = clientRedirectOf(body, landed);
-        if (!next || next === landed) return page;
+        const page = extractReadable(body, url);
+        if (page.content.length > 0 || clientHops >= MAX_CLIENT_REDIRECTS) return page;
+        const next = clientRedirectOf(body, url);
+        if (!next || next === url) return page;
+        clientHops++;
         url = next;
       }
     },
@@ -87,6 +102,8 @@ export function directFetchImplementation(): Implementation<WebFetchRequest, Web
 }
 
 export const MAX_CLIENT_REDIRECTS = 3;
+/** Server-side and client-side hops together. */
+export const MAX_HOPS = 8;
 
 /** Where an empty page says its content really is: a meta refresh, a canonical link that differs
  * from the page's own URL, or a plain JS location assignment. Null when there is no such pointer. */
@@ -177,7 +194,7 @@ export interface WebFetchAnswer {
   attempts: RouteResult<WebFetchResponse>["attempts"];
 }
 
-export async function fetchWeb(registry: Registry, url: string, maxChars = DEFAULT_MAX_CHARS): Promise<WebFetchAnswer> {
+export async function fetchWeb(registry: Registry, url: string, maxChars = DEFAULT_MAX_CHARS, isPrivate: (url: string) => boolean = isLocalOrPrivateUrl): Promise<WebFetchAnswer> {
   const empty = { title: "", content: "", truncated: false, links: [], source: null, attempts: [] };
   let parsed: URL;
   try {
@@ -186,7 +203,7 @@ export async function fetchWeb(registry: Registry, url: string, maxChars = DEFAU
     return { available: true, refused: `${url} is not a URL`, ...empty };
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return { available: true, refused: `${url}: only http(s) can be fetched`, ...empty };
-  if (isLocalOrPrivateUrl(url)) return { available: true, refused: `${url} is a local or private address - use http_get for that`, ...empty };
+  if (isPrivate(url)) return { available: true, refused: `${url} is a local or private address - use http_get for that`, ...empty };
   const routed = await registry.route<WebFetchRequest, WebFetchResponse>(WEB_FETCH.id, { url });
   if (!routed.result) return { available: registry.implementations(WEB_FETCH.id).length > 0, ...empty, attempts: routed.attempts };
   const content = redactSecretsInText(routed.result.content);

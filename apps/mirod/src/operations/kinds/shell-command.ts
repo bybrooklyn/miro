@@ -1,7 +1,9 @@
+import { existsSync } from "node:fs";
+import { basename } from "node:path";
 import type { OperationKind } from "../engine";
-import { classifyCommand, normalizePath, isSensitivePath, isLifelinePath, maxClass, redactSecretsInText } from "../classify";
+import { classifyCommand, normalizePath, realTarget, isSensitivePath, holdsSecretMaterial, isLifelinePath, isLifelineRoot, maxClass, redactSecretsInText } from "../classify";
 import { runSandboxed, type SandboxResult } from "../sandbox";
-import { snapshotPaths, restoreSnapshot, type Snapshot } from "../snapshot";
+import { snapshotPaths, restoreSnapshot, sizeOf, SNAPSHOT_MAX_BYTES, type Snapshot } from "../snapshot";
 
 // The generic shell mutation (PLAN.md §5.4 B, §5.7). The model supplies the command, the scope it
 // needs (writable roots + network), and optionally a verify command and a rollback command; the
@@ -51,29 +53,45 @@ export const shellCommandKind: OperationKind<ShellCommandParams, ShellCommandCap
       if (r.class === "forbidden") throw new Error(`refused: rollback command - ${r.reasons.join("; ")}`);
     }
     // The declared scope is part of what is being approved (adversarial review: `tar -C /etc`
-    // with writes:["/etc"] classified from the command text alone stayed `mutate`).
+    // with writes:["/etc"] classified from the command text alone stayed `mutate`). Judged on the
+    // declared path AND on what it resolves to: a bind mount follows the symlink, so
+    // `/srv/app/data -> /etc` would otherwise be approved as /srv/app/data and mounted as /etc
+    // (audit A5). The plan shows the declared paths - what the owner reads.
     const writes = p.writes.map((w) => normalizePath(w));
-    const secret = writes.find((w) => isSensitivePath(w));
-    if (secret) throw new Error(`refused: declared write scope ${secret} is Miro's own state or secret material`);
-    if (writes.includes("/")) throw new Error("refused: a command cannot declare the whole filesystem writable");
-    const cls = writes.some((w) => isLifelinePath(w)) ? maxClass(c.class, "lifeline") : c.class;
-    const warning =
-      cls === "lifeline"
-        ? "can affect SSH, networking, or Miro itself"
-        : cls === "destructive"
-          ? "destroys data or is hard to reverse"
-          : undefined;
+    const judged = [...new Set([...writes, ...writes.map(realTarget)])];
+    const secret = judged.find((w) => isSensitivePath(w) || holdsSecretMaterial(w));
+    if (secret) throw new Error(`refused: declared write scope ${secret} is, or contains, Miro's own state or secret material - name the exact directory the command writes (/etc, /var, /root, /home are never a scope)`);
+    if (judged.includes("/")) throw new Error("refused: a command cannot declare the whole filesystem writable");
+    // A root that does not exist and is named like a file: the sandbox creates a DIRECTORY there
+    // (mkdir -p), the command's write then fails and the directory litters the host (audit B3).
+    const fileLike = p.writes.find((w) => !existsSync(w) && /\.[A-Za-z0-9]{1,6}$/.test(basename(w)) && !basename(w).endsWith(".d"));
+    if (fileLike) throw new Error(`refused: declared write root ${fileLike} does not exist and looks like a file - declare its parent directory (roots are directories, sockets, or existing files)`);
+    const cls = judged.some((w) => isLifelinePath(w) || isLifelineRoot(w)) ? maxClass(c.class, "lifeline") : c.class;
+    // The snapshot cap is known now, not only in captureState: promising "restored from snapshot"
+    // for roots that will exceed it made rollback a silent no-op (audit A13).
+    let snapshotBytes = 0;
+    for (const w of writes) if (existsSync(w)) snapshotBytes += sizeOf(w, SNAPSHOT_MAX_BYTES);
+    const overCap = snapshotBytes > SNAPSHOT_MAX_BYTES;
+    const warnings = [
+      cls === "lifeline" ? "can affect SSH, networking, or Miro itself" : cls === "destructive" ? "destroys data or is hard to reverse" : undefined,
+      overCap ? `the declared roots exceed the ${Math.round(SNAPSHOT_MAX_BYTES / 1e6)} MB snapshot cap - nothing is snapshotted${p.rollback ? "; only the undo command can revert" : ", and no undo command was declared"}` : undefined,
+    ].filter(Boolean);
     return {
       summary: `Run: ${p.command}`,
       autoApprove: false, // ponytail: maturity-based auto-approve for mutate lands with the ladder (§5.4 G)
       class: cls,
       writes,
       network: p.network,
-      warning,
+      warning: warnings.length ? warnings.join("; ") : undefined,
+      irreversible: overCap && !p.rollback ? true : undefined,
       expects: p.verify ? `the verify command (${p.verify}) exits 0 afterwards` : "no verify command declared - the outcome cannot be confirmed",
-      rollbackWhen: p.rollback
-        ? "verify fails or the command fails - the declared roots are restored from snapshot, then the undo command runs"
-        : "verify fails or the command fails - the declared roots are restored from snapshot",
+      rollbackWhen: overCap
+        ? p.rollback
+          ? "verify fails or the command fails - the undo command runs (the roots are too large to snapshot)"
+          : "never - the roots are too large to snapshot and no undo command was declared"
+        : p.rollback
+          ? "verify fails or the command fails - the declared roots are restored from snapshot, then the undo command runs"
+          : "verify fails or the command fails - the declared roots are restored from snapshot",
       scopeEvidence: "the roots the command itself declared writable",
       // An arbitrary command's effect cannot be predicted from its text (the classifier judges risk,
       // not outcome) - honestly "none", shown as "effect unknown" rather than a false "no changes".
