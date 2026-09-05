@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import type { ServerEvent } from "@miro/protocol";
 import { ensureNotificationsTable, insertNotification, listUndelivered, markDelivered, recentByTitle } from "./store";
 import { buildGotifyRequest, buildNtfyRequest, gotifySink, ntfySink, testSink, type Notification, type NotifyTier, type Sink } from "./sinks";
+import { redactSecretsInText } from "../operations/classify";
 
 // The daemon's one notification bus (PLAN.md §5.31). Like the capability layer, it is configured
 // once at boot and reached by background code through this module (never by threading a parameter):
@@ -60,10 +61,14 @@ export function resetNotifications(): void {
 
 /** Fire-and-forget, never throws. Persists first (survives a broadcast/phone failure), delivers to
  * connected TUIs, and phones the needs_attention ones. */
-export function notify(n: Notification): void {
+export function notify(input: Notification): void {
   if (!configured) return;
   const { db, broadcast, sinks } = configured;
   try {
+    // Redaction choke point (same guarantee memory's remember() gives): a title or body must never
+    // carry a secret to a phone, the TUI, or the store - a repair error, a drift message, or a
+    // model-written notify could contain one. Everything downstream uses the redacted copy.
+    const n: Notification = { ...input, title: redactSecretsInText(input.title), body: redactSecretsInText(input.body) };
     const id = crypto.randomUUID();
     // Decide the phone push BEFORE persisting: recentByTitle must not match the row we are about to
     // insert, or every needs_attention would dedup against itself and never reach a sink (found

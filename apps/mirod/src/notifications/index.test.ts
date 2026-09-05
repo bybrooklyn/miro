@@ -101,6 +101,18 @@ test("a needs_attention push reaches a real sink; a same-title repeat is deduped
   server.stop(true);
 });
 
+test("notify redacts a secret out of the title and body before it is persisted or broadcast", () => {
+  const { db, sent } = harness(1);
+  notify({ tier: "needs_attention", title: "Repair failed: token ghp_abcdefgh12345678", body: "password: hunter2", source: "repair", at: 1000 });
+  const text = (sent[0] as { text: string }).text;
+  expect(text).not.toContain("ghp_abcdefgh12345678");
+  expect(text).not.toContain("hunter2");
+  expect(text).toContain("[redacted]");
+  const row = db.query("SELECT title, body FROM notifications").get() as { title: string; body: string };
+  expect(row.title).not.toContain("ghp_abcdefgh12345678");
+  expect(row.body).not.toContain("hunter2");
+});
+
 test("unconfigured: notify is a no-op, never a throw", () => {
   resetNotifications();
   expect(() => notify({ tier: "needs_attention", title: "x", body: "", source: "agent", at: 0 })).not.toThrow();
