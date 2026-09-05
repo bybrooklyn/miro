@@ -152,5 +152,11 @@ Gotchas worth knowing before you try:
   JSON-capable SearXNG pool re-probed daily from searx.space. Measured 2026-09-05: only ~2 public
   instances answer `format=json` (most 429 it by default), so without a key or a self-hosted node
   the learn agent mostly probes blind. Brave is gone.
+- The VM's `disk.qcow2` only grows unless the guest trims: `sudo fstrim -av` inside the VM
+  releases freed clusters (the drive is attached with `discard=unmap`). An image that bloated
+  before that was on (found at 11G for 4.2G of data): `docker image prune -a`, `apt-get clean`,
+  zero-fill (`dd if=/dev/zero of=/var/tmp/zero`, then rm), clean `poweroff`, then on the Mac
+  `qemu-img convert -O qcow2 -B <base> -F qcow2 disk.qcow2 compact.qcow2` and swap it in. After
+  any boot: restart mirod, and `docker start jellyfin` (that container has no restart policy).
 
 See `PLAN.md`'s "Working notes / gotchas" section for the full, current list.
