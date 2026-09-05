@@ -62,7 +62,7 @@ const credentialCaptureParams = Type.Object({
     },
     { description: "Exactly one source." },
   ),
-  pattern: Type.String({ description: "A regular expression with exactly ONE capture group around the value, matched line by line; the first match wins. E.g. 'temporary password is provided for this session: (\\\\S+)' or 'ApiKey>([^<]+)<'." }),
+  pattern: Type.String({ description: "A regular expression with exactly ONE capture group around the value, matched line by line; the NEWEST (last) match wins - an app that prints a fresh first-start password on every start has several. E.g. 'temporary password is provided for this session: (\\\\S+)' or 'ApiKey>([^<]+)<'." }),
 });
 
 /** The only credential refs an agent may write - Miro's own refs (provider.*, transport.*, oauth.*) never. */
@@ -150,12 +150,14 @@ export function buildInteractionTools(ctx: InteractionContext) {
         } catch (err) {
           return textResult({ saved: false, reason: `could not read ${String(err instanceof Error ? err.message : err)}` });
         }
-        for (let i = 0; i < lines.length; i++) {
+        // The LAST match: a log appends, and an app that mints a fresh first-start password on every
+        // start (qBittorrent) has several such lines - the first was the stale one (run #3).
+        for (let i = lines.length - 1; i >= 0; i--) {
           const m = re.exec(lines[i]!);
           if (!m || !m[1]) continue;
           ctx.setSecret(params.ref, m[1]);
           // The line goes back redacted - enough to confirm WHAT matched, never the value itself.
-          return textResult({ saved: true, ref: params.ref, source, line: i + 1, matched: redactSecretsInText(lines[i]!.slice(0, 200)) });
+          return textResult({ saved: true, ref: params.ref, source, line: i + 1, matched: redactSecretsInText(lines[i]!.slice(0, 200)), note: "the newest matching line was taken" });
         }
         return textResult({ saved: false, reason: `no line in ${source} matched the pattern (${lines.length} lines read)` });
       },

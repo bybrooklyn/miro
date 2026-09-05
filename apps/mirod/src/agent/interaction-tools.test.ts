@@ -10,12 +10,14 @@ import { buildInteractionTools } from "./interaction-tools";
 test("credential_capture stores the regex group by reference and never returns the value; refuses bad refs, secret paths, no match", async () => {
   const dir = mkdtempSync(join(tmpdir(), "capture-"));
   const log = join(dir, "qbittorrent.log");
-  writeFileSync(log, "(N) 2026-09-05 - qBittorrent v5 started\n(N) The WebUI administrator username is: admin\n(N) A temporary password is provided for this session: Zq8kPa2mVx\n(N) You should set your own password in program preferences.\n");
+  // Two starts, two temporary passwords: the newest one is the live one (run #3 captured the stale first).
+  writeFileSync(log, "(N) 2026-09-05 - qBittorrent v5 started\n(N) The WebUI administrator username is: admin\n(N) A temporary password is provided for this session: OldOne1111\n(N) You should set your own password in program preferences.\n(N) 2026-09-05 - qBittorrent v5 started\n(N) A temporary password is provided for this session: Zq8kPa2mVx\n");
   const h = harness({});
   const capture = h.tool("credential_capture");
   const r = await capture.execute("1", { ref: "extension.qbittorrent.bootstrap_password", from: { path: log }, pattern: "temporary password is provided for this session: (\\S+)" });
-  expect(r.details).toMatchObject({ saved: true, ref: "extension.qbittorrent.bootstrap_password", line: 3 });
+  expect(r.details).toMatchObject({ saved: true, ref: "extension.qbittorrent.bootstrap_password", line: 6 });
   expect(JSON.stringify(r)).not.toContain("Zq8kPa2mVx"); // the matched line comes back redacted
+  expect(JSON.stringify(r)).not.toContain("OldOne1111");
   expect(h.secrets["extension.qbittorrent.bootstrap_password"]).toBe("Zq8kPa2mVx");
 
   expect((await capture.execute("2", { ref: "provider.anthropic", from: { path: log }, pattern: "(.+)" })).details).toMatchObject({ saved: false, reason: expect.stringMatching(/extension\.<app>\.<name>/) });

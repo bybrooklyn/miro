@@ -30,8 +30,12 @@ export interface TurnGuardLimits {
   failedOperations: number;
 }
 
+/** Strong models get five distinct failed plans a turn, not three: in the golden-proof runs (PLAN.md
+ * §5.29) three turns in a row ended on the cap while one real problem (an app's login) was being
+ * worked from different angles and unrelated, sound steps were still queued - that is the cap
+ * stopping progress, not thrash. Identical plans are refused regardless of count. */
 export function limitsFor(tier: ModelTier): TurnGuardLimits {
-  return tier === "weak" ? { identicalCalls: 2, failedOperations: 2 } : { identicalCalls: 3, failedOperations: 3 };
+  return tier === "weak" ? { identicalCalls: 2, failedOperations: 2 } : { identicalCalls: 3, failedOperations: 5 };
 }
 
 export interface TurnGuard {
