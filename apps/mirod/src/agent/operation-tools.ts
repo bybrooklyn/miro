@@ -28,7 +28,7 @@ const serviceControlParams = Type.Object({
 
 const shellCommandParams = Type.Object({
   command: Type.String({ description: "The shell command. It is classified first: forbidden commands (rm, mkfs, reboot, interactive shells, ...) are refused with the safe alternative; read-only commands run immediately; anything else becomes a confirmed, sandboxed, rollback-able operation." }),
-  writes: Type.Array(Type.String(), { description: "Every path this command may write (files, directories, sockets). The kernel sandbox refuses writes anywhere else - declare exactly what is needed, nothing more." }),
+  writes: Type.Array(Type.String(), { description: "Every path this command may write (directories, sockets, existing files). The kernel sandbox refuses writes anywhere else - declare exactly what is needed, nothing more. A command that works through a daemon's socket (docker, podman) writes the SOCKET (/var/run/docker.sock) plus the host directories it bind-mounts - never /var/lib/docker, which is dockerd's own store and makes the operation a lifeline change. /etc, /var, /root and /home as a whole are refused: name the exact directory." }),
   network: Type.Boolean({ description: "Whether the command needs network access. Off means no network at all, not even localhost." }),
   reason: Type.String({ description: "Why this change is needed, in one line - shown to the user as the goal." }),
   verify: Type.Optional(Type.String({ description: "A read-only command whose exit code 0 proves the change worked (e.g. 'test -f /opt/app/config.ini')." })),
@@ -92,9 +92,9 @@ const httpMutationParams = Type.Object({
   ),
   storeResponseField: Type.Optional(
     Type.Object({
-      field: Type.String({ description: "JSON field of the response to keep, dotted path allowed (e.g. AccessToken, data.token)." }),
-      ref: Type.String({ description: "Where to store it: extension.<app>.<name>. You get the ref back, never the value - use it via secretHeader or {{secret:<ref>}}." }),
-    }, { description: "Retain a token or key the response returns (a login's AccessToken, a minted API key) directly in the secret store." }),
+      field: Type.String({ description: "What to keep: a JSON field of the response body, dotted path allowed (AccessToken, data.token); 'header:<name>' for a response header; 'cookie:<name>' for one cookie's value from Set-Cookie (a session id such as SID)." }),
+      ref: Type.String({ description: "Where to store it: extension.<app>.<name>. You get the ref back, never the value - use it via secretHeader, {{secret:<ref>}} in a body or URL, or a Cookie header value like 'SID={{secret:<ref>}}'." }),
+    }, { description: "Retain a token, key or session cookie the response returns (a login's AccessToken or SID cookie, a minted API key) directly in the secret store." }),
   ),
 });
 

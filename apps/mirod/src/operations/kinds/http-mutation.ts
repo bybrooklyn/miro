@@ -68,13 +68,33 @@ async function request(
   method: string,
   url: string,
   opts: { headers?: Record<string, string>; body?: string; contentType?: string; timeoutMs?: number },
-): Promise<{ status: number; body: string }> {
+): Promise<{ status: number; body: string; headers: Headers }> {
   const headers: Record<string, string> = { ...(opts.headers ?? {}) };
   if (opts.body !== undefined && opts.contentType) headers["Content-Type"] = opts.contentType;
   // redirect: "manual" - a compromised local app must not be able to 302 the secret header to a
   // public host (adversarial review). A redirect is reported as its 3xx status, never followed.
   const res = await fetch(url, { method, headers, body: opts.body, redirect: "manual", signal: AbortSignal.timeout(opts.timeoutMs ?? 30_000) });
-  return { status: res.status, body: await readTextCapped(res, 64 * 1024) };
+  return { status: res.status, body: await readTextCapped(res, 64 * 1024), headers: res.headers };
+}
+
+/** The value `storeResponseField.field` names: a dotted path into the JSON body, `header:<name>`
+ * for a response header, or `cookie:<name>` for one cookie's value out of Set-Cookie - a login that
+ * answers with a session cookie (qBittorrent's SID) had no way into the store by reference (PLAN.md
+ * §5.29, golden-proof run #1). */
+function responseField(field: string, body: string, headers: Headers): { value: unknown; keys: string } {
+  if (field.startsWith("header:")) {
+    const name = field.slice(7).trim();
+    return { value: headers.get(name) ?? undefined, keys: [...headers.keys()].join(", ") || "no headers" };
+  }
+  if (field.startsWith("cookie:")) {
+    const name = field.slice(7).trim();
+    const cookies = headers.getSetCookie?.() ?? (headers.get("set-cookie") ? [headers.get("set-cookie")!] : []);
+    const hit = cookies.map((c) => c.split(";")[0]!.trim()).find((c) => c.startsWith(`${name}=`));
+    return { value: hit ? hit.slice(name.length + 1) : undefined, keys: cookies.map((c) => c.split("=")[0]!.trim()).join(", ") || "no cookies" };
+  }
+  let json: unknown = null;
+  try { json = JSON.parse(body); } catch { /* not JSON */ }
+  return { value: fieldAt(json, field), keys: json !== null && typeof json === "object" ? Object.keys(json as object).slice(0, 20).join(", ") : "not a JSON object" };
 }
 
 /** `{{secret:<ref>}}` anywhere in a body, URL, or header value - resolved at request time only.
@@ -204,15 +224,12 @@ export function httpMutationKind(
         // A missing field is reported, not thrown: the write happened (a login did log in), and
         // a false rollback is the worse outcome - the agent reads the keys and asks again.
         const { field, ref } = p.storeResponseField;
-        let json: unknown = null;
-        try { json = JSON.parse(r.body); } catch { /* not JSON */ }
-        const value = fieldAt(json, field);
+        const { value, keys } = responseField(field, r.body, r.headers);
         if (typeof value === "string" || typeof value === "number") {
           setSecret(ref, String(value));
           outputs.set(p, { status: r.status, body: r.body, stored: ref });
         } else {
-          const keys = json !== null && typeof json === "object" ? Object.keys(json as object).slice(0, 20).join(", ") : "not a JSON object";
-          outputs.set(p, { status: r.status, body: r.body, stored: null, storeError: `response has no string field ${field} (top-level keys: ${keys})` });
+          outputs.set(p, { status: r.status, body: r.body, stored: null, storeError: `response has no string field ${field} (available: ${keys})` });
         }
       }
     },

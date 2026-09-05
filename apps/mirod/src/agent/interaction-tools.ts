@@ -1,6 +1,10 @@
 import { Type, type Static } from "@miro/schema-engine/typebox";
 import { textResult } from "./tool-result";
 import type { ServerEvent } from "@miro/protocol";
+import { openSync, readSync, closeSync, existsSync } from "node:fs";
+import { containerLogs } from "../inventory/containers";
+import { serviceLogs } from "../inventory/systemd";
+import { isSensitivePath, redactSecretsInText } from "../operations/classify";
 
 // The two tools that make the outcome loop conversational without ending the turn (PLAN.md
 // §5.4 A): ask_user for the intent Miro genuinely cannot infer, and system_plan for the one
@@ -48,6 +52,33 @@ const credentialCreateParams = Type.Object({
   kind: Type.Optional(Type.Enum(["password", "token"], { description: "password = 20 chars, letters/digits/symbols; token = 32 hex chars. Default password." })),
 });
 
+const credentialCaptureParams = Type.Object({
+  ref: Type.String({ description: "Secret-store reference to save the captured value under: extension.<app>.<name>, e.g. extension.qbittorrent.bootstrap_password." }),
+  from: Type.Object(
+    {
+      container: Type.Optional(Type.String({ description: "Capture from this container's log (docker logs, last 500 lines)." })),
+      unit: Type.Optional(Type.String({ description: "Capture from this systemd unit's journal (last 500 lines)." })),
+      path: Type.Optional(Type.String({ description: "Capture from this file (first 256 KB). Miro's own state and credential files are refused." })),
+    },
+    { description: "Exactly one source." },
+  ),
+  pattern: Type.String({ description: "A regular expression with exactly ONE capture group around the value, matched line by line; the first match wins. E.g. 'temporary password is provided for this session: (\\\\S+)' or 'ApiKey>([^<]+)<'." }),
+});
+
+/** The only credential refs an agent may write - Miro's own refs (provider.*, transport.*, oauth.*) never. */
+const CAPTURABLE_REF = /^extension\.[a-z0-9][a-z0-9_-]*\.[a-z0-9_][a-z0-9_-]*$/i;
+
+function readHead(path: string, max = 256 * 1024): string {
+  const fd = openSync(path, "r");
+  try {
+    const buf = Buffer.alloc(max);
+    const n = readSync(fd, buf, 0, max, 0);
+    return buf.subarray(0, n).toString("utf-8");
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function generateCredential(kind: "password" | "token"): string {
   if (kind === "token") return crypto.getRandomValues(new Uint8Array(16)).reduce((s, b) => s + b.toString(16).padStart(2, "0"), "");
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#%^*-_=+";
@@ -74,6 +105,59 @@ export function buildInteractionTools(ctx: InteractionContext) {
         // themselves. It goes to the user's screen, not into the model's context.
         ctx.send({ type: "notice", level: "credential", text: `Created ${params.purpose} - stored as ${params.ref}. Value (shown once, save it): ${value}` });
         return textResult({ created: true, ref: params.ref, shownToUserOnce: true });
+      },
+    },
+    {
+      name: "credential_capture",
+      label: "Capture credential",
+      description:
+        "Take a credential the MACHINE produced - a first-start password an app printed to its container log, an API key in its config file, a token in a journal line - straight into the secret store by reference. Every read tool redacts such values before you see them, so this is the way to use one: give the source and a regex with one capture group; you get back the reference, never the value. Then use {{secret:<ref>}} in http_mutation or a secretHeader. Never ask the user for a value that is already on this machine.",
+      parameters: credentialCaptureParams,
+      execute: async (_id: string, params: Static<typeof credentialCaptureParams>) => {
+        if (!CAPTURABLE_REF.test(params.ref)) return textResult({ saved: false, reason: `ref must be extension.<app>.<name>, got ${params.ref}` });
+        // Models fill the optional sources they are not using with null (or ""), and some send the
+        // object as a JSON string - both are "absent", not "a second source" (found live, golden-proof
+        // run #2: every call was refused as ambiguous).
+        let from = params.from as unknown;
+        if (typeof from === "string") {
+          try { from = JSON.parse(from); } catch { return textResult({ saved: false, reason: "from must be an object: { container } | { unit } | { path }" }); }
+        }
+        const f = (from ?? {}) as Record<string, unknown>;
+        const given = (["container", "unit", "path"] as const).filter((k) => typeof f[k] === "string" && (f[k] as string).trim() !== "");
+        if (given.length !== 1) return textResult({ saved: false, reason: `give exactly one of from.container, from.unit, from.path (got ${given.length ? given.join(" and ") : "none"})` });
+        const source0 = { kind: given[0]!, value: (f[given[0]!] as string).trim() };
+        let re: RegExp;
+        try {
+          re = new RegExp(params.pattern);
+        } catch (err) {
+          return textResult({ saved: false, reason: `pattern does not compile: ${String(err instanceof Error ? err.message : err)}` });
+        }
+        if (new RegExp(`${re.source}|`).exec("")!.length !== 2) return textResult({ saved: false, reason: "pattern needs exactly one capture group around the value" });
+        let lines: string[];
+        const source = `${source0.kind} ${source0.value}`;
+        try {
+          if (source0.kind === "container") {
+            lines = (await containerLogs(source0.value, 500)).map((l) => l.line);
+          } else if (source0.kind === "unit") {
+            const r = await serviceLogs(source0.value, 500);
+            if (!r.available) return textResult({ saved: false, reason: `journal for ${source0.value} is not available here` });
+            lines = r.logs.map((l) => l.line);
+          } else {
+            if (isSensitivePath(source0.value)) return textResult({ saved: false, reason: `${source0.value} is Miro's own state or a credential file - refused` });
+            if (!existsSync(source0.value)) return textResult({ saved: false, reason: `${source0.value} does not exist` });
+            lines = readHead(source0.value).split("\n");
+          }
+        } catch (err) {
+          return textResult({ saved: false, reason: `could not read ${String(err instanceof Error ? err.message : err)}` });
+        }
+        for (let i = 0; i < lines.length; i++) {
+          const m = re.exec(lines[i]!);
+          if (!m || !m[1]) continue;
+          ctx.setSecret(params.ref, m[1]);
+          // The line goes back redacted - enough to confirm WHAT matched, never the value itself.
+          return textResult({ saved: true, ref: params.ref, source, line: i + 1, matched: redactSecretsInText(lines[i]!.slice(0, 200)) });
+        }
+        return textResult({ saved: false, reason: `no line in ${source} matched the pattern (${lines.length} lines read)` });
       },
     },
     {

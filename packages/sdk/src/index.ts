@@ -159,8 +159,10 @@ export interface HttpMutationBinding {
    * (drift detection), not a step of a sequence. */
   verifyKeeps?: boolean;
   rollback?: { method: "POST" | "PUT" | "PATCH" | "DELETE"; url: string; body?: string; contentType?: string };
-  /** Keep a field of the JSON response in the secret store (a login's AccessToken, a minted API
-   * key) under extension.<app>.<name>; the caller gets the ref back, never the value. */
+  /** Keep a value the response returns in the secret store under extension.<app>.<name>; the
+   * caller gets the ref back, never the value. `field` is a dotted path into the JSON body (a
+   * login's AccessToken, a minted API key), `header:<name>` for a response header, or
+   * `cookie:<name>` for one cookie's value out of Set-Cookie (a session id). */
   storeResponseField?: { field: string; ref: string };
 }
 

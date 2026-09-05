@@ -9,7 +9,7 @@ import { ensureOperationsTable } from "../store";
 import { ensureMemoryTable } from "../../memory/store";
 import { fileWriteKind } from "./file-write";
 import { fileDeleteKind } from "./file-delete";
-import { httpMutationKind, isLocalOrPrivateUrl } from "./http-mutation";
+import { httpMutationKind, isLocalOrPrivateUrl, takeOutput as takeHttpOutput } from "./http-mutation";
 import { shellCommandKind } from "./shell-command";
 import { systemdUnitKind } from "./systemd-unit";
 import { systemdRestartKind } from "./systemd-restart";
@@ -240,6 +240,34 @@ describe("file.delete", () => {
 });
 
 describe("http.mutation", () => {
+  test("storeResponseField keeps a session cookie or a header by reference (a login that answers with Set-Cookie, PLAN.md §5.29)", async () => {
+    const srv = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname === "/login") return new Response("Ok.", { status: 200, headers: { "Set-Cookie": "SID=s3ss10n; HttpOnly; path=/", "X-Request-Id": "r-77" } });
+        return new Response("nope", { status: 404 });
+      },
+    });
+    try {
+      const base = `http://127.0.0.1:${srv.port}`;
+      const stored: Record<string, string> = {};
+      const kind = httpMutationKind(() => null, (ref, value) => { stored[ref] = value; });
+      const cookie = { method: "POST" as const, url: `${base}/login`, body: "username=admin&password=x", contentType: "application/x-www-form-urlencoded", storeResponseField: { field: "cookie:SID", ref: "extension.qbittorrent.session_sid" } };
+      await kind.apply(cookie);
+      expect(stored).toEqual({ "extension.qbittorrent.session_sid": "s3ss10n" });
+      expect(takeHttpOutput(cookie)).toMatchObject({ status: 200, stored: "extension.qbittorrent.session_sid" });
+      const header = { ...cookie, storeResponseField: { field: "header:x-request-id", ref: "extension.qbittorrent.req" } };
+      await kind.apply(header);
+      expect(stored["extension.qbittorrent.req"]).toBe("r-77");
+      const missing = { ...cookie, storeResponseField: { field: "cookie:NOPE", ref: "extension.qbittorrent.nope" } };
+      await kind.apply(missing);
+      expect(takeHttpOutput(missing)).toMatchObject({ stored: null, storeError: expect.stringMatching(/cookie:NOPE .*SID/) });
+    } finally {
+      srv.stop(true);
+    }
+  });
+
   test("private-only URL guard", () => {
     for (const ok of ["http://127.0.0.1:8096/x", "http://localhost/x", "http://10.0.0.5/x", "http://192.168.1.2/x", "http://172.16.0.1/x", "http://jellyfin:8096/x", "http://nas.local/x", "http://[::1]/x", "http://[fd12::1]/x", "http://[::ffff:127.0.0.1]/x", "http://0.0.0.0:8096/x"]) {
       expect(isLocalOrPrivateUrl(ok)).toBe(true);

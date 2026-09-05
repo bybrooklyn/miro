@@ -66,13 +66,24 @@ export async function runLearnFlow(opts: LearnFlowOptions): Promise<{ text: stri
       promoted: false,
     };
   }
+  // Discovery replaces the hand-written golden hint (PLAN.md §5.13): inspect the live box for the
+  // app's own container/service and its published port, and hand THAT to the learning agent as its
+  // starting context. Nothing hand-authored - the box tells Miro where the app is; the agent's
+  // discovery ladder + docs research take it from there.
+  const presence = await discoverAppOnBox(app);
+  // Learning needs a running instance: the validator's live probe and dead-app check cannot pass
+  // against nothing, so a session for an absent app can only fail (the golden-proof run spent
+  // three parallel sessions and their write budgets learning apps it had not installed yet, PLAN.md
+  // §5.29). Installing is the main agent's job, inside its system plan; learning comes after. A hint
+  // naming a URL means the app runs somewhere discovery cannot see - that still learns.
+  if (!presence.found && !/https?:\/\//i.test(opts.hint ?? "")) {
+    return {
+      text: `${app} is not running on this box (no matching container or systemd unit), so there is nothing to learn from yet. Install and start it first - as an operation inside your system plan - then call app_learn again; learning probes the live app. If it runs elsewhere or under another name, pass its URL in the hint.`,
+      promoted: false,
+    };
+  }
   inProgress.add(app);
   try {
-    // Discovery replaces the hand-written golden hint (PLAN.md §5.13): inspect the live box for the
-    // app's own container/service and its published port, and hand THAT to the learning agent as its
-    // starting context. Nothing hand-authored - the box tells Miro where the app is; the agent's
-    // discovery ladder + docs research take it from there.
-    const presence = await discoverAppOnBox(app);
     const combinedHint = [opts.hint, formatPresence(app, presence)].filter(Boolean).join(" | ");
     const goal = `Learn the self-hosted app "${app}"${combinedHint ? ` (hint: ${combinedHint})` : ""}: identify what it is and how it is best controlled, generate a local extension for it (read tools, diagnostics, and write bindings), and record its operational model.`;
     // The repair budget reshaped (PLAN.md §5.15): up to MAX_REGENERATIONS INDEPENDENT sessions, each

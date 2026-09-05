@@ -1,6 +1,37 @@
 import { test, expect } from "bun:test";
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ServerEvent } from "@miro/protocol";
 import { buildInteractionTools } from "./interaction-tools";
+
+// credential_capture (PLAN.md §5.29): a value the machine printed goes into the store by reference.
+// Real temp file; the container/unit sources are the same code path over containerLogs/serviceLogs.
+test("credential_capture stores the regex group by reference and never returns the value; refuses bad refs, secret paths, no match", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "capture-"));
+  const log = join(dir, "qbittorrent.log");
+  writeFileSync(log, "(N) 2026-09-05 - qBittorrent v5 started\n(N) The WebUI administrator username is: admin\n(N) A temporary password is provided for this session: Zq8kPa2mVx\n(N) You should set your own password in program preferences.\n");
+  const h = harness({});
+  const capture = h.tool("credential_capture");
+  const r = await capture.execute("1", { ref: "extension.qbittorrent.bootstrap_password", from: { path: log }, pattern: "temporary password is provided for this session: (\\S+)" });
+  expect(r.details).toMatchObject({ saved: true, ref: "extension.qbittorrent.bootstrap_password", line: 3 });
+  expect(JSON.stringify(r)).not.toContain("Zq8kPa2mVx"); // the matched line comes back redacted
+  expect(h.secrets["extension.qbittorrent.bootstrap_password"]).toBe("Zq8kPa2mVx");
+
+  expect((await capture.execute("2", { ref: "provider.anthropic", from: { path: log }, pattern: "(.+)" })).details).toMatchObject({ saved: false, reason: expect.stringMatching(/extension\.<app>\.<name>/) });
+  expect((await capture.execute("3", { ref: "extension.app.x", from: { path: log }, pattern: "no groups here" })).details).toMatchObject({ saved: false, reason: expect.stringMatching(/one capture group/) });
+  expect((await capture.execute("4", { ref: "extension.app.x", from: { path: log }, pattern: "nothing like this (\\d+)" })).details).toMatchObject({ saved: false, reason: expect.stringMatching(/no line/) });
+  expect((await capture.execute("5", { ref: "extension.app.x", from: { path: log, container: "c" }, pattern: "(x)" })).details).toMatchObject({ saved: false, reason: expect.stringMatching(/exactly one/) });
+  // Unused sources arrive as null (Codex fills every optional field) or as a JSON string - both are absent (run #2 finding).
+  expect((await capture.execute("7", { ref: "extension.app.y", from: { path: log, container: null, unit: null }, pattern: "username is: (\\S+)" })).details).toMatchObject({ saved: true, ref: "extension.app.y" });
+  expect((await capture.execute("8", { ref: "extension.app.z", from: JSON.stringify({ path: log }), pattern: "username is: (\\S+)" })).details).toMatchObject({ saved: true });
+  expect(h.secrets["extension.app.y"]).toBe("admin");
+  mkdirSync(join(dir, ".ssh"));
+  writeFileSync(join(dir, ".ssh", "id_ed25519"), "key");
+  expect((await capture.execute("6", { ref: "extension.app.x", from: { path: join(dir, ".ssh", "id_ed25519") }, pattern: "(.+)" })).details).toMatchObject({ saved: false, reason: expect.stringMatching(/refused/) });
+  expect(Object.keys(h.secrets).sort()).toEqual(["extension.app.y", "extension.app.z", "extension.qbittorrent.bootstrap_password"]);
+  rmSync(dir, { recursive: true, force: true });
+});
 
 // Real tool objects driven end to end with injected send/waitForAnswer - the same DI shape
 // engine.test.ts uses for operation confirmations. No mocks: these ARE the functions the daemon

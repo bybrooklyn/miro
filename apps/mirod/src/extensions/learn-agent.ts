@@ -65,7 +65,12 @@ full reference - the tool adds the extension.<app>. prefix), so a later session 
 with {{secret:extension.<app>.admin_user}} and {{secret:extension.<app>.admin_password}}. A token or key that
 a RESPONSE returns (a login's AccessToken, a minted API key) is kept with http_mutation's
 storeResponseField { field, ref } - it goes straight into the store and you get the ref; tool
-output is redacted, so reading it out of a response body does not work.
+output is redacted, so reading it out of a response body does not work. field may also be
+"header:<name>" or "cookie:<name>" (a login that answers with a session cookie). A credential the
+MACHINE produced and PRINTED - a first-start password in the container log, a key in a config
+file - is captured the same way with credential_capture { ref, from: { container | unit | path },
+pattern } (one regex capture group): every read tool shows you "[redacted]" there on purpose, and
+the user does not have that value either - never ask them for it.
 Save credentials you discover with secret_store. Credentials already on file are listed at the
 end of this prompt: use them, never ask the user for one of them. NEVER ask the user to invent a
 password for an app on this machine. Ask the user (ask_user, secretRef) ONLY for a credential
@@ -428,7 +433,7 @@ export async function spawnLearningAgent(o: LearnAgentOptions): Promise<LearnAge
       // prompt tells the agent to treat as "decide yourself or stop".
       waitForAnswer: o.waitForAnswer ?? (async () => NO_USER_ANSWER),
       setSecret: o.setSecret,
-    }).filter((t) => t.name === "ask_user" || t.name === "credential_create"),
+    }).filter((t) => t.name === "ask_user" || t.name === "credential_create" || t.name === "credential_capture"),
     ...(o.operationCtx ? buildOperationTools(o.operationCtx) : []),
     buildSecretStoreTool(o.app, o.setSecret),
     buildCapabilityWriteTool(o.app, o.db),
