@@ -13,6 +13,7 @@ import { httpMutationKind, isLocalOrPrivateUrl, takeOutput as takeHttpOutput } f
 import { shellCommandKind } from "./shell-command";
 import { systemdUnitKind } from "./systemd-unit";
 import { systemdRestartKind } from "./systemd-restart";
+import { composeRestartKey, rebootKind, rebootOutcome, type Captured as RebootCaptured, type Snapshot as RebootSnapshot } from "./reboot";
 import { dockerRunArgs, searxngBaseUrl, searxngInstallKind, settingsYaml } from "./searxng-install";
 import { fileEditKind } from "./file-edit";
 import { applyEdits, lineHash } from "../hashline";
@@ -71,6 +72,85 @@ describe("prodtest targets", () => {
     expect(fileDeleteKind.prodtest!({ path: "/etc/x.conf" })).toBe("/etc/x.conf");
     expect(systemdUnitKind.prodtest!({ action: "enable", unit: "a.service" })).toBe("a.service#enabled");
     expect(systemdUnitKind.prodtest!({ action: "daemon-reload" })).toBeNull();
+    expect(rebootKind.prodtest!({ reason: "kernel update" })).toBeNull();
+  });
+});
+
+// system.reboot (PLAN.md §5.30): describe() and the two pure functions are testable on a box
+// without docker or systemd (this dev Mac); captureState/apply/reconcile need docker, systemd and
+// an actual reboot - the live check on the dev VM, like the other systemd kinds. Not stubbed.
+describe("system.reboot", () => {
+  test("describe(): lifeline, irreversible, never auto-approved, partial dry-run; nothing to change without docker", async () => {
+    const plan = await rebootKind.describe({ reason: "kernel update" });
+    expect(plan.autoApprove).toBe(false);
+    expect(plan.class).toBe("lifeline");
+    expect(plan.irreversible).toBe(true);
+    expect(plan.dryRunFidelity).toBe("partial");
+    expect(plan.summary).toMatch(/^Reboot the server now - kernel update/);
+    expect(plan.rollbackWhen).toMatch(/^never/);
+    expect(plan.writes).toContain("/run/systemd");
+    expect(plan.details?.policyChanges).toEqual([]);
+  });
+
+  test("composeRestartKey: the service's own restart key, present with any value; absent, another service, or unparsable -> undefined", () => {
+    expect(composeRestartKey("services:\n  web:\n    image: x\n", "web")).toBeUndefined();
+    expect(composeRestartKey("services:\n  web:\n    restart: unless-stopped\n", "web")).toBe("unless-stopped");
+    expect(composeRestartKey('services:\n  web:\n    restart: "no"\n', "web")).toBe("no");
+    expect(composeRestartKey("services:\n  web:\n    restart: no\n", "web")).toBeDefined();
+    expect(composeRestartKey("services:\n  db:\n    restart: always\n", "web")).toBeUndefined();
+    expect(composeRestartKey("services: [\n  - not: yaml", "web")).toBeUndefined();
+  });
+
+  const base: RebootCaptured = {
+    units: ["ssh.service", "docker.service"],
+    containers: ["jellyfin"],
+    dockerAvailable: true,
+    severity: 0,
+    bootId: "a",
+    issuedAt: 0,
+    disabled: [],
+    notes: [{ name: "jellyfin", from: "no", update: true }],
+  };
+  const same: RebootSnapshot = { units: ["ssh.service", "docker.service"], containers: ["jellyfin"], dockerAvailable: true, severity: 0 };
+
+  test("rebootOutcome: everything back and severity not worse -> committed", () => {
+    const r = rebootOutcome("kernel update", base, same);
+    expect(r.outcome).toBe("committed");
+    expect(r.message).toMatch(/verified: 2 units and 1 containers back, severity 0->0/);
+  });
+
+  test("rebootOutcome: a compose container updated at runtime came back, and the file to fix is named", () => {
+    const captured: RebootCaptured = { ...base, notes: [{ name: "jellyfin", from: "no", update: true, composeFile: "/srv/media/compose.yml" }] };
+    const r = rebootOutcome("kernel update", captured, same);
+    expect(r.outcome).toBe("committed");
+    expect(r.message).toContain("/srv/media/compose.yml");
+    expect(r.message).toContain("restart: unless-stopped");
+  });
+
+  test("rebootOutcome: a missing container names its compose file; a missing disabled unit names systemctl enable", () => {
+    const captured: RebootCaptured = {
+      ...base,
+      units: ["ssh.service", "cron.service"],
+      disabled: ["cron.service"],
+      notes: [{ name: "jellyfin", from: "no", update: true, composeFile: "/srv/media/compose.yml" }],
+    };
+    const r = rebootOutcome("kernel update", captured, { ...same, units: ["ssh.service"], containers: [] });
+    expect(r.outcome).toBe("applied_unverified");
+    expect(r.message).toContain("cron.service (not enabled at boot - approve `systemctl enable cron.service`)");
+    expect(r.message).toContain("jellyfin (restart policy set at runtime; add `restart: unless-stopped` to /srv/media/compose.yml)");
+  });
+
+  test("rebootOutcome: nothing missing but severity worse -> applied_unverified, and says so", () => {
+    const r = rebootOutcome("kernel update", base, { ...same, severity: 2 });
+    expect(r.outcome).toBe("applied_unverified");
+    expect(r.message).toMatch(/severity got worse \(0->2\)/);
+  });
+
+  test("rebootOutcome: docker not reachable after boot -> containers unverified, never 'gone'", () => {
+    const captured: RebootCaptured = { ...base, containers: ["jellyfin", "sonarr"], notes: [] };
+    const r = rebootOutcome("kernel update", captured, { ...same, dockerAvailable: false, containers: [] });
+    expect(r.outcome).toBe("applied_unverified");
+    expect(r.message).toMatch(/docker is not reachable - 2 containers unverified: jellyfin, sonarr/);
   });
 });
 

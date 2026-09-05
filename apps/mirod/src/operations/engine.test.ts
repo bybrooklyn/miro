@@ -31,14 +31,21 @@ function fakeCtx(db: Database, answer?: string): { ctx: OperationToolContext; ev
   };
 }
 
-function fakeKind(behavior: { autoApprove?: boolean; verifyResult?: boolean; applyThrows?: string } = {}): OperationKind<
-  { x: number },
-  { was: boolean }
-> & { calls: string[] } {
+function fakeKind(
+  behavior: { autoApprove?: boolean; verifyResult?: boolean; applyThrows?: string; reconcile?: () => Promise<{ outcome: "committed" | "rolledback" | "applied_unverified"; message: string }> } = {},
+): OperationKind<{ x: number }, { was: boolean }> & { calls: string[] } {
   const calls: string[] = [];
   return {
     kind: "test.kind",
     calls,
+    ...(behavior.reconcile
+      ? {
+          async reconcile() {
+            calls.push("reconcile");
+            return behavior.reconcile!();
+          },
+        }
+      : {}),
     async describe() {
       calls.push("describe");
       return { summary: "do the thing", autoApprove: behavior.autoApprove ?? true };
@@ -318,6 +325,49 @@ test("reconcileOperations: lifeline + verify passes -> rolled back, gate not byp
   // The reachability handshake cannot happen at boot, so a possible lockout is reverted, never committed.
   expect(kind.calls).toContain("rollback");
   expect(getOperation(db, "op1")!.phase).toBe("rolledback");
+});
+
+// A kind with its own reconcile() (system.reboot, PLAN.md §5.30) judges its row at boot: no
+// verify, no engine rollback, and it wins over BOTH the irreversible branch (which would commit
+// blind, E1) and the lifeline rule (which would roll back, E2) - the plan below sets both.
+test("reconcileOperations: a kind's reconcile hook replaces verify/rollback and precedes the irreversible and lifeline branches", async () => {
+  const seed = (db: Database) => {
+    createOperation(db, "op1", "test.kind", "reboot: kernel update", JSON.stringify({ x: 1 }));
+    setPlan(db, "op1", JSON.stringify({ summary: "reboot", autoApprove: false, irreversible: true, class: "lifeline" }), false);
+    setCapturedAndApplying(db, "op1", JSON.stringify({ was: true }), JSON.stringify({ was: true }));
+  };
+
+  const db1 = freshDb();
+  seed(db1);
+  const unverified = fakeKind({ reconcile: async () => ({ outcome: "applied_unverified", message: "Rebooted, but jellyfin did not come back" }) });
+  const reports = await reconcileOperations(db1, { "test.kind": unverified });
+  expect(unverified.calls).toEqual(["reconcile"]);
+  expect(getOperation(db1, "op1")!.phase).toBe("committed");
+  expect(getOperation(db1, "op1")!.error).toBeNull();
+  expect(reports).toEqual([{ outcome: "applied_unverified", message: "Rebooted, but jellyfin did not come back" }]);
+  expect(listAll(db1)).toHaveLength(1);
+  expect(listAll(db1)[0].value).toContain("committed");
+
+  const db2 = freshDb();
+  seed(db2);
+  const notRebooted = fakeKind({ reconcile: async () => ({ outcome: "rolledback", message: "the server did not reboot" }) });
+  await reconcileOperations(db2, { "test.kind": notRebooted });
+  expect(notRebooted.calls).toEqual(["reconcile"]);
+  expect(getOperation(db2, "op1")!.phase).toBe("rolledback");
+  expect(getOperation(db2, "op1")!.error).toBe("the server did not reboot");
+  expect(listAll(db2)[0].value).toContain("rolledback");
+
+  const db3 = freshDb();
+  seed(db3);
+  const throws = fakeKind({
+    reconcile: async () => {
+      throw new Error("docker gone");
+    },
+  });
+  await reconcileOperations(db3, { "test.kind": throws });
+  expect(throws.calls).toEqual(["reconcile"]);
+  expect(getOperation(db3, "op1")!.phase).toBe("rolledback");
+  expect(getOperation(db3, "op1")!.error).toMatch(/reconciled after crash: docker gone/);
 });
 
 test("runOperation: committed -> mechanical incident memory written", async () => {

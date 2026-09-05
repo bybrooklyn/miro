@@ -152,7 +152,11 @@ const hostMgr = createExtensionHostManager();
 setInterval(() => hostMgr.reapIdle(), 60_000);
 
 // Resume any operation interrupted by a crash/power loss before accepting connections (plan §47).
-await reconcileOperations(db, OPERATION_KINDS);
+// A reboot's post-boot verdict (the kind's reconcile hook, PLAN.md §5.30) goes to the first client
+// after boot. ponytail: last report wins - only one daemon-ending operation can be in flight.
+for (const report of await reconcileOperations(db, OPERATION_KINDS)) {
+  setSetting("boot_report", JSON.stringify({ level: report.outcome === "committed" ? "info" : "warn", text: report.message }));
+}
 
 // Budgeted Dreaming reflection pass (plan §36-37) - fire-and-forget, never spends the user's
 // "best" routing budget, never blocks the operation/chat turn that triggered it.
@@ -584,6 +588,13 @@ function createConnectionState(send: (event: ServerEvent) => void): ConnState {
     });
   } else {
     send(statusEvent(state));
+  }
+  // One-shot boot report (a reboot's post-boot verdict): this connection is the reachability
+  // proof a reboot has no timed handshake for, so it is cleared on delivery.
+  const bootReport = getSetting("boot_report");
+  if (bootReport) {
+    send({ type: "notice", ...(JSON.parse(bootReport) as { level: "info" | "warn"; text: string }) });
+    setSetting("boot_report", "");
   }
 
   return state;

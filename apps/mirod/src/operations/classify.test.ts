@@ -654,8 +654,8 @@ describe("forbidden results carry an alternative", () => {
     const got = classifyCommand("rm -rf /srv/x", { resolveBinary: resolve, trustedBinDirs: [binDir], home: "/home/miro" });
     expect(got.alternative).toContain("file_delete");
   });
-  test("reboot says there is no reboot operation - the owner does it (audit D1: it used to name a kind that does not exist)", () => {
-    expect(classifyCommand("reboot", { resolveBinary: resolve, trustedBinDirs: [binDir], home: "/home/miro" }).alternative).toMatch(/no reboot operation/);
+  test("reboot points at the system_reboot operation (audit D1 named a kind that did not exist; it does now)", () => {
+    expect(classifyCommand("reboot", { resolveBinary: resolve, trustedBinDirs: [binDir], home: "/home/miro" }).alternative).toMatch(/system_reboot operation/);
   });
 });
 

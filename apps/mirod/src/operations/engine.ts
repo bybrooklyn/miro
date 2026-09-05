@@ -78,6 +78,12 @@ export interface OperationKind<P = any, S = any> {
    * operation per target is re-verified, or null when there is nothing re-runnable (a shell
    * command with no verify). Absent: every commit is its own target. */
   prodtest?(params: P): string | null;
+  /** Boot-time judgement for a kind whose apply() ends the daemon on purpose (system.reboot;
+   * PLAN.md §5.16's self-update reuses it): reconcileOperations hands it a row found in
+   * `applying` INSTEAD of running verify/rollback/the lifeline rule, and its message is the
+   * owner's boot report (index.ts delivers it to the first client after boot). Owns its own
+   * rollback - the engine never calls rollback() on this path. */
+  reconcile?(params: P, captured: S): Promise<{ outcome: OperationOutcome; message: string }>;
 }
 
 export interface OperationToolContext {
@@ -361,9 +367,11 @@ export const LIFELINE_CONFIRM_MS = 90_000;
 
 /** Run once at boot (§47). Never retries apply() - an unknown crash point makes blind retry itself
  * dangerous; re-checking real state and rolling back to known-good is the conservative default. */
-export async function reconcileOperations(db: Database, kinds: Record<string, OperationKind<any, any>>): Promise<void> {
+export async function reconcileOperations(db: Database, kinds: Record<string, OperationKind<any, any>>): Promise<{ outcome: OperationOutcome; message: string }[]> {
   store.ensureOperationsTable(db);
   memory.ensureMemoryTable(db);
+  // What a kind's own reconcile() concluded - a reboot's post-boot verdict for the owner.
+  const reports: { outcome: OperationOutcome; message: string }[] = [];
 
   for (const op of store.listByPhases(db, ["planning", "awaiting_confirmation", "capturing"])) {
     store.setPhase(db, op.id, "rolledback", "interrupted before any change was made");
@@ -378,6 +386,28 @@ export async function reconcileOperations(db: Database, kinds: Record<string, Op
     // engine exists to keep (audit E1, E2).
     let plan: OperationPlan | null = null;
     try { plan = op.plan ? (JSON.parse(op.plan) as OperationPlan) : null; } catch { plan = null; }
+
+    // A kind that ends the daemon on purpose (system.reboot) judges its own row at boot - verify()
+    // cannot, the reboot IS the operation. Checked before the irreversible branch, which would
+    // otherwise commit it blind, and before the lifeline rule, which would roll it back.
+    if (kind?.reconcile && op.capturedState) {
+      let verdict: { outcome: OperationOutcome; message: string };
+      try {
+        verdict = await kind.reconcile(JSON.parse(op.params), JSON.parse(op.capturedState));
+      } catch (err) {
+        verdict = { outcome: "rolledback", message: `reconciled after crash: ${String(err instanceof Error ? err.message : err)}` };
+      }
+      // applied_unverified is "phase committed, honest message" - the same mapping runOperation uses.
+      if (verdict.outcome === "rolledback") {
+        store.setPhase(db, op.id, "rolledback", verdict.message);
+        memory.recordIncident(db, { kind: op.kind, goal: op.goal, phase: "rolledback", error: verdict.message });
+      } else {
+        store.setPhase(db, op.id, "committed");
+        memory.recordIncident(db, { kind: op.kind, goal: op.goal, phase: "committed", error: null });
+      }
+      reports.push(verdict);
+      continue;
+    }
 
     // Irreversible (a completed wizard step, a create with no undo): the change may have applied
     // before the crash and cannot be undone. Reporting "rolled back" is the false-rollback the
@@ -438,4 +468,5 @@ export async function reconcileOperations(db: Database, kinds: Record<string, Op
       memory.recordIncident(db, { kind: op.kind, goal: op.goal, phase: "rolledback", error });
     }
   }
+  return reports;
 }

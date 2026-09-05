@@ -22,6 +22,8 @@ export interface ContainerDetail {
   health: string | null;
   startedAt: string;
   restartCount: number;
+  /** HostConfig.RestartPolicy.Name - "no" when unset (docker reports "" on old daemons). */
+  restartPolicy: string;
   labels: Record<string, string>;
   mounts: { source: string; destination: string }[];
   ports: { containerPort: string; hostPort: string | null }[];
@@ -101,6 +103,7 @@ export function parseDockerInspect(json: string): ContainerDetail {
     health: raw.State?.Health?.Status ?? null,
     startedAt: raw.State?.StartedAt ?? "",
     restartCount: raw.RestartCount ?? 0,
+    restartPolicy: raw.HostConfig?.RestartPolicy?.Name || "no",
     labels: raw.Config?.Labels ?? {},
     mounts: (raw.Mounts ?? []).map((m: any) => ({ source: m.Source, destination: m.Destination })),
     ports,

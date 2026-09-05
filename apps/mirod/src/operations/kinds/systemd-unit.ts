@@ -1,4 +1,4 @@
-import { run } from "../../inventory/exec";
+import { runPrivileged } from "../../inventory/exec";
 import { getServiceState, getUnitEnabled } from "../../inventory/systemd";
 import { LIFELINE_UNITS } from "../classify";
 import type { OperationKind } from "../engine";
@@ -88,7 +88,7 @@ export const systemdUnitKind: OperationKind<SystemdUnitParams, Captured> = {
 
   async apply(p) {
     const unit = unitFor(p);
-    await run("sudo", ["systemctl", p.action, ...(unit ? [unit] : [])], { timeoutMs: 60_000 });
+    await runPrivileged(["systemctl", p.action, ...(unit ? [unit] : [])], { timeoutMs: 60_000 });
   },
 
   async verify(p) {
@@ -110,7 +110,7 @@ export const systemdUnitKind: OperationKind<SystemdUnitParams, Captured> = {
     if (p.action === "daemon-reload") return;
     const unit = unitFor(p);
     const undo = p.action === "start" || p.action === "stop" ? (captured.active ? "start" : "stop") : captured.enabled ? "enable" : "disable";
-    await run("sudo", ["systemctl", undo, unit]).catch(() => {});
+    await runPrivileged(["systemctl", undo, unit]).catch(() => {});
   },
 
   // start/stop share a target with restart-style ops on the same unit; enable/disable are their own

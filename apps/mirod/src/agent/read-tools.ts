@@ -4,7 +4,7 @@ import { existsSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import { classifyCommand, isSensitivePath, isLocalOrPrivateUrl, redactSecretsInText } from "../operations/classify";
 import { anchoredView } from "../operations/hashline";
 import { runSandboxed, sandboxAvailable } from "../operations/sandbox";
-import { commandExists, run } from "../inventory/exec";
+import { commandExists, runPrivileged } from "../inventory/exec";
 import { readTextCapped } from "../fetch-body";
 
 // Read-only primitives that need a little context (PLAN.md §5.4 B): a sandboxed shell for
@@ -150,9 +150,8 @@ export function buildReadTools(ctx: ReadToolContext) {
             : ["-e", "frame.time_relative", "-e", "ip.src", "-e", "tcp.srcport", "-e", "udp.srcport", "-e", "ip.dst", "-e", "tcp.dstport", "-e", "udp.dstport", "-e", "_ws.col.Protocol", "-e", "_ws.col.Info"];
         const args = ["tshark", "-l", "-n", "-i", params.interface ?? "any", "-a", `duration:${duration}`, ...(params.filter ? ["-f", params.filter] : []), "-T", "fields", "-E", "separator=|", "-E", "header=y", ...fields];
         // Capture needs CAP_NET_RAW: root in production; sudo on a dev box running mirod unprivileged.
-        const argv = process.getuid?.() === 0 ? args : ["sudo", "-n", ...args];
         try {
-          const out = await run(argv[0], argv.slice(1), { timeoutMs: (duration + 15) * 1000 });
+          const out = await runPrivileged(args, { timeoutMs: (duration + 15) * 1000 });
           const lines = out.split("\n").filter(Boolean);
           const capped = lines.slice(0, 500).map((line, i) => {
             // tshark emits http.file_data (the last field in http mode) hex-encoded; decode it so

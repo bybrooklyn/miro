@@ -1,4 +1,4 @@
-import { run } from "../../inventory/exec";
+import { runPrivileged } from "../../inventory/exec";
 import { getServiceState } from "../../inventory/systemd";
 import { LIFELINE_UNITS, SELF_UNIT } from "../classify";
 import type { OperationKind } from "../engine";
@@ -50,7 +50,7 @@ export const systemdRestartKind: OperationKind<Params, Captured> = {
   },
 
   async apply({ unit }) {
-    await run("sudo", ["systemctl", "restart", unit], { timeoutMs: 30_000 });
+    await runPrivileged(["systemctl", "restart", unit], { timeoutMs: 30_000 });
   },
 
   async verify({ unit }) {
@@ -62,7 +62,7 @@ export const systemdRestartKind: OperationKind<Params, Captured> = {
   },
 
   async rollback({ unit }, captured) {
-    await run("sudo", ["systemctl", captured.active ? "start" : "stop", unit]).catch(() => {});
+    await runPrivileged(["systemctl", captured.active ? "start" : "stop", unit]).catch(() => {});
   },
 
   prodtest: ({ unit }) => unit,

@@ -34,6 +34,7 @@ test("parseDockerInspect extracts health, ports, mounts, restart count from `doc
       Config: { Image: "jellyfin/jellyfin:latest", Labels: { "com.docker.compose.project": "media" } },
       State: { Status: "running", Health: { Status: "healthy" }, StartedAt: "2026-08-30T12:00:00Z" },
       RestartCount: 2,
+      HostConfig: { RestartPolicy: { Name: "unless-stopped", MaximumRetryCount: 0 } },
       Mounts: [{ Source: "/mnt/media", Destination: "/media" }],
       NetworkSettings: { Ports: { "8096/tcp": [{ HostIp: "0.0.0.0", HostPort: "8096" }] } },
     },
@@ -42,6 +43,7 @@ test("parseDockerInspect extracts health, ports, mounts, restart count from `doc
   expect(detail.name).toBe("jellyfin");
   expect(detail.health).toBe("healthy");
   expect(detail.restartCount).toBe(2);
+  expect(detail.restartPolicy).toBe("unless-stopped");
   expect(detail.mounts).toEqual([{ source: "/mnt/media", destination: "/media" }]);
   expect(detail.ports).toEqual([{ containerPort: "8096/tcp", hostPort: "8096" }]);
 });

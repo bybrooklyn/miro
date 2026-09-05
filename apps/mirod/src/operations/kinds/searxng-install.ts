@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { MIRO_DIR } from "@miro/protocol";
-import { commandExists, run } from "../../inventory/exec";
+import { commandExists, runPrivileged } from "../../inventory/exec";
 import { readTextCapped } from "../../fetch-body";
 import type { OperationKind } from "../engine";
 import { moveToTrash, trashDestination } from "../trash";
@@ -52,8 +52,7 @@ function resolved(p: SearxngInstallParams): { port: number; dataDir: string } {
 }
 
 async function containerExists(): Promise<boolean> {
-  // -n: a read that may run at describe time must never sit on a sudo password prompt.
-  const out = await run("sudo", ["-n", "docker", "ps", "-a", "--filter", `name=^/${SEARXNG_CONTAINER}$`, "--format", "{{.Names}}"], { timeoutMs: 10_000 }).catch(() => "");
+  const out = await runPrivileged(["docker", "ps", "-a", "--filter", `name=^/${SEARXNG_CONTAINER}$`, "--format", "{{.Names}}"], { timeoutMs: 10_000 }).catch(() => "");
   return out.trim() === SEARXNG_CONTAINER;
 }
 
@@ -109,8 +108,8 @@ export const searxngInstallKind: OperationKind<SearxngInstallParams, Captured> =
     const { port, dataDir } = resolved(p);
     mkdirSync(dataDir, { recursive: true });
     writeFileSync(join(dataDir, "settings.yml"), settingsYaml());
-    if (await containerExists()) await run("sudo", ["docker", "rm", "-f", SEARXNG_CONTAINER], { timeoutMs: 60_000 });
-    await run("sudo", ["docker", ...dockerRunArgs(port, dataDir)], { timeoutMs: 15 * 60_000 });
+    if (await containerExists()) await runPrivileged(["docker", "rm", "-f", SEARXNG_CONTAINER], { timeoutMs: 60_000 });
+    await runPrivileged(["docker", ...dockerRunArgs(port, dataDir)], { timeoutMs: 15 * 60_000 });
   },
 
   async verify(p) {
@@ -125,7 +124,7 @@ export const searxngInstallKind: OperationKind<SearxngInstallParams, Captured> =
 
   async rollback(p, captured) {
     const { dataDir } = resolved(p);
-    await run("sudo", ["docker", "rm", "-f", SEARXNG_CONTAINER], { timeoutMs: 60_000 }).catch(() => {});
+    await runPrivileged(["docker", "rm", "-f", SEARXNG_CONTAINER], { timeoutMs: 60_000 }).catch(() => {});
     if (!captured.dirExisted && existsSync(dataDir)) moveToTrash(trashDestination(dataDir));
   },
 

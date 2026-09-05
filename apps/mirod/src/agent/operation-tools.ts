@@ -4,6 +4,7 @@ import type { OperationToolContext } from "../operations/engine";
 import { runOperation } from "../operations/engine";
 import { systemdRestartKind } from "../operations/kinds/systemd-restart";
 import { systemdUnitKind, UNIT_ACTIONS, type SystemdUnitParams } from "../operations/kinds/systemd-unit";
+import { rebootKind } from "../operations/kinds/reboot";
 import { searxngInstallKind, searxngBaseUrl, DEFAULT_SEARXNG_PORT, SEARXNG_SETTING } from "../operations/kinds/searxng-install";
 import { shellCommandKind, takeOutput as takeShellOutput, type ShellCommandParams } from "../operations/kinds/shell-command";
 import { fileWriteKind, type FileWriteParams } from "../operations/kinds/file-write";
@@ -24,6 +25,10 @@ const serviceControlParams = Type.Object({
   action: Type.Enum(UNIT_ACTIONS, { description: "start | stop | enable | disable a unit, or daemon-reload after writing a unit file (no unit needed)." }),
   unit: Type.Optional(Type.String({ description: "systemd unit name, e.g. jellyfin.service - required for every action but daemon-reload." })),
   reason: Type.String({ description: "Why, in one line - shown to the user as the goal." }),
+});
+
+const rebootParams = Type.Object({
+  reason: Type.String({ description: "Why the server must reboot now, in one line - shown to the owner as the goal." }),
 });
 
 const shellCommandParams = Type.Object({
@@ -123,6 +128,14 @@ export function buildOperationTools(ctx: OperationToolContext) {
         const { reason, ...p } = params;
         return textResult(await runOperation(ctx, systemdUnitKind, reason, p));
       },
+    },
+    {
+      name: "system_reboot",
+      label: "Reboot server",
+      description:
+        "Reboot the server as a confirmed, tracked operation. First, running containers with no restart policy get restart=unless-stopped so they come back (a compose file that sets restart: is respected; one that lacks it is named for the owner), and active-but-not-enabled units are named; then systemctl reboot. Miro verifies at its next boot that the same units and containers are back and reports to the owner on their first connection. This call does not return - the daemon goes down with the server. Only for a genuine reboot need (a kernel update, a wedged driver); a stuck service is service_restart.",
+      parameters: rebootParams,
+      execute: async (_id: string, params: { reason: string }) => textResult(await runOperation(ctx, rebootKind, params.reason, params)),
     },
     {
       name: "searxng_install",
@@ -229,6 +242,7 @@ export function allOperationKinds(getSecret: (ref: string) => string | null, set
   return {
     [systemdRestartKind.kind]: systemdRestartKind,
     [systemdUnitKind.kind]: systemdUnitKind,
+    [rebootKind.kind]: rebootKind,
     [searxngInstallKind.kind]: searxngInstallKind,
     [shellCommandKind.kind]: shellCommandKind,
     [fileWriteKind.kind]: fileWriteKind,
