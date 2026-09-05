@@ -7,10 +7,17 @@
 Description=Miro server-management daemon
 Wants=network-online.target
 After=network-online.target docker.service
+# Headroom so the self-update crash-loop revert (preflight, MAX=2) fires before systemd's limiter;
+# the limiter stays the human-visible backstop if the reverted OLD version also loops (§5.32).
+StartLimitIntervalSec=60
+StartLimitBurst=8
 
 [Service]
 Type=notify
 NotifyAccess=all
+# Atomic rename-if-staged swap + crash-loop revert (§5.32) - runs before mirod, recovers a version
+# that crashes on boot (which mirod's own boot check cannot).
+ExecStartPre=/usr/local/bin/mirod-preflight
 ExecStart=/usr/local/bin/mirod
 Environment=HOME=/root
 StateDirectory=miro
