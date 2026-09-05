@@ -33,6 +33,9 @@ export interface StatusEvent {
   model?: string;
   /** Whether the daemon runs as root (the system-service layout) or unprivileged. */
   privilege?: "root" | "user";
+  /** The daemon's own version (the current version dir's name, via the wrapper's MIRO_VERSION).
+   * Absent on a dev run without the version-layout wrapper. */
+  version?: string;
 }
 
 export interface QuestionOption {
