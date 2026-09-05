@@ -33,6 +33,7 @@ const shellCommandParams = Type.Object({
   network: Type.Boolean({ description: "Whether the command needs network access. Off means no network at all, not even localhost." }),
   reason: Type.String({ description: "Why this change is needed, in one line - shown to the user as the goal." }),
   verify: Type.Optional(Type.String({ description: "A read-only command whose exit code 0 proves the change worked (e.g. 'test -f /opt/app/config.ini')." })),
+  verifyKeeps: Type.Optional(Type.Boolean({ description: "true when verify describes a LASTING state (a mount is read-only, a config line exists) that Miro should re-check periodically and report as drift if it stops holding. false/omitted for a step of a sequence (a wizard is still open, a temporary name exists)." })),
   rollback: Type.Optional(Type.String({ description: "A command that undoes the change. The declared roots are also snapshotted and restored automatically on failure." })),
   cwd: Type.Optional(Type.String()),
 });
@@ -61,6 +62,7 @@ const httpMutationParams = Type.Object({
   captureUrl: Type.Optional(Type.String({ description: "GET this before applying; for PUT it is what rollback restores." })),
   verifyUrl: Type.Optional(Type.String({ description: "GET this after applying; 2xx (and verifyExpect, if given) proves success." })),
   verifyExpect: Type.Optional(Type.String()),
+  verifyKeeps: Type.Optional(Type.Boolean({ description: "true when verifyUrl/verifyExpect describe a LASTING state (a library exists with this path) that Miro should re-check periodically and report as drift if it stops holding. false/omitted for a step of a sequence (the setup wizard is still open, a temporary entry exists)." })),
   rollback: Type.Optional(
     Type.Object({
       method: Type.Enum(["POST", "PUT", "PATCH", "DELETE"]),

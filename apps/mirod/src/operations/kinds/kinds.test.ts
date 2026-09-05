@@ -51,6 +51,24 @@ afterEach(() => {
   rmSync(work, { recursive: true, force: true });
 });
 
+// Prodtest targets (operations/prodtest.ts): state-based kinds always have one; a model-written
+// verify only when the planner declared it lasting (found live: every mid-wizard check re-verified
+// as drift otherwise).
+describe("prodtest targets", () => {
+  test("shell/http need verify AND verifyKeeps; file/systemd kinds are their target", () => {
+    expect(shellCommandKind.prodtest!({ command: "c", writes: ["/x"], network: false })).toBeNull();
+    expect(shellCommandKind.prodtest!({ command: "c", writes: ["/x"], network: false, verify: "test -f /x/a" })).toBeNull();
+    expect(shellCommandKind.prodtest!({ command: "c", writes: ["/x"], network: false, verify: "test -f /x/a", verifyKeeps: true })).toBe("c");
+    const http = httpMutationKind(() => null);
+    expect(http.prodtest!({ method: "POST", url: "http://127.0.0.1:1/a", verifyUrl: "http://127.0.0.1:1/a" } as any)).toBeNull();
+    expect(http.prodtest!({ method: "POST", url: "http://127.0.0.1:1/a", verifyUrl: "http://127.0.0.1:1/a", verifyKeeps: true } as any)).toBe("http://127.0.0.1:1/a");
+    expect(fileWriteKind.prodtest!({ path: "/etc/x.conf", content: "" })).toBe("/etc/x.conf");
+    expect(fileDeleteKind.prodtest!({ path: "/etc/x.conf" })).toBe("/etc/x.conf");
+    expect(systemdUnitKind.prodtest!({ action: "enable", unit: "a.service" })).toBe("a.service#enabled");
+    expect(systemdUnitKind.prodtest!({ action: "daemon-reload" })).toBeNull();
+  });
+});
+
 // systemd.unit's plan is pure given the unit's state (getServiceState degrades to "unknown" on a
 // machine without systemctl, like this one); the real systemctl calls are the live check on the VM.
 describe("systemd.unit", () => {

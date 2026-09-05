@@ -23,6 +23,8 @@ export interface HttpMutationParams {
   /** GET after apply; success = 2xx, plus `verifyExpect` substring if given. */
   verifyUrl?: string;
   verifyExpect?: string;
+  /** The planner's declaration that the verify describes a lasting state (drift detection re-runs it). */
+  verifyKeeps?: boolean;
   /** Explicit undo request. Without it, only PUT-with-captureUrl is reversible. */
   rollback?: { method: "POST" | "PUT" | "PATCH" | "DELETE"; url: string; body?: string; contentType?: string };
   timeoutMs?: number;
@@ -118,8 +120,10 @@ export function httpMutationKind(
 
   return {
     kind: "http.mutation",
-    // Prodtest: only a mutation that declared a verifyUrl has anything re-runnable.
-    prodtest: (p) => (p.verifyUrl ? p.url : null),
+    // Prodtest: only a verify the planner declared as LASTING is re-run - by default a verifyUrl
+    // checks a step's post-condition ("StartupWizardCompleted":false, a temporary library name),
+    // which is exactly what re-verifying every one flagged as drift, live (PLAN.md §5.24).
+    prodtest: (p) => (p.verifyUrl && p.verifyKeeps ? p.url : null),
 
     async describe(p) {
       // Every URL the secret header could be sent to, not just the primary one (adversarial

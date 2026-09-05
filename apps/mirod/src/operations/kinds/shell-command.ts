@@ -15,6 +15,8 @@ export interface ShellCommandParams {
   writes: string[];
   network: boolean;
   verify?: string;
+  /** The planner's declaration that `verify` describes a lasting state (drift detection re-runs it). */
+  verifyKeeps?: boolean;
   rollback?: string;
   cwd?: string;
   timeoutMs?: number;
@@ -36,8 +38,10 @@ export function takeOutput(params: object): SandboxResult | undefined {
 
 export const shellCommandKind: OperationKind<ShellCommandParams, ShellCommandCaptured> = {
   kind: "shell.command",
-  // Prodtest: only a command that declared a verify has anything re-runnable (read-only sandbox).
-  prodtest: (p) => (p.verify ? p.command : null),
+  // Prodtest: only a verify the planner declared as LASTING is re-run (read-only sandbox). A verify
+  // is a step's post-condition by default - found live: re-running every one flagged half of a
+  // real Jellyfin setup as drift because its checks described mid-sequence states (PLAN.md §5.24).
+  prodtest: (p) => (p.verify && p.verifyKeeps ? p.command : null),
 
   async describe(p) {
     const c = classifyCommand(p.command);

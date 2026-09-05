@@ -155,6 +155,9 @@ export interface HttpMutationBinding {
   captureUrl?: string;
   verifyUrl?: string;
   verifyExpect?: string;
+  /** true when verifyUrl/verifyExpect describe a lasting state Miro should keep re-checking
+   * (drift detection), not a step of a sequence. */
+  verifyKeeps?: boolean;
   rollback?: { method: "POST" | "PUT" | "PATCH" | "DELETE"; url: string; body?: string; contentType?: string };
   /** Keep a field of the JSON response in the secret store (a login's AccessToken, a minted API
    * key) under extension.<app>.<name>; the caller gets the ref back, never the value. */
@@ -169,6 +172,8 @@ export interface ShellCommandBinding {
   writes: string[];
   network: boolean;
   verify?: string;
+  /** true when verify describes a lasting state Miro should keep re-checking (drift detection). */
+  verifyKeeps?: boolean;
   rollback?: string;
   cwd?: string;
 }
