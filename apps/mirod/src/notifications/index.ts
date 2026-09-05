@@ -65,6 +65,11 @@ export function notify(n: Notification): void {
   const { db, broadcast, sinks } = configured;
   try {
     const id = crypto.randomUUID();
+    // Decide the phone push BEFORE persisting: recentByTitle must not match the row we are about to
+    // insert, or every needs_attention would dedup against itself and never reach a sink (found
+    // live, §5.31 - the first phone fan-out silently suppressed).
+    const phone = reachesPhone(n.tier) && !recentByTitle(db, n.title, PHONE_DEDUP_MS);
+
     let deliveredAt: number | null = null;
     if (n.tier !== "routine") {
       const reached = broadcast(noticeFor(n));
@@ -72,9 +77,7 @@ export function notify(n: Notification): void {
     }
     insertNotification(db, { id, tier: n.tier, title: n.title, body: n.body, source: n.source, createdAt: n.at, tuiDeliveredAt: deliveredAt });
 
-    if (reachesPhone(n.tier) && !recentByTitle(db, n.title, PHONE_DEDUP_MS)) {
-      for (const sink of sinks) if (sink.available()) void sink.send(n);
-    }
+    if (phone) for (const sink of sinks) if (sink.available()) void sink.send(n);
   } catch (err) {
     // The bus must never take down its caller (a background sweep, an operation's onTerminal).
     console.warn(`[mirod] notify failed: ${err instanceof Error ? err.message : "error"}`);

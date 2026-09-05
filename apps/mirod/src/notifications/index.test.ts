@@ -74,6 +74,33 @@ test("replayUndelivered delivers pending worth_knowing+ once, then marks them de
   expect(again).toHaveLength(0); // one-shot: nothing replays twice
 });
 
+test("a needs_attention push reaches a real sink; a same-title repeat is deduped, a new title is not (§5.31 self-suppression regression)", async () => {
+  const hits: string[] = [];
+  const server = Bun.serve({ port: 0, fetch: (req) => { hits.push(req.headers.get("Title") ?? "?"); return new Response("ok"); } });
+  const db = new Database(":memory:");
+  const settings = new Map<string, string>([
+    ["notify.ntfy.url", `http://127.0.0.1:${server.port}`],
+    ["notify.ntfy.topic", "t"],
+  ]);
+  configureNotifications({ db, getSetting: (k) => settings.get(k) ?? null, setSetting: () => {}, getSecret: () => null, broadcast: () => 0 });
+  const waitFor = async (n: number) => {
+    for (let i = 0; i < 50 && hits.length < n; i++) await Bun.sleep(20);
+  };
+
+  notify({ tier: "needs_attention", title: "Disk full", body: "", source: "operation", at: Date.now() });
+  await waitFor(1);
+  expect(hits).toEqual(["Disk full"]); // the FIRST push must NOT dedup against its own just-inserted row
+
+  notify({ tier: "needs_attention", title: "Disk full", body: "", source: "operation", at: Date.now() });
+  await Bun.sleep(200);
+  expect(hits).toEqual(["Disk full"]); // a same-title repeat inside the window is suppressed
+
+  notify({ tier: "needs_attention", title: "A different problem", body: "", source: "operation", at: Date.now() });
+  await waitFor(2);
+  expect(hits).toEqual(["Disk full", "A different problem"]);
+  server.stop(true);
+});
+
 test("unconfigured: notify is a no-op, never a throw", () => {
   resetNotifications();
   expect(() => notify({ tier: "needs_attention", title: "x", body: "", source: "agent", at: 0 })).not.toThrow();
