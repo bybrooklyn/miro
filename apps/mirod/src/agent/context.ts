@@ -151,7 +151,7 @@ export function buildCapabilitiesTool(db: Database) {
       });
       return textResult({
         systems,
-        genericOperations: ["shell_command", "file_write", "file_delete", "http_mutation", "service_restart", "service_control", "searxng_install"],
+        genericOperations: ["shell_command", "file_edit", "file_write", "file_delete", "http_mutation", "service_restart", "service_control", "searxng_install"],
         readTools: ["shell_inspect", "read_file", "http_get", "net_capture", "container_*", "systemd_*", "filesystem_*", "network_info", "hardware_gpu", "packages_list", "web_search", "web_fetch"],
         commandClasses: {
           read: "runs immediately in a read-only sandbox; host network only for network-inspecting commands",

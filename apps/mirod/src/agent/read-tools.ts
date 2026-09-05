@@ -2,6 +2,7 @@ import { Type, type Static } from "@miro/schema-engine/typebox";
 import type { AgentToolResult } from "@miro/agent-core";
 import { existsSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import { classifyCommand, isSensitivePath, isLocalOrPrivateUrl, redactSecretsInText } from "../operations/classify";
+import { anchoredView } from "../operations/hashline";
 import { runSandboxed, sandboxAvailable } from "../operations/sandbox";
 import { commandExists, run } from "../inventory/exec";
 
@@ -23,6 +24,7 @@ const readFileParams = Type.Object({
   path: Type.String({ description: "Absolute path." }),
   maxBytes: Type.Optional(Type.Integer({ description: "Cap on bytes returned (default 65536)." })),
   offset: Type.Optional(Type.Integer({ description: "Byte offset to start from (default 0)." })),
+  anchored: Type.Optional(Type.Boolean({ description: "true to tag every line as N:hhhh|text - the anchors file_edit takes. Needs offset 0." })),
 });
 
 const httpGetParams = Type.Object({
@@ -81,10 +83,11 @@ export function buildReadTools(ctx: ReadToolContext) {
     {
       name: "read_file",
       label: "Read file",
-      description: "Read a file's contents (capped). Secret material - private keys, /etc/shadow, Miro's own key and database, credential files - is refused.",
+      description: "Read a file's contents (capped). With anchored: true every line is tagged N:hhhh| - the anchors file_edit takes, so read a file that way before editing it. Secret material - private keys, /etc/shadow, Miro's own key and database, credential files - is refused.",
       parameters: readFileParams,
       execute: async (_id: string, params: Static<typeof readFileParams>) => {
         if (isSensitivePath(params.path)) return textResult({ refused: true, reason: `${params.path} is secret material` });
+        if (params.anchored && params.offset) return textResult({ refused: true, reason: "anchored needs offset 0 - line numbers count from the start of the file" });
         if (!existsSync(params.path)) return textResult({ missing: true, path: params.path });
         const st = statSync(params.path);
         if (st.isDirectory()) return textResult({ directory: true, path: params.path, hint: "use shell_inspect with ls" });
@@ -99,7 +102,9 @@ export function buildReadTools(ctx: ReadToolContext) {
           offset,
           returned: buf.length,
           truncated: offset + buf.length < st.size,
-          ...(binary ? { binary: true, note: "binary content omitted" } : { content: redactSecretsInText(buf.toString("utf-8")) }),
+          // Anchors hash the REAL line (so an edit to a redacted line still matches); the tags survive
+          // redaction because they sit before the text the regexes look at.
+          ...(binary ? { binary: true, note: "binary content omitted" } : { content: redactSecretsInText(params.anchored ? anchoredView(buf.toString("utf-8")) : buf.toString("utf-8")) }),
         });
       },
     },

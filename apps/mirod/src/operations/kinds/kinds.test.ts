@@ -1,6 +1,6 @@
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync, readFileSync, realpathSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ServerEvent } from "@miro/protocol";
@@ -13,6 +13,8 @@ import { httpMutationKind, isLocalOrPrivateUrl } from "./http-mutation";
 import { shellCommandKind } from "./shell-command";
 import { systemdUnitKind } from "./systemd-unit";
 import { dockerRunArgs, searxngBaseUrl, searxngInstallKind, settingsYaml } from "./searxng-install";
+import { fileEditKind } from "./file-edit";
+import { applyEdits, lineHash } from "../hashline";
 import { sandboxAvailable } from "../sandbox";
 import { listTrash } from "../trash";
 
@@ -68,6 +70,48 @@ describe("prodtest targets", () => {
     expect(fileDeleteKind.prodtest!({ path: "/etc/x.conf" })).toBe("/etc/x.conf");
     expect(systemdUnitKind.prodtest!({ action: "enable", unit: "a.service" })).toBe("a.service#enabled");
     expect(systemdUnitKind.prodtest!({ action: "daemon-reload" })).toBeNull();
+  });
+});
+
+// file.edit through the real engine on a real file: the tool's computed content, a diff in the
+// plan, a stale view refused at planning, commit and rollback.
+describe("file.edit", () => {
+  test("an anchored edit commits, shows a diff, and is refused when the file changed since it was read", async () => {
+    const path = join(work, "app.ini");
+    const original = "[server]\nport = 8096\nbind = 0.0.0.0\n";
+    writeFileSync(path, original);
+    const edits = [{ anchor: `2:${lineHash("port = 8096")}`, op: "replace" as const, lines: ["port = 8920"] }];
+    const content = applyEdits(original, edits);
+    const { ctx: c, events } = ctx();
+    const result = await runOperation(c, fileEditKind, "move the port", { path, edits, content });
+    expect(result.outcome).toBe("committed");
+    expect(readFileSync(path, "utf-8")).toBe("[server]\nport = 8920\nbind = 0.0.0.0\n");
+    const plan = planOf(events);
+    expect(plan.summary).toMatch(/Edit .*app\.ini \(1 anchored edit/);
+    expect(plan.autoApprove).toBe(false);
+    expect(String(plan.details!.diff)).toContain("-port = 8096");
+    expect(String(plan.details!.diff)).toContain("+port = 8920");
+    // The same edit again: the anchor no longer matches the file - refused at planning, nothing touched.
+    await expect(fileEditKind.describe({ path, edits, content })).rejects.toThrow(/no longer matches line 2/);
+    // Content that does not match what the edits produce now is refused too.
+    writeFileSync(path, original);
+    await expect(fileEditKind.describe({ path, edits, content: "something else\n" })).rejects.toThrow(/changed between reading it and planning/);
+    // Not an existing file, or secret material: refused.
+    await expect(fileEditKind.describe({ path: join(work, "nope"), edits, content })).rejects.toThrow(/not an existing file/);
+    await expect(fileEditKind.describe({ path: join(work, ".miro", "secret.key"), edits, content })).rejects.toThrow(/secret material/);
+  });
+
+  test("a failed verify restores the previous content and mode", async () => {
+    const path = join(work, "x.conf");
+    writeFileSync(path, "a\nb\n", { mode: 0o600 });
+    const edits = [{ anchor: `1:${lineHash("a")}`, op: "delete" as const }];
+    const content = applyEdits("a\nb\n", edits);
+    const kind = { ...fileEditKind, verify: async () => false };
+    const result = await runOperation(ctx().ctx, kind, "drop a", { path, edits, content });
+    expect(result.outcome).toBe("rolledback");
+    expect(readFileSync(path, "utf-8")).toBe("a\nb\n");
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(fileEditKind.prodtest!({ path, edits, content })).toBe(path);
   });
 });
 

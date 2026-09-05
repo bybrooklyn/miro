@@ -7,6 +7,10 @@ import { systemdUnitKind, UNIT_ACTIONS, type SystemdUnitParams } from "../operat
 import { searxngInstallKind, searxngBaseUrl, DEFAULT_SEARXNG_PORT, SEARXNG_SETTING } from "../operations/kinds/searxng-install";
 import { shellCommandKind, takeOutput as takeShellOutput, type ShellCommandParams } from "../operations/kinds/shell-command";
 import { fileWriteKind, type FileWriteParams } from "../operations/kinds/file-write";
+import { fileEditKind } from "../operations/kinds/file-edit";
+import { applyEdits, type AnchoredEdit } from "../operations/hashline";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { isSensitivePath } from "../operations/classify";
 import { fileDeleteKind, type FileDeleteParams } from "../operations/kinds/file-delete";
 import { httpMutationKind, takeOutput as takeHttpOutput, type HttpMutationParams } from "../operations/kinds/http-mutation";
 import { classifyCommand, redactSecretsInText } from "../operations/classify";
@@ -50,6 +54,20 @@ const fileWriteParams = Type.Object({
   reason: Type.String({ description: "Why, in one line - shown to the user as the goal." }),
   mode: Type.Optional(Type.Integer({ description: "Octal file mode as a number, e.g. 420 for 0644." })),
   verifyKeeps: Type.Optional(Type.Boolean({ description: "Omit for a file that should keep this content (a config file) - Miro re-checks it periodically and reports drift. Set false for a one-shot marker or trigger file the app consumes." })),
+});
+
+const fileEditParams = Type.Object({
+  path: Type.String({ description: "Absolute path of an existing file you have read with read_file(anchored: true)." }),
+  edits: Type.Array(
+    Type.Object({
+      anchor: Type.String({ description: "The N:hhhh tag of the first line of the range, exactly as read_file showed it." }),
+      to: Type.Optional(Type.String({ description: "The N:hhhh tag of the last line of the range (inclusive); defaults to anchor. Not used by insert_after." })),
+      op: Type.Enum(["replace", "insert_after", "delete"], { description: "replace the range with lines; insert lines after the anchor line; delete the range." }),
+      lines: Type.Optional(Type.Array(Type.String(), { description: "The new lines (replace / insert_after), without trailing newlines." })),
+    }),
+    { description: "Non-overlapping edits; applied together." },
+  ),
+  reason: Type.String({ description: "Why, in one line - shown to the user as the goal." }),
 });
 
 const fileDeleteParams = Type.Object({
@@ -163,6 +181,25 @@ export function buildOperationTools(ctx: OperationToolContext) {
       },
     },
     {
+      name: "file_edit",
+      label: "Edit file",
+      description:
+        "Edit an existing file by hash anchors: read it with read_file(anchored: true), then replace / insert_after / delete ranges named by their N:hhhh tags. Refused, not guessed, if the file changed since you read it. The user approves a diff. Prefer this over file_write for any existing file - never retype a whole config.",
+      parameters: fileEditParams,
+      execute: async (_id: string, params: { path: string; edits: AnchoredEdit[]; reason: string }) => {
+        const { reason, path, edits } = params;
+        if (isSensitivePath(path)) return textResult({ refused: true, reason: `${path} is secret material` });
+        if (!existsSync(path) || !statSync(path).isFile()) return textResult({ refused: true, reason: `${path} is not an existing file - use file_write to create one` });
+        let content: string;
+        try {
+          content = applyEdits(readFileSync(path, "utf-8"), edits);
+        } catch (err) {
+          return textResult({ refused: true, reason: String(err instanceof Error ? err.message : err) });
+        }
+        return textResult(await runOperation(ctx, fileEditKind, reason, { path, edits, content }));
+      },
+    },
+    {
       name: "file_delete",
       label: "Delete (to trash)",
       description:
@@ -201,6 +238,7 @@ export function allOperationKinds(getSecret: (ref: string) => string | null, set
     [searxngInstallKind.kind]: searxngInstallKind,
     [shellCommandKind.kind]: shellCommandKind,
     [fileWriteKind.kind]: fileWriteKind,
+    [fileEditKind.kind]: fileEditKind,
     [fileDeleteKind.kind]: fileDeleteKind,
     [http.kind]: http,
   };
