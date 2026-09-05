@@ -90,7 +90,7 @@ else
     -smp 2 \
     -drive if=pflash,format=raw,readonly=on,file="$FIRMWARE_CODE" \
     -drive if=pflash,format=raw,file="$STATE/vars.fd" \
-    -drive if=virtio,format=qcow2,file="$STATE/disk.qcow2" \
+    -drive if=virtio,format=qcow2,file="$STATE/disk.qcow2",discard=unmap,detect-zeroes=unmap \
     -drive if=virtio,format=raw,file="$STATE/seed.iso",media=cdrom \
     ${CARGO_DRIVE_ARGS[@]+"${CARGO_DRIVE_ARGS[@]}"} \
     -netdev user,id=net0,hostfwd=tcp:127.0.0.1:2222-:22 \
