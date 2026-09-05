@@ -71,7 +71,7 @@ the original plan called Stage 4 (Jellyfin) with the media slice of the original
 | **B. Safe action** | Operation engine w/ visible plan-diffs, recovery points, rollback, lifelines, reboot recovery, SecretRef secrets | **Slice 1 shipped** (operation engine core, live-verified); lifelines shipped (§5.7 F3); **reboot recovery shipped** (§5.30: the hardened systemd unit + the `system_reboot` operation with post-boot pending-bless, live-verified through two real guest reboots) |
 | **C. Memory & Learning** | §37 Memory, communication-style personality adaptation, personalized quiet-competence thresholds - unified with self-extension/Dreaming foundations | **Slice 1 shipped** (Memory + Reflexion-shaped Dreaming reflection, live-verified). **Slice 2 shipped, both phases** (self-extension: learn→generate→validate→promote, AND Dreaming's repair loop - a real induced failure was detected, self-repaired, and re-verified working, all live on the VM - see Part 4). Personalized quiet-competence thresholds not started. |
 | **D. Media flagship** | Full acquisition+playback stack set up end-to-end (Sonarr/Radarr/Prowlarr/qBittorrent/Jellyfin/Portainer) | **Slice 1 in progress** (Jellyfin, adopt-existing, live discovery - see Part 5 / §5.13) |
-| **E. Capstone** | Immich, remaining self-hoster stack, notification bus (ntfy-first), GitHub config backup, power/UPS | Not started |
+| **E. Capstone** | Immich, remaining self-hoster stack, notification bus (ntfy-first), GitHub config backup, power/UPS | **Started** - notification bus shipped (§5.31: the notify() bus + connection registry, ntfy and Gotify sinks, live-verified to both channels and the TUI). Immich, remaining stack, GitHub backup, power/UPS not started |
 
 Why this order, confirmed explicitly: remote reachability matters enough to front-load ahead of
 safety fundamentals, because day-to-day usefulness - and thus how often the learning flywheel turns
@@ -2724,3 +2724,72 @@ Dropped, each with the probe that showed it: `ProtectSystem` (any level makes `/
 **Not done, by scope.** The compose-file `restart:` path is unit-tested only - the dev VM's containers are not compose-managed (`Bun.YAML` parsing and `composeRestartKey` are covered, the live wiring is not). Auto-enabling disabled units and restoring the running set at boot were declined (report-only was the decision, and even the report proved too noisy for units); power-off has no operation. `MemoryDenyWriteExecute` is proven on arm64 Debian under this Bun; a different JSC build should be re-checked before shipping the production unit.
 
 **State:** 390 pass / 0 fail / 14 skip; every package typechecks (`just check`, 13/13). PRs #3 → … → #9 stacked. Next open work: Stage D's VPN half (needs the owner's credential), then Stage E; §5.16 self-update can now build on `OperationKind.reconcile`.
+
+### 5.31 The notification bus - Stage E's first piece (2026-09-05)
+
+Branch `notify-bus` (stacked on `reboot-recovery`, PR #10 on #9). Stage E's stated first capstone
+piece, and the substrate PLAN.md §3 and Part 3 deferred proactive repairs and per-user
+quiet-competence tiers on. The gap: background work already detects real problems (the 24h drift
+check, the extension reprobe, a repair that gives up and disables a tool) but each passed
+`console.log` as its `send`, so its notice went to the daemon log, never the owner; drift also
+wrote a memory incident row the agent only saw on the owner's next chat. Nothing surfaced
+autonomously. Grilled with the owner, then built and live-verified on the dev VM against two real
+push services.
+
+**The decisions, settled.** (1) The notification bus is the first Stage E piece. (2) Two phone
+sinks behind one interface: ntfy (self-hosted, the product default) and Gotify (already on the VM).
+(3) Autonomy is one rule: a notification reaches the phone iff its tier is `needs_attention`. The
+agent reaches the phone by choosing that tier for anything it judges worth interrupting the owner
+("literally anything it feels"); the mechanical important signals use it ("important stuff").
+`worth_knowing` is the terminal only (now or on next connect); `routine` is log-only. Guidance in
+the prompt, never a hard gate.
+
+**The design.** A new `apps/mirod/src/notifications/` module mirrors the capability layer: a
+singleton configured once at boot, a top-level `notify()` reached by import (no parameter
+threading), a no-op when unconfigured so tests and bare imports are safe. No protocol change -
+notifications ride the existing `NoticeEvent`. `notify(n)` persists to a durable notifications
+store, broadcasts a notice to every connected TUI through a new connection registry, and phones the
+`needs_attention` ones. The store persists first, so a notification survives a broadcast/phone
+failure and a disconnected owner's `worth_knowing`+ notifications replay on their next connect -
+which subsumes and replaces the one-shot `boot_report` the reboot slice used (one mechanism now).
+The sinks' request shaping is pure and unit-tested; a POST is bounded (`AbortSignal.timeout`) and
+never throws. The agent gets a `notify` tool (it picks the tier) and a `notify_configure` tool (it
+sends a test and only saves a channel the server accepts; a Gotify token is captured via `ask_user`
+secretRef, never a tool param). The background signals are wired through: repair-gave-up and an
+unattended auto-rollback push `needs_attention`; drift pushes on first sighting only
+(`occurrenceCount === 1`), `needs_attention` on a lifeline target and `worth_knowing` otherwise. A
+single `disconnect(state)` helper deregisters a connection from the broadcast set at every
+transport's teardown, so a dead sink can never linger; `configureNotifications` runs before
+`reconcileOperations` so a reboot verdict at boot still lands.
+
+**Live-verified on the VM (both push services real, checked independently).**
+- Gotify (a fresh app token minted via its admin API, stored as `notify.gotify.token`): a driven
+  chat had the agent call `notify(needs_attention)`; the notice reached the connected TUI and the
+  message landed in Gotify at priority 8, confirmed by querying Gotify's own `/message` API.
+- ntfy (a self-hosted `binwiederhier/ntfy` container on 8090): the agent configured it live with
+  `notify_configure` (its test notification landed in the topic), then one `notify(needs_attention)`
+  fanned out to ntfy AND Gotify AND the TUI at once - each confirmed independently against the two
+  services' own APIs.
+- Boot-order + replay: a `system_reboot` whose committed verdict was emitted at boot with no client
+  connected persisted as `worth_knowing`, `tui_delivered_at` NULL, did NOT phone (a clean reboot
+  stays quiet), and replayed to the first TUI to connect, which flipped the row to delivered. The
+  reboot even set `restart=unless-stopped` on the ntfy container so it came back.
+
+**The bug live testing caught (fixed at the root).** With both sinks configured, a `needs_attention`
+notification reached the TUI but neither sink. `notify()` persisted the row first, then the
+`recentByTitle` dedup backstop matched the row it had just inserted, so every phone push deduped
+against itself and silently never fired. The dedup decision now happens before the insert; a
+regression test drives two same-title and one new-title notification through a real local HTTP sink
+and asserts the first fires, the repeat is suppressed, the new title fires. (The earlier Gotify
+message that looked like a sink success was actually the agent's own `http_mutation` attempt, a red
+herring the table dump disambiguated.)
+
+**Not done, by scope.** `notify_configure`'s Gotify path via `ask_user` secretRef is not
+driver-exercisable (the headless driver empties secret prompts), so the token was seeded directly
+for the test; the send path it produces is the same one Gotify fired on. Per-user quiet-competence
+tier thresholds (§3) are now buildable but unbuilt. Miro self-hosting ntfy as an operation (an
+`ntfy-install` docker op like `searxng-install`) is a follow-up - the slice self-hosted it by hand
+for the test. The rest of Stage E (Immich, remaining stack, GitHub backup, power/UPS) is unstarted.
+
+**State:** 405 pass / 0 fail / 14 skip; every package typechecks (`just check`, 13/13). PRs #3 → …
+→ #10 stacked.

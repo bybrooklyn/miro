@@ -178,6 +178,14 @@ Gotchas worth knowing before you try:
   clean `poweroff`, `up.sh` cold-boots and the enabled unit brings mirod back on its own; the media
   containers now carry `restart=unless-stopped` (the `system_reboot` operation set it, §5.30), so
   the old "restart mirod, then `docker start jellyfin`" chore is gone.
+- Notification bus channels on the VM (§5.31): a Gotify server runs as `gotify.service` on 8080
+  (admin/admin default, no cloud-init override) - mint an app token with `curl -u admin:admin -X
+  POST http://127.0.0.1:8080/application` and store it as the secret `notify.gotify.token` (settings
+  `notify.gotify.url`). Do NOT reuse `extension.gotify.api_key` - it is poisoned with the no-user
+  marker on this VM (§5.20). ntfy is a hand-run `binwiederhier/ntfy` container on 8090 (`notify.ntfy.url`
+  / `notify.ntfy.topic`); check a push independently via Gotify's `/message` API or ntfy's
+  `/<topic>/json?poll=1`. The headless `chat-driver.ts` empties every secret prompt, so it cannot
+  drive `notify_configure`'s Gotify token capture (ask_user secretRef) - seed the token directly.
 
 This list is the current one. `PLAN.md`'s "Working notes / gotchas" section is the historical
 record from earlier stages - read it for context, keep new gotchas here.
