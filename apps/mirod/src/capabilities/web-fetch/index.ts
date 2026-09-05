@@ -64,15 +64,49 @@ export function directFetchImplementation(): Implementation<WebFetchRequest, Web
     available: () => true,
     timeoutMs: 15_000,
     async run(req, signal) {
-      const res = await fetch(req.url, { headers: { Accept: "text/html,application/xhtml+xml,text/plain,application/json;q=0.9,*/*;q=0.5", "User-Agent": "Miro/0.0 (+self-hosted server agent)" }, redirect: "follow", signal });
-      if (!res.ok) throw new ImplementationError(`GET ${req.url}: HTTP ${res.status}`, res.status);
-      const raw = await res.text();
-      const body = raw.length > MAX_PAGE_BYTES ? raw.slice(0, MAX_PAGE_BYTES) : raw;
-      const type = res.headers.get("content-type") ?? "";
-      if (/html|xml/.test(type) || /^\s*<(!doctype|html)/i.test(body)) return extractReadable(body, res.url || req.url);
-      return { title: "", content: body, links: [] };
+      // Client-side redirects (a meta refresh, a canonical link, `window.location.href = ...`) are how
+      // docs sites move pages - found live: jellyfin.org's hardware-acceleration URL is a 448-byte JS
+      // stub whose real page is 40KB. An empty body with such a pointer is followed, a few hops at most.
+      let url = req.url;
+      for (let hop = 0; ; hop++) {
+        const res = await fetch(url, { headers: { Accept: "text/html,application/xhtml+xml,text/plain,application/json;q=0.9,*/*;q=0.5", "User-Agent": "Miro/0.0 (+self-hosted server agent)" }, redirect: "follow", signal });
+        if (!res.ok) throw new ImplementationError(`GET ${url}: HTTP ${res.status}`, res.status);
+        const raw = await res.text();
+        const body = raw.length > MAX_PAGE_BYTES ? raw.slice(0, MAX_PAGE_BYTES) : raw;
+        const type = res.headers.get("content-type") ?? "";
+        if (!(/html|xml/.test(type) || /^\s*<(!doctype|html)/i.test(body))) return { title: "", content: body, links: [] };
+        const landed = res.url || url;
+        const page = extractReadable(body, landed);
+        if (page.content.length > 0 || hop >= MAX_CLIENT_REDIRECTS) return page;
+        const next = clientRedirectOf(body, landed);
+        if (!next || next === landed) return page;
+        url = next;
+      }
     },
   };
+}
+
+export const MAX_CLIENT_REDIRECTS = 3;
+
+/** Where an empty page says its content really is: a meta refresh, a canonical link that differs
+ * from the page's own URL, or a plain JS location assignment. Null when there is no such pointer. */
+export function clientRedirectOf(html: string, pageUrl: string): string | null {
+  const candidates = [
+    /<meta[^>]+http-equiv\s*=\s*["']?refresh["']?[^>]*content\s*=\s*["'][^"']*?url\s*=\s*([^"'\s;]+)/i.exec(html)?.[1],
+    /<link[^>]+rel\s*=\s*["']canonical["'][^>]*href\s*=\s*["']([^"']+)["']/i.exec(html)?.[1],
+    /(?:window\.)?location(?:\.href)?\s*=\s*["']([^"']+)["']/i.exec(html)?.[1],
+    /location\.(?:replace|assign)\(\s*["']([^"']+)["']/i.exec(html)?.[1],
+  ];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      const resolved = new URL(candidate, pageUrl).toString();
+      if (resolved !== new URL(pageUrl).toString() && /^https?:/.test(resolved)) return resolved;
+    } catch {
+      // not a URL
+    }
+  }
+  return null;
 }
 
 const DROP_BLOCKS = /<(script|style|noscript|svg|template|head|nav|header|footer|aside|iframe)\b[\s\S]*?<\/\1\s*>/gi;

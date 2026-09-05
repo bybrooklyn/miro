@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import { Registry } from "../registry";
 import { createUsageStore } from "../usage";
-import { decodeEntities, directFetchImplementation, extractReadable, fetchWeb, ollamaFetchImplementation, registerWebFetch } from "./index";
+import { clientRedirectOf, decodeEntities, directFetchImplementation, extractReadable, fetchWeb, ollamaFetchImplementation, registerWebFetch } from "./index";
 
 const PAGE = `<!doctype html><html><head><title>Hardware &amp; Acceleration | Jellyfin</title><style>body{}</style><script>alert(1)</script></head>
 <body><nav><a href="/">Home</a><a href="/docs">Docs</a></nav>
@@ -29,6 +29,11 @@ function server() {
       if (url.pathname === "/page") return new Response(PAGE, { headers: { "content-type": "text/html; charset=utf-8" } });
       if (url.pathname === "/data.json") return Response.json({ ok: true });
       if (url.pathname === "/redirect") return Response.redirect(`${url.origin}/page`, 302);
+      // The jellyfin.org shape: an empty document whose canonical link and JS assignment name the real page.
+      if (url.pathname === "/moved") return new Response(`<!doctype html><html><head><link rel="canonical" href="/page" /></head><script>window.location.href = '/page' + window.location.search;</script></html>`, { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/refresh") return new Response(`<html><head><meta http-equiv="refresh" content="0; url=/moved"></head><body></body></html>`, { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/loop") return new Response(`<html><head><meta http-equiv="refresh" content="0; url=/loop2"></head></html>`, { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/loop2") return new Response(`<html><head><meta http-equiv="refresh" content="0; url=/loop"></head></html>`, { headers: { "content-type": "text/html" } });
       if (url.pathname === "/api/web_fetch") {
         if (req.headers.get("authorization") !== "Bearer k-1") return new Response("no", { status: 401 });
         const body = (await req.json()) as { url: string };
@@ -50,9 +55,23 @@ test("direct implementation: HTML is extracted, JSON passes through, redirects a
     expect((await direct.run({ url: `${s.base}/data.json` }, AbortSignal.timeout(5000))).content).toBe('{"ok":true}');
     expect((await direct.run({ url: `${s.base}/redirect` }, AbortSignal.timeout(5000))).title).toContain("Jellyfin");
     await expect(direct.run({ url: `${s.base}/missing` }, AbortSignal.timeout(5000))).rejects.toMatchObject({ name: "ImplementationError", status: 404 });
+    // Client-side redirects: an empty JS/canonical stub, a meta refresh chain, and a loop that ends after the hop cap.
+    expect((await direct.run({ url: `${s.base}/moved` }, AbortSignal.timeout(5000))).title).toContain("Jellyfin");
+    expect((await direct.run({ url: `${s.base}/refresh` }, AbortSignal.timeout(5000))).content).toContain("Intel Quick Sync");
+    expect((await direct.run({ url: `${s.base}/loop` }, AbortSignal.timeout(5000))).content).toBe("");
   } finally {
     s.stop();
   }
+});
+
+test("clientRedirectOf reads meta refresh, a differing canonical, and JS location assignments; ignores a self-canonical", () => {
+  expect(clientRedirectOf(`<meta http-equiv="refresh" content="0; url=/new">`, "https://a.example/old")).toBe("https://a.example/new");
+  expect(clientRedirectOf(`<link rel="canonical" href="https://a.example/old/" />`, "https://a.example/old")).toBe("https://a.example/old/");
+  expect(clientRedirectOf(`<link rel="canonical" href="https://a.example/old" />`, "https://a.example/old")).toBeNull();
+  expect(clientRedirectOf(`<script>window.location.href = '/x' + window.location.search;</script>`, "https://a.example/old")).toBe("https://a.example/x");
+  expect(clientRedirectOf(`<script>location.replace("https://b.example/y")</script>`, "https://a.example/old")).toBe("https://b.example/y");
+  expect(clientRedirectOf(`<p>nothing here</p>`, "https://a.example/old")).toBeNull();
+  expect(clientRedirectOf(`<meta http-equiv="refresh" content="0; url=javascript:alert(1)">`, "https://a.example/old")).toBeNull();
 });
 
 test("fetchWeb: refuses non-http and private addresses without routing, prefers Ollama when keyed, else direct; truncates to maxChars", async () => {
