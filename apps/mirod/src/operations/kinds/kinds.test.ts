@@ -80,7 +80,9 @@ describe("prodtest targets", () => {
 // without docker or systemd (this dev Mac); captureState/apply/reconcile need docker, systemd and
 // an actual reboot - the live check on the dev VM, like the other systemd kinds. Not stubbed.
 describe("system.reboot", () => {
-  test("describe(): lifeline, irreversible, never auto-approved, partial dry-run; nothing to change without docker", async () => {
+  test("describe(): lifeline, irreversible, never auto-approved, partial dry-run", async () => {
+    // Runs on the dev Mac (no docker/systemd) AND on the VM (both present) - so it asserts only the
+    // shape, never live counts. policyChanges is [] here, non-empty on the VM; either is an array.
     const plan = await rebootKind.describe({ reason: "kernel update" });
     expect(plan.autoApprove).toBe(false);
     expect(plan.class).toBe("lifeline");
@@ -89,7 +91,7 @@ describe("system.reboot", () => {
     expect(plan.summary).toMatch(/^Reboot the server now - kernel update/);
     expect(plan.rollbackWhen).toMatch(/^never/);
     expect(plan.writes).toContain("/run/systemd");
-    expect(plan.details?.policyChanges).toEqual([]);
+    expect(Array.isArray(plan.details?.policyChanges)).toBe(true);
   });
 
   test("composeRestartKey: the service's own restart key, present with any value; absent, another service, or unparsable -> undefined", () => {
@@ -285,6 +287,16 @@ describe("file.write", () => {
     await fileWriteKind.rollback({ path, content: "x" }, captured);
     expect(existsSync(path)).toBe(false);
     expect(listTrash().some((e) => e.originalPath === path)).toBe(true);
+  });
+
+  test("mode: null (a strict-schema provider's 'omitted') keeps the default mode - it used to chmod 0 (found live, PLAN.md §5.30)", async () => {
+    const path = join(work, "nullmode");
+    const params = { path, content: "x", mode: null as unknown as undefined };
+    await fileWriteKind.apply(params);
+    const mode = statSync(path).mode & 0o777;
+    expect(mode).not.toBe(0);
+    expect(mode & 0o400).toBe(0o400);
+    expect((await fileWriteKind.describe(params)).details?.mode).toBeNull();
   });
 
   test("lifeline paths are classed lifeline; secret material is refused", async () => {

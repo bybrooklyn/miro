@@ -65,7 +65,7 @@ export const fileWriteKind: OperationKind<FileWriteParams, FileWriteCaptured> = 
         path: p.path,
         existed,
         bytes: Buffer.byteLength(p.content),
-        mode: p.mode !== undefined ? `0${p.mode.toString(8)}` : null,
+        mode: p.mode != null ? `0${p.mode.toString(8)}` : null,
         // The plan is persisted and sent to every client: the file's CURRENT content is redacted
         // (an app config's database password is not Miro's to broadcast - audit A10); the proposed
         // side is the model's own input and stays legible for approval.
@@ -89,7 +89,10 @@ export const fileWriteKind: OperationKind<FileWriteParams, FileWriteCaptured> = 
   async apply(p) {
     mkdirSync(dirname(p.path), { recursive: true });
     await Bun.write(p.path, p.content);
-    if (p.mode !== undefined) chmodSync(p.path, p.mode);
+    // `!= null`, not `!== undefined`: a strict-schema provider (Codex) sends null for an omitted
+    // optional field, and chmod(path, null) is chmod 0 - found live under the hardened unit's
+    // probes (PLAN.md §5.30): two files written with "mode: null" came out ----------.
+    if (p.mode != null) chmodSync(p.path, p.mode);
   },
 
   async verify(p) {

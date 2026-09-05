@@ -1,0 +1,63 @@
+# mirod - the Miro daemon (PLAN.md §5.15 D, §5.30). Hardened flag by flag on the dev VM: a flag
+# stays when every live proof still holds and is dropped, with the reason, when it blocks a real
+# operation. Dropped flags stay listed below so the next reader knows they were tried, not forgotten.
+# ExecStart is a stable path: the dev VM puts a wrapper there that runs the source tree
+# (tools/dev-vm/install-mirod.sh); production puts the compiled binary there (§5.16).
+[Unit]
+Description=Miro server-management daemon
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=notify
+NotifyAccess=all
+ExecStart=/usr/local/bin/mirod
+Environment=HOME=/root
+StateDirectory=miro
+RuntimeDirectory=miro
+RuntimeDirectoryMode=0750
+UMask=0022
+Restart=on-failure
+RestartSec=2
+# Bun exits 143 on SIGTERM instead of dying by the signal; without this every stop logs a false failure.
+SuccessExitStatus=143
+# Boot reconcile judges an interrupted reboot (is-system-running --wait + a container re-look) before READY.
+TimeoutStartSec=5min
+WatchdogSec=60
+
+NoNewPrivileges=yes
+ProtectProc=invisible
+ProtectControlGroups=yes
+# ProtectClock implies DeviceAllow=char-rtc, which turns the device cgroup on: nvidia-smi/smartctl
+# would be refused on a GPU box. Drop it (or add DeviceAllow=char-nvidia* rw) when that box exists.
+ProtectClock=yes
+ProtectHostname=yes
+LockPersonality=yes
+RestrictRealtime=yes
+# AF_NETLINK: ip/ss reads and glibc getaddrinfo. AF_PACKET: net_capture runs tshark in the daemon's own context.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK AF_PACKET
+# @mount: bubblewrap builds the command sandbox inside this unit. syslog: dmesg is an allowed read and
+# @system-service excludes it (found live: "Bad system call", audit syscall=116 on arm64).
+SystemCallFilter=@system-service @mount syslog
+SystemCallArchitectures=native
+# Everything but time: bubblewrap as root needs mnt ipc pid uts net cgroup, Chromium (the extension
+# host, as an unprivileged user) needs user. ponytail: forbids only time namespaces; kept as the
+# record of what is required, and it is what a tighter list would have to leave in.
+RestrictNamespaces=cgroup ipc mnt net pid user uts
+# Verified live: Bun's JavaScriptCore runs a full model turn, tool calls and a sandboxed write under it.
+MemoryDenyWriteExecute=yes
+
+# Tried and dropped - each blocks a real operation (the probe that showed it is in PLAN.md §5.30):
+# ProtectSystem=strict       - apt runs in bubblewrap inside this mount namespace; any level makes /usr read-only
+# ProtectHome=yes            - the media stack and the extension host's home live under /home/<user>
+# PrivateTmp=yes             - a file_write to /tmp is invisible to the owner and to docker -v (dockerd resolves the host /tmp)
+# PrivateDevices=yes         - hardware_gpu reads /dev/dri and runs nvidia-smi; a hidden /dev means "no GPU" (inventory/gpu.ts; not provable on the GPU-less dev VM)
+# ProtectKernelTunables=yes  - sysctl tuning is a real operation (Immich, Stage E)
+# ProtectKernelModules=yes   - hides /usr/lib/modules; a kernel upgrade through apt writes there
+# ProtectKernelLogs=yes      - dmesg is a read the agent uses (disk errors, OOM kills)
+# ProcSubset=pid             - bubblewrap reads /proc/sys/kernel/overflowuid at start, so every sandboxed command fails
+# RestrictSUIDSGID=yes       - dpkg sets u+s on packages like passwd; apt install runs inside this unit
+# UMask=0077                 - a file_write without an explicit mode was unreadable by a PUID container
+
+[Install]
+WantedBy=multi-user.target

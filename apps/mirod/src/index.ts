@@ -36,6 +36,7 @@ import type { CodegenSelection } from "./extensions/learn";
 import { maybeTriggerRepair, reprobeExtensions, type RepairTrigger } from "./extensions/repair";
 import { requiresArguments } from "./extensions/validate";
 import { createCodexAuth, importCodexCredentialFromCli, loginCodex } from "./agent/codex-auth";
+import { run } from "./inventory/exec";
 
 const OPERATION_KINDS = allOperationKinds((ref) => secretStore.getSecret(db, ref), (ref, value) => secretStore.setSecret(db, ref, value));
 
@@ -643,6 +644,18 @@ if (typeof process.getuid === "function" && process.getuid() === 0) {
 }
 
 console.log(`mirod listening on ${SOCKET_PATH}`);
+
+// Under systemd (Type=notify, apps/mirod/mirod.service): READY once the socket is bound and
+// group-accessible - the owner can connect - and WATCHDOG=1 at half the unit's WatchdogSec so a
+// wedged event loop is restarted. Deliberately before Iroh: a relay that hangs at boot must not
+// hold READY past TimeoutStartSec and restart-loop a daemon whose local socket works. A nohup/dev
+// run has no NOTIFY_SOCKET and skips this. ponytail: the systemd-notify binary carries both
+// messages (Bun has no AF_UNIX datagram client); a raw datagram when it grows one.
+if (process.env.NOTIFY_SOCKET) {
+  run("systemd-notify", ["--ready"]).catch((err) => console.warn("[mirod] systemd-notify --ready failed", err));
+  const watchdogUsec = Number(process.env.WATCHDOG_USEC);
+  if (watchdogUsec > 0) setInterval(() => run("systemd-notify", ["WATCHDOG=1"]).catch(() => {}), watchdogUsec / 2000);
+}
 
 // Iroh transport (plan §54 Stage A) - reachable from anywhere without port-forwarding. Runs
 // alongside the unix socket, not instead of it; local CLI use keeps working exactly as before.
