@@ -21,12 +21,15 @@ export interface WorkerResult {
 }
 
 /**
- * Spawns a narrow, time/tool-budgeted, read-only worker (plan §21).
+ * Spawns a narrow, tool-budgeted, read-only worker (plan §21).
  *
- * Workers get only the tools they're allowed, run for at most `maxTurns` assistant turns, and
+ * Workers get only the tools they're allowed, run for at most `maxTurns` model calls, and
  * return structured evidence rather than acting - the main agent stays the one that decides and
- * mutates. ponytail: no recursive worker swarms (plan explicitly rules this out for v1), and no
- * standing pool - one Agent per call, thrown away when done.
+ * mutates. The budget is in model calls, not wall-clock time: a hung provider stream hangs the
+ * worker until the provider's own timeout (audit R4 - the old comment claimed a time budget; a
+ * deadline via agent.abort() is the upgrade path if one is ever needed). ponytail: no recursive
+ * worker swarms (plan explicitly rules this out for v1), and no standing pool - one Agent per
+ * call, thrown away when done.
  *
  * `models` must be the daemon's one shared registry (agent/models.ts), never a fresh one - live-
  * tested finding: a provider registered at runtime (Ollama) is unknown to any other registry, so

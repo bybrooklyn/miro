@@ -146,10 +146,13 @@ Gotchas worth knowing before you try:
 - `rm -rf apps && tar xzf ...` on the VM also deletes the nested workspace `node_modules` symlinks
   - follow any resync that touched `apps/` with `bun install --force`, since a plain `bun install`
   will report "no changes" without recreating them.
-- The daemon on the VM runs as root: `cd apps/mirod && sudo -b sh -c 'HOME=/root MIRO_HOST_USER=miro
-  nohup /home/miro/.bun/bin/bun run src/index.ts > /var/log/mirod.log 2>&1 < /dev/null'`; socket
+- The daemon on the VM runs as root: `cd apps/mirod && sudo sh -c 'HOME=/root MIRO_HOST_USER=miro
+  nohup /home/miro/.bun/bin/bun run src/index.ts > /var/log/mirod.log 2>&1 < /dev/null &'`; socket
   `/run/miro/mirod.sock`. It is not a systemd unit - restart it after every `up.sh` and every sync.
-  Drive it headlessly with the scratchpad `chat-driver.ts` (one chat message, auto-answers prompts).
+  (The `&` inside the `sh -c` matters: with `sudo -b` instead, the `sh` parent keeps the ssh
+  session's stdout and the ssh command never returns.) Drive it headlessly with the scratchpad
+  `chat-driver.ts` (one chat message, auto-answers prompts) - `bun` is not on a non-interactive
+  ssh PATH there, call `/home/miro/.bun/bin/bun`.
 - `pkill -f '<pattern>'` inside an ssh command whose own text contains the pattern kills your shell
   (ssh exits 255, no output). Anchor it: `pkill -f '^/home/miro/.bun/bin/bun run src/index.ts'`.
 - SLIRP networking tops out around 1.2 Mbit/s. Big files (Docker images) go in through

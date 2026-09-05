@@ -158,3 +158,33 @@ test("nothing registered or nothing available routes to null with the attempts i
   expect(await r.route<Req, Res>(LIST.id, { q: "a" })).toEqual({ result: null, impl: null, attempts: [] });
   expect(() => r.registerImplementation(impl("q", failing("x"), { capability: "nope" }))).toThrow(/unknown capability/);
 });
+
+// Audit T6: the two budget paths through route() itself, not through candidates().
+test("route fans out at most FANOUT_WIDTH of a healthy group, and the overall budget ends a slow route with its attempts", async () => {
+  const r = registry();
+  r.registerCapability(LIST, { groups: [["n:*"]] });
+  let started = 0;
+  for (const id of ["n:1", "n:2", "n:3", "n:4", "n:5"]) {
+    r.registerImplementation(
+      impl(id, (signal) => {
+        started++;
+        return after(5, { items: [id] })(signal);
+      }),
+    );
+  }
+  const routed = await r.route<Req, Res>(LIST.id, { q: "a" });
+  expect(routed.result).not.toBeNull();
+  expect(started).toBe(3); // the 8-node public pool never fans out wider than this
+
+  const slow = registry();
+  slow.registerCapability(LIST, { groups: [["slow"], ["never"]] });
+  slow.registerImplementation(impl("slow", after(10_000, { items: ["late"] }), { timeoutMs: 10_000 }));
+  let neverAsked = true;
+  slow.registerImplementation(impl("never", async () => { neverAsked = false; return { items: ["x"] }; }));
+  const t0 = Date.now();
+  const out = await slow.route<Req, Res>(LIST.id, { q: "a" }, undefined, 60);
+  expect(out.result).toBeNull();
+  expect(Date.now() - t0).toBeLessThan(2_000); // the per-impl timeout is clipped to what is left of the budget
+  expect(out.attempts.map((a) => a.impl)).toEqual(["slow"]);
+  expect(neverAsked).toBe(true); // the second group is not asked once the deadline has passed
+});

@@ -17,12 +17,17 @@ const HOST_USER = isRoot ? (process.env.MIRO_HOST_USER ?? "miro") : null;
 const HOST_HOME = HOST_USER ? (process.env.MIRO_HOST_HOME ?? `/home/${HOST_USER}`) : "";
 
 interface Session {
+  key: string;
   proc: ReturnType<typeof Bun.spawn>;
   pending: Map<string, { resolve: (v: HostResponse) => void; reject: (e: unknown) => void }>;
   readyWaiters: (() => void)[];
   ready: boolean;
   lastUsed: number;
 }
+
+/** After a polite shutdown, the process gets this long to exit on its own before it is killed - a
+ * child that is not reading stdin (a wedged Chromium) otherwise outlived every teardown (audit B5). */
+const KILL_GRACE_MS = 3_000;
 
 export interface ExtensionHostManager {
   /** Spawns (or reuses) a real init-mode session against `dir` and calls `tool`. */
@@ -56,7 +61,16 @@ export function createExtensionHostManager(): ExtensionHostManager {
 
   function attach(key: string, dir: string, session: Session): void {
     const feed = createLineBuffer((line) => {
-      const res = JSON.parse(line) as HostResponse;
+      // stdout is the framing channel; a generated code entry that prints (host-entry redirects
+      // console.log, but a stray process.stdout.write is still possible) must not end the reader
+      // loop - which left the session "alive" and every later call waiting out its timeout (audit A16).
+      let res: HostResponse;
+      try {
+        res = JSON.parse(line) as HostResponse;
+      } catch {
+        console.error(`[ext-host:${key}] non-protocol output: ${line.slice(0, 200)}`);
+        return;
+      }
       if (res.type === "log") {
         console.error(`[ext-host:${key}] ${res.level} ${res.message}`);
         return;
@@ -103,7 +117,7 @@ export function createExtensionHostManager(): ExtensionHostManager {
       // agent/index.ts's PROVIDER_CATALOG envVar fallbacks).
       env: { PATH: process.env.PATH ?? "", HOME: HOST_USER ? HOST_HOME : (process.env.HOME ?? "") },
     });
-    const session: Session = { proc, pending: new Map(), readyWaiters: [], ready: false, lastUsed: Date.now() };
+    const session: Session = { key, proc, pending: new Map(), readyWaiters: [], ready: false, lastUsed: Date.now() };
     attach(key, dir, session);
     sessions.set(key, session);
     return session;
@@ -112,6 +126,27 @@ export function createExtensionHostManager(): ExtensionHostManager {
   function writeLine(session: Session, msg: HostRequest): void {
     (session.proc.stdin as any).write(encodeLine(msg));
     (session.proc.stdin as any).flush?.();
+  }
+
+  /** The one way a session ends: a polite shutdown, the map entry gone, and a kill if the process
+   * has not exited by itself in time. Every teardown path used to send shutdown and hope (audit
+   * A15/B5: a write to a dead process threw out of the reaper's loop, an unread stdin kept the
+   * child alive forever, and a timed-out session stayed in the map to time out every later call). */
+  function teardown(session: Session): void {
+    if (sessions.get(session.key) === session) sessions.delete(session.key);
+    try {
+      writeLine(session, { type: "shutdown" });
+    } catch {
+      // stdin already closed - the kill below is what matters
+    }
+    for (const [id, p] of session.pending) {
+      session.pending.delete(id);
+      p.reject(new Error("extension-host session ended"));
+    }
+    const timer = setTimeout(() => {
+      if (session.proc.exitCode === null) session.proc.kill();
+    }, KILL_GRACE_MS);
+    (timer as { unref?: () => void }).unref?.();
   }
 
   // Races against the process actually exiting - a subprocess that fails during init (a
@@ -168,6 +203,9 @@ export function createExtensionHostManager(): ExtensionHostManager {
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
         session.pending.delete(req.id);
+        // A session that stopped answering is torn down, so the next call gets a fresh process
+        // instead of the same 120s wait (audit B5).
+        teardown(session);
         reject(new Error(`extension-host call ${req.type}${"tool" in req ? ` ${req.tool}` : ""} timed out after ${Math.round(timeoutMs / 1000)}s`));
       }, timeoutMs);
     });
@@ -201,27 +239,27 @@ export function createExtensionHostManager(): ExtensionHostManager {
     },
     invalidate(dir) {
       const session = sessions.get(dir);
-      if (!session) return;
-      writeLine(session, { type: "shutdown" });
-      sessions.delete(dir);
+      if (session) teardown(session);
     },
     async listTools(dir, app, baseUrl, secrets) {
       return (await this.listModule(dir, app, baseUrl, secrets)).tools;
     },
     async listModule(dir, app, baseUrl, secrets) {
-      const key = `${dir}:list`;
-      const session = spawn(key, dir); // always fresh - this is a one-shot introspection, not a reused session
-      writeLine(session, { type: "init", app, baseUrl, secrets });
-      await waitReady(session);
-      const res = await request(session, { type: "list_tools", id: nextId() });
-      writeLine(session, { type: "shutdown" });
-      sessions.delete(key);
-      if (res.type !== "tools") throw new Error(`unexpected response type: ${res.type}`);
-      return { tools: res.tools, implements: res.implements ?? [] };
+      // Always fresh - a one-shot introspection, not a reused session - and keyed uniquely so two
+      // concurrent validations cannot clobber each other's map entry (audit A15).
+      const session = spawn(`${dir}:list:${nextId()}`, dir);
+      try {
+        writeLine(session, { type: "init", app, baseUrl, secrets });
+        await waitReady(session);
+        const res = await request(session, { type: "list_tools", id: nextId() });
+        if (res.type !== "tools") throw new Error(`unexpected response type: ${res.type}`);
+        return { tools: res.tools, implements: res.implements ?? [] };
+      } finally {
+        teardown(session); // on every path - a timeout used to orphan the process (audit A15)
+      }
     },
     async probe(dir, app, baseUrl, secrets, tool, args) {
-      const key = `${dir}:probe:${nextId()}`;
-      const session = spawn(key, dir);
+      const session = spawn(`${dir}:probe:${nextId()}`, dir);
       try {
         writeLine(session, { type: "init", app, baseUrl, secrets });
         await waitReady(session);
@@ -230,8 +268,7 @@ export function createExtensionHostManager(): ExtensionHostManager {
         if (!res.ok) throw new Error(res.error);
         return res.value;
       } finally {
-        writeLine(session, { type: "shutdown" });
-        sessions.delete(key);
+        teardown(session);
       }
     },
     async browserCall(app, tool, args) {
@@ -245,26 +282,17 @@ export function createExtensionHostManager(): ExtensionHostManager {
       return res.value;
     },
     closeBrowserSession(app) {
-      const key = `learn:${app}`;
-      const session = sessions.get(key);
-      if (!session) return;
-      writeLine(session, { type: "shutdown" });
-      sessions.delete(key);
+      const session = sessions.get(`learn:${app}`);
+      if (session) teardown(session);
     },
     reapIdle() {
       const now = Date.now();
-      for (const [key, session] of sessions) {
-        if (now - session.lastUsed > IDLE_REAP_MS) {
-          writeLine(session, { type: "shutdown" });
-          sessions.delete(key);
-        }
+      for (const session of [...sessions.values()]) {
+        if (now - session.lastUsed > IDLE_REAP_MS) teardown(session);
       }
     },
     shutdownAll() {
-      for (const [key, session] of sessions) {
-        writeLine(session, { type: "shutdown" });
-        sessions.delete(key);
-      }
+      for (const session of [...sessions.values()]) teardown(session);
     },
   };
 }
