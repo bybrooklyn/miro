@@ -6,6 +6,7 @@ import { systemdRestartKind } from "../operations/kinds/systemd-restart";
 import { systemdUnitKind, UNIT_ACTIONS, type SystemdUnitParams } from "../operations/kinds/systemd-unit";
 import { rebootKind } from "../operations/kinds/reboot";
 import { searxngInstallKind, searxngBaseUrl, DEFAULT_SEARXNG_PORT, SEARXNG_SETTING } from "../operations/kinds/searxng-install";
+import { ntfyInstallKind, resolveNtfyBaseUrl, generateTopic, ntfyLocalUrl, DEFAULT_NTFY_PORT, NTFY_URL_SETTING, NTFY_TOPIC_SETTING } from "../operations/kinds/ntfy-install";
 import { shellCommandKind, takeOutput as takeShellOutput, type ShellCommandParams } from "../operations/kinds/shell-command";
 import { fileWriteKind, type FileWriteParams } from "../operations/kinds/file-write";
 import { fileEditKind } from "../operations/kinds/file-edit";
@@ -44,6 +45,12 @@ const shellCommandParams = Type.Object({
 
 const searxngInstallParams = Type.Object({
   port: Type.Optional(Type.Integer({ description: `Loopback port for the node (default ${DEFAULT_SEARXNG_PORT}).` })),
+  reason: Type.String({ description: "Why, in one line - shown to the user as the goal." }),
+});
+
+const ntfyInstallParams = Type.Object({
+  port: Type.Optional(Type.Integer({ description: `Host port for the ntfy node (default ${DEFAULT_NTFY_PORT}).` })),
+  baseUrl: Type.Optional(Type.String({ description: "The address the owner's phone will use to reach ntfy, e.g. http://192.168.1.10:8090 or a tailscale/hostname URL. Omit to auto-detect (tailnet IP, else LAN IP)." })),
   reason: Type.String({ description: "Why, in one line - shown to the user as the goal." }),
 });
 
@@ -153,6 +160,27 @@ export function buildOperationTools(ctx: OperationToolContext) {
       },
     },
     {
+      name: "ntfy_install",
+      label: "Self-host ntfy",
+      description:
+        "Set up a self-hosted ntfy server (docker) so your needs_attention notifications reach the owner's phone - a confirmed operation that pulls the image, starts the container, publishes a test message to prove it, and rolls back otherwise. On success it becomes the ntfy notification channel automatically. Give a baseUrl only if you know the address the phone will use; otherwise it auto-detects (tailnet, then LAN). Needs Docker. Use notify_configure instead to point at an ntfy or Gotify server that already exists.",
+      parameters: ntfyInstallParams,
+      execute: async (_id: string, params: { port?: number; baseUrl?: string; reason: string }) => {
+        const port = params.port ?? DEFAULT_NTFY_PORT;
+        const topic = generateTopic();
+        const resolved = params.baseUrl ? { baseUrl: params.baseUrl.replace(/\/$/, ""), reachable: true } : await resolveNtfyBaseUrl(port);
+        const result = await runOperation(ctx, ntfyInstallKind, params.reason, { port, topic, baseUrl: resolved.baseUrl });
+        if (result.outcome === "committed") {
+          // The commit configures Miro itself: the ntfy sink reads these. The daemon POSTs to
+          // loopback (reliable); the owner subscribes at the phone-reachable address.
+          ctx.setSetting?.(NTFY_URL_SETTING, ntfyLocalUrl(port));
+          ctx.setSetting?.(NTFY_TOPIC_SETTING, topic);
+          return textResult({ ...result, subscribeUrl: `${resolved.baseUrl}/${topic}`, topic, reachableFromPhone: resolved.reachable, setup: resolved.reachable ? "Open the ntfy app and subscribe to this URL." : "No LAN/tailnet address was detected - the server is on loopback only; give a reachable baseUrl or set up tailscale for the phone to reach it." });
+        }
+        return textResult(result);
+      },
+    },
+    {
       name: "shell_command",
       label: "Run command",
       description:
@@ -244,6 +272,7 @@ export function allOperationKinds(getSecret: (ref: string) => string | null, set
     [systemdUnitKind.kind]: systemdUnitKind,
     [rebootKind.kind]: rebootKind,
     [searxngInstallKind.kind]: searxngInstallKind,
+    [ntfyInstallKind.kind]: ntfyInstallKind,
     [shellCommandKind.kind]: shellCommandKind,
     [fileWriteKind.kind]: fileWriteKind,
     [fileEditKind.kind]: fileEditKind,

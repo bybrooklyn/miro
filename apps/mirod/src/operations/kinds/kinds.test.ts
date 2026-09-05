@@ -15,6 +15,7 @@ import { systemdUnitKind } from "./systemd-unit";
 import { systemdRestartKind } from "./systemd-restart";
 import { composeRestartKey, rebootKind, rebootOutcome, type Captured as RebootCaptured, type Snapshot as RebootSnapshot } from "./reboot";
 import { dockerRunArgs, searxngBaseUrl, searxngInstallKind, settingsYaml } from "./searxng-install";
+import { generateTopic, ntfyInstallKind, ntfyLocalUrl, NTFY_CONTAINER } from "./ntfy-install";
 import { fileEditKind } from "./file-edit";
 import { applyEdits, lineHash } from "../hashline";
 import { sandboxAvailable } from "../sandbox";
@@ -73,6 +74,37 @@ describe("prodtest targets", () => {
     expect(systemdUnitKind.prodtest!({ action: "enable", unit: "a.service" })).toBe("a.service#enabled");
     expect(systemdUnitKind.prodtest!({ action: "daemon-reload" })).toBeNull();
     expect(rebootKind.prodtest!({ reason: "kernel update" })).toBeNull();
+    expect(ntfyInstallKind.prodtest!({ port: 8090, topic: "t", baseUrl: "http://x" })).toBe(NTFY_CONTAINER);
+  });
+});
+
+// ntfy.install (PLAN.md §5.31 follow-up): the pure parts are testable without docker; apply/verify
+// (a real docker run + a published message) are the live check on the VM, like the other docker kinds.
+describe("ntfy.install", () => {
+  test("generateTopic is unguessable and unique per call", () => {
+    const a = generateTopic();
+    const b = generateTopic();
+    expect(a).toMatch(/^miro-[A-Za-z0-9_-]{12}$/);
+    expect(a).not.toBe(b);
+  });
+
+  test("ntfyLocalUrl is the daemon's loopback address for the sink", () => {
+    expect(ntfyLocalUrl(8090)).toBe("http://127.0.0.1:8090");
+  });
+
+  test("describe(): mutate, never auto-approved, partial dry-run, declares only the docker socket, subscribe URL in the plan", async () => {
+    const plan = await ntfyInstallKind.describe({ port: 8090, topic: "miro-abc123", baseUrl: "http://10.0.0.5:8090" }).catch((e) => e);
+    // On a machine without docker, describe() refuses early - that refusal is itself correct.
+    if (plan instanceof Error) {
+      expect(plan.message).toMatch(/docker is required/);
+      return;
+    }
+    expect(plan.autoApprove).toBe(false);
+    expect(plan.class).toBe("mutate");
+    expect(plan.dryRunFidelity).toBe("partial");
+    expect(plan.writes).toEqual(["/var/run/docker.sock"]);
+    expect(plan.summary).toContain("http://10.0.0.5:8090/miro-abc123");
+    expect(plan.details?.topic).toBe("miro-abc123");
   });
 });
 
