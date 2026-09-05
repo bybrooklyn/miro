@@ -22,6 +22,7 @@ import { createSecretStore } from "./secrets";
 import { generateIrohSecretKey, startIrohEndpoint, ticketFor, acceptLoop } from "./iroh";
 import { reconcileOperations, type OperationToolContext, type ReflectionTrigger } from "./operations/engine";
 import { reverifyCommitted } from "./operations/prodtest";
+import { configureCapabilities, refreshWebSearchPool } from "./capabilities";
 import { allOperationKinds } from "./agent/operation-tools";
 import { buildContextBlock, takeSnapshot } from "./agent/context";
 import { runDiscovery } from "./discovery";
@@ -122,6 +123,10 @@ const models = createModelRegistry(getStoredKey, codexAuth.apiKey);
 if (await registerOllamaIfReachable(models)) {
   console.log("[mirod] Ollama detected - its models are available with no key needed");
 }
+
+// The capability layer (PLAN.md §5.14): web.search routed over an Ollama cloud key, a self-hosted
+// SearXNG and the public JSON-capable pool, with per-provider usage/health in the DB.
+configureCapabilities({ db, getStoredKey, getSetting, setSetting });
 
 const hostMgr = createExtensionHostManager();
 setInterval(() => hostMgr.reapIdle(), 60_000);
@@ -276,6 +281,16 @@ function reverifyPeriodically(): void {
 }
 setInterval(reverifyPeriodically, REPROBE_INTERVAL_MS);
 
+// The public SearXNG pool decays (nodes come and go, most block JSON) - re-probed on the same idle
+// period, and once at boot so the bundled seed is replaced by what actually answers today.
+function refreshSearchPool(): void {
+  refreshWebSearchPool()
+    .then((pool) => pool && console.log(`[mirod] web_search public pool: ${pool.nodes.length} JSON-capable node(s)${pool.nodes.length ? ` (${pool.nodes.map((n) => new URL(n.url).host).join(", ")})` : ""}`))
+    .catch((err) => console.error("[mirod] web_search pool refresh failed", err));
+}
+setInterval(refreshSearchPool, REPROBE_INTERVAL_MS);
+refreshSearchPool();
+
 // Discover what's on this box and persist it as durable server_facts (PLAN.md §5.13). Fire-and-
 // forget so a slow or absent Docker never delays boot; refreshed on the same long period as the
 // re-probe so present facts stay reinforced. buildSummary then surfaces them into every chat turn.
@@ -386,13 +401,21 @@ async function handleChat(text: string, send: (event: ServerEvent) => void, stat
  * providers, deliberately not part of PROVIDER_CATALOG (whose entries mean "a stored/env key
  * connects it"; Codex is connected when its OAuth credential is on file). */
 const CODEX_PROVIDER = "openai-codex";
+/** The Ollama cloud account key (paste-a-key; there is no OAuth to mint one) - stored as
+ * provider.ollama, read by the web.search implementation. Not a chat provider either. */
+const OLLAMA_SEARCH_PROVIDER = "ollama";
 
 function startProviderSetup(send: (event: ServerEvent) => void): void {
   send({
     type: "question",
     id: "provider_choice",
     prompt: "Which AI provider do you want to connect?",
-    options: [...PROVIDER_CATALOG.map((p) => ({ label: p.label, value: p.provider })), { label: "OpenAI Codex (ChatGPT login, no API key)", value: CODEX_PROVIDER }],
+    options: [
+      ...PROVIDER_CATALOG.map((p) => ({ label: p.label, value: p.provider })),
+      { label: "OpenAI Codex (ChatGPT login, no API key)", value: CODEX_PROVIDER },
+      // Not a chat provider: the pasted key from ollama.com/settings/keys that web_search uses first.
+      { label: "Ollama cloud (web search key)", value: OLLAMA_SEARCH_PROVIDER },
+    ],
   });
 }
 
@@ -442,7 +465,11 @@ function createConnectionState(send: (event: ServerEvent) => void): ConnState {
     } else if (msg.type === "answer" && msg.id === "provider_api_key") {
       const provider = state.pendingProvider;
       state.pendingProvider = undefined;
-      if (provider && msg.value.trim()) {
+      if (provider === OLLAMA_SEARCH_PROVIDER && msg.value.trim()) {
+        secretStore.setSecret(db, `provider.${provider}`, msg.value.trim());
+        recordEvent(db, "provider", `connected ${provider} (web search)`);
+        send({ type: "reply", text: "Ollama cloud search connected - web_search uses it first from now on." });
+      } else if (provider && msg.value.trim()) {
         secretStore.setSecret(db, `provider.${provider}`, msg.value.trim());
         recordEvent(db, "provider", `connected ${provider}`);
         send({

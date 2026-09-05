@@ -1,24 +1,17 @@
 // web.search result normalization (PLAN.md §5.14). Every implementation (Ollama cloud search, a
 // SearXNG node, a public-pool node) returns a provider-specific JSON body; these pure functions
 // parse each into ONE normalized shape and merge many sources with provenance preserved, deduped,
-// and ranked. Pure and unit-tested — the network-touching impls that call these are thin wrappers
+// and ranked. Pure and unit-tested - the network-touching impls that call these are thin wrappers
 // (same pure-vs-shell split the rest of the codebase uses, e.g. inventory/containers.ts).
 
 export interface WebSearchResult {
   title: string;
   url: string;
   description: string;
-  /** Which implementation(s) produced this result — provenance is kept, never flattened away. */
+  /** Which implementation(s) produced this result - provenance is kept, never flattened away. */
   sources: string[];
   /** Merge score: higher = corroborated by more sources and/or ranked higher by them. */
   score: number;
-}
-
-export interface WebSearchResponse {
-  available: boolean;
-  results: WebSearchResult[];
-  /** Per-source outcome, so a caller (and the router's health scoring) can see what actually ran. */
-  provenance?: { source: string; ok: boolean; count: number; error?: string }[];
 }
 
 // --- provider response shapes (only the fields we read) ---
@@ -30,7 +23,7 @@ interface SearxngBody {
 }
 
 /** Normalize a URL for dedup: lowercase host, strip a trailing slash, drop the fragment and common
- * tracking params. Not a canonicalizer — just enough that the same page from two engines collapses. */
+ * tracking params. Not a canonicalizer - just enough that the same page from two engines collapses. */
 export function normalizeUrl(raw: string): string {
   try {
     const u = new URL(raw);

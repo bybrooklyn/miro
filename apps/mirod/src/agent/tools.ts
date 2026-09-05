@@ -5,7 +5,7 @@ import { getMounts } from "../inventory/storage";
 import { listContainers, inspectContainer, containerLogs } from "../inventory/containers";
 import { listServices, serviceLogs } from "../inventory/systemd";
 import { getNetworkInterfaces, getTailscaleStatus } from "../inventory/network";
-import { webSearch } from "../inventory/web";
+import { searchWeb } from "../capabilities";
 import { indexRootOnDisk, queryByClassOnDisk } from "../inventory/filesystem";
 import { listInstalledPackages } from "../inventory/packages";
 import { detectGpus } from "../inventory/gpu";
@@ -114,9 +114,9 @@ export const AGENT_TOOLS = [
     name: "web_search",
     label: "Web search",
     description:
-      "Search the current web for information this model's training may not have (release notes, recent bugs, current docs). Reports unavailable if no search backend is configured.",
+      "Search the current web for information this model's training may not have (release notes, recent bugs, current docs). Routed through Miro's search providers (an Ollama cloud key, a self-hosted SearXNG, public SearXNG nodes) - the answer names which one served it. Reports unavailable if none is configured or reachable.",
     parameters: webSearchParams,
-    execute: async (_id: string, params: Static<typeof webSearchParams>) => textResult(await webSearch(params.query)),
+    execute: async (_id: string, params: Static<typeof webSearchParams>) => textResult(await searchWeb(params.query)),
   },
   {
     name: "filesystem_index",

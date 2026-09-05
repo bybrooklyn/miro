@@ -146,7 +146,11 @@ Gotchas worth knowing before you try:
   `MIRO_VM_CARGO=<iso> tools/dev-vm/up.sh` (a read-only virtio cargo drive) at disk speed.
 - Bun test paths are relative to the cwd: run `bun test` from the repo root, not from `apps/mirod`,
   or a path like `apps/mirod/src/...` silently matches nothing.
-- `web_search` needs `BRAVE_API_KEY` in the daemon's environment; without it the learn agent
-  probes blind.
+- `web_search` routes through `capabilities/` (PLAN.md §5.14): an Ollama cloud key (`/provider` →
+  "Ollama cloud (web search key)", stored as `provider.ollama`; `OLLAMA_API_KEY` env as fallback),
+  then a self-hosted SearXNG (setting `searxng.base_url` / `SEARXNG_URL`), then the public
+  JSON-capable SearXNG pool re-probed daily from searx.space. Measured 2026-09-05: only ~2 public
+  instances answer `format=json` (most 429 it by default), so without a key or a self-hosted node
+  the learn agent mostly probes blind. Brave is gone.
 
 See `PLAN.md`'s "Working notes / gotchas" section for the full, current list.
