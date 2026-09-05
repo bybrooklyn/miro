@@ -185,6 +185,8 @@ export interface FileWriteBinding {
   path: string;
   content: string;
   mode?: number;
+  /** false for a one-shot marker the app consumes; omitted means Miro keeps re-checking the content. */
+  verifyKeeps?: boolean;
 }
 
 /** What bind() returns. Deliberately loose (kind + goal + whatever that kind needs) rather than a

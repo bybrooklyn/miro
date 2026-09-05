@@ -43,6 +43,7 @@ const fileWriteParams = Type.Object({
   content: Type.String({ description: "Full new file content. The user sees it before approving." }),
   reason: Type.String({ description: "Why, in one line - shown to the user as the goal." }),
   mode: Type.Optional(Type.Integer({ description: "Octal file mode as a number, e.g. 420 for 0644." })),
+  verifyKeeps: Type.Optional(Type.Boolean({ description: "Omit for a file that should keep this content (a config file) - Miro re-checks it periodically and reports drift. Set false for a one-shot marker or trigger file the app consumes." })),
 });
 
 const fileDeleteParams = Type.Object({

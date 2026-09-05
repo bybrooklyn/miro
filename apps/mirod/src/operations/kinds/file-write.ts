@@ -15,6 +15,9 @@ export interface FileWriteParams {
   content: string;
   /** Octal mode, e.g. 0o644. Left unchanged if omitted. */
   mode?: number;
+  /** false for a one-shot marker the app consumes; omitted means the content should keep holding
+   * and drift detection (operations/prodtest.ts) re-checks it. */
+  verifyKeeps?: boolean;
 }
 
 export interface FileWriteCaptured {
@@ -55,7 +58,9 @@ function preview(text: string): string {
 export const fileWriteKind: OperationKind<FileWriteParams, FileWriteCaptured> = {
   kind: "file.write",
   // Prodtest: the file still holds what Miro wrote - the latest write per path is what counts.
-  prodtest: (p) => p.path,
+  // Lasting by default (a config file is), opt-out for a one-shot marker the app consumes (found
+  // live: Jellyfin's password-recovery marker, PLAN.md §5.24).
+  prodtest: (p) => (p.verifyKeeps === false ? null : p.path),
 
   async describe(p) {
     // Check the path as the kernel will see it: a symlink at /srv/app/config pointing into /etc

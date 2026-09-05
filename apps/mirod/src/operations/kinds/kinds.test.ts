@@ -63,6 +63,7 @@ describe("prodtest targets", () => {
     expect(http.prodtest!({ method: "POST", url: "http://127.0.0.1:1/a", verifyUrl: "http://127.0.0.1:1/a" } as any)).toBeNull();
     expect(http.prodtest!({ method: "POST", url: "http://127.0.0.1:1/a", verifyUrl: "http://127.0.0.1:1/a", verifyKeeps: true } as any)).toBe("http://127.0.0.1:1/a");
     expect(fileWriteKind.prodtest!({ path: "/etc/x.conf", content: "" })).toBe("/etc/x.conf");
+    expect(fileWriteKind.prodtest!({ path: "/var/lib/app/reset-marker", content: "", verifyKeeps: false })).toBeNull();
     expect(fileDeleteKind.prodtest!({ path: "/etc/x.conf" })).toBe("/etc/x.conf");
     expect(systemdUnitKind.prodtest!({ action: "enable", unit: "a.service" })).toBe("a.service#enabled");
     expect(systemdUnitKind.prodtest!({ action: "daemon-reload" })).toBeNull();
