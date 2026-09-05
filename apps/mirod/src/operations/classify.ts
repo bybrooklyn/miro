@@ -1274,7 +1274,8 @@ function forbiddenReason(name: string, argv: string[]): string {
     case "rm": case "rmdir": case "unlink": case "shred": return `${name} is banned - deletion only exists as the file_delete operation (moves to trash, recoverable)`;
     case "mkfs": case "wipefs": case "fdisk": case "sfdisk": case "cfdisk": case "parted": case "gdisk": return `${name} destroys a filesystem/partition table`;
     case "dd": return "dd writes directly to a block device";
-    case "reboot": case "shutdown": case "halt": case "poweroff": case "init": case "telinit": case "kexec": return `${name} via shell - use the dedicated reboot operation`;
+    case "reboot": case "shutdown": case "halt": case "poweroff": case "init": case "telinit": case "kexec": return `${name} takes the server down - Miro never reboots on its own`;
+    case "systemctl": return "systemctl cannot reach systemd from the sandbox's PID namespace - unit changes are operations";
     case "crontab": return "crontab -r wipes every scheduled job";
     case "truncate": return "truncate to zero destroys the file's contents";
     case "cp": return "copying /dev/null over a file destroys it";
@@ -1293,9 +1294,9 @@ function alternativeFor(name: string): string {
     case "rm": case "rmdir": case "unlink": case "shred": case "find": case "rsync": case "tar": case "truncate": case "cp": case "mv":
       return "Use the file_delete operation - it moves the path to Miro's trash (recoverable for 30 days) and can be rolled back.";
     case "reboot": case "shutdown": case "halt": case "poweroff": case "init": case "telinit":
-      return "Use the reboot operation, which records a recovery point and verifies the server comes back.";
+      return "Miro has no reboot operation yet (PLAN.md §5.15: reboot needs a boot-time assessment first). Tell the owner a reboot is needed and why; they do it themselves.";
     case "systemctl":
-      return "systemctl cannot change anything from inside the command sandbox (it cannot reach systemd from the sandbox's PID namespace). Restart a unit with the service_restart operation; start, stop, enable, disable or daemon-reload with service_control. A reboot is its own operation.";
+      return "systemctl cannot change anything from inside the command sandbox (it cannot reach systemd from the sandbox's PID namespace). Restart a unit with the service_restart operation; start, stop, enable, disable or daemon-reload with service_control. There is no reboot operation - ask the owner.";
     case "mkfs": case "wipefs": case "fdisk": case "sfdisk": case "cfdisk": case "parted": case "gdisk": case "dd":
       return "Miro never formats or overwrites block devices. Ask the user to do this themselves if it is genuinely needed.";
     case "bash": case "sh": case "zsh": case "dash": case "fish": case "sudo": case "su": case "doas":

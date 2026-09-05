@@ -108,8 +108,15 @@ export function candidatesFrom(instancesJson: string): string[] {
   const data = JSON.parse(instancesJson) as { instances?: Record<string, { network_type?: string; http?: { status_code?: number } }> };
   return Object.entries(data.instances ?? {})
     .filter(([, v]) => v.network_type === "normal" && v.http?.status_code === 200)
-    .map(([url]) => url.replace(/\/+$/, ""));
+    .map(([url]) => url.replace(/\/+$/, ""))
+    .slice(0, MAX_PROBE_CANDIDATES);
 }
+
+/** A third-party list decides how many nodes get probed; this caps the outbound fan-out it can
+ * drive (audit R2). searx.space lists ~80 healthy instances, so the cap is not a working limit. */
+export const MAX_PROBE_CANDIDATES = 120;
+/** The whole refresh sweep, list fetch included. */
+export const REFRESH_BUDGET_MS = 90_000;
 
 /** Just enough of fetch to be substituted in tests (Bun's `typeof fetch` also demands preconnect). */
 export type Fetcher = (url: string, init?: RequestInit) => Promise<Response>;
@@ -140,10 +147,11 @@ export async function refreshPublicPool(fetchImpl: Fetcher = fetch, concurrency 
   }
   for (const seed of seeds) if (!candidates.includes(seed)) candidates.push(seed);
   const nodes: { url: string; ms: number }[] = [];
+  const deadline = Date.now() + REFRESH_BUDGET_MS;
   let i = 0;
   await Promise.all(
     Array.from({ length: Math.min(concurrency, candidates.length) }, async () => {
-      while (i < candidates.length) {
+      while (i < candidates.length && Date.now() < deadline) {
         const url = candidates[i++]!;
         const ms = await probeNode(url, 8_000, fetchImpl);
         if (ms !== null) nodes.push({ url, ms });
@@ -154,8 +162,15 @@ export async function refreshPublicPool(fetchImpl: Fetcher = fetch, concurrency 
   return { nodes: nodes.slice(0, PUBLIC_POOL_MAX), refreshedAt: Date.now() };
 }
 
+/** Host plus mount path: searx.space lists path-mounted instances, and two on one host used to
+ * collapse into one implementation id (audit B9). Never a tool name, so "/" is fine here. */
+export function publicNodeId(url: string): string {
+  const u = new URL(url);
+  return `searxng.public:${u.host}${u.pathname.replace(/\/+$/, "")}`;
+}
+
 export function publicImplementations(pool: PublicPool): Implementation<WebSearchRequest, WebSearchResponse>[] {
-  return pool.nodes.map((n) => searxngImplementation(`searxng.public:${new URL(n.url).host}`, n.url, { auth: "none", cost: "free" }));
+  return pool.nodes.map((n) => searxngImplementation(publicNodeId(n.url), n.url, { auth: "none", cost: "free" }));
 }
 
 export interface WebSearchDeps {

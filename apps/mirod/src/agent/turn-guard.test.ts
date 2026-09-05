@@ -54,7 +54,7 @@ test("the count is per turn: the same call is allowed again on the next prompt",
   expect(results.map((r) => r.isError)).toEqual([false, false, true, false]);
 });
 
-function operationTool(name: string, outcome: "committed" | "rolledback"): AgentTool<any> {
+function operationTool(name: string, outcome: "committed" | "rolledback" | "applied_unverified"): AgentTool<any> {
   return {
     name,
     label: name,
@@ -78,6 +78,18 @@ test("a turn that attempted operations and committed none gets one follow-up dem
   expect(textOf(lastUser)).toContain("1 operation(s) were attempted this turn and none committed");
   expect(textOf(lastUser)).toContain("flaky_op: Verification failed - flaky_op");
   expect(textOf(lastUser)).toContain("Do not tell the user the task is done");
+});
+
+test("applied_unverified is not a commit: a turn of unconfirmed writes still gets the follow-up", async () => {
+  const unsure = operationTool("unsure_op", "applied_unverified");
+  const { model, agent } = agentWith(
+    [unsure],
+    [{ content: [{ type: "toolCall", name: "unsure_op", arguments: {} }] }, { content: ["Done!"] }, { content: ["It applied but I could not confirm it."] }],
+  );
+  expect(await runTurn(agent, "do it")).toBe("It applied but I could not confirm it.");
+  expect(model.calls).toHaveLength(3);
+  const lastUser = [...model.calls[2]!.context.messages].reverse().find((m) => m.role === "user")!;
+  expect(textOf(lastUser)).toContain("unsure_op: Done - unsure_op");
 });
 
 test("a committed operation, or a turn with no operations, never triggers the gate", async () => {

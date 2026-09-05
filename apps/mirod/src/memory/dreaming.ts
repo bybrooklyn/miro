@@ -11,7 +11,10 @@ import type { ReflectionTrigger } from "../operations/engine";
 // operations/engine.ts already covers "log what happened" for free; this is only for when a pattern
 // justifies the extra cost.
 
-const WRITABLE_CATEGORIES = new Set<string>(WRITABLE_MEMORY_CATEGORIES);
+/** What a reflection may write: the three the instructions offer. `capability` is writable in
+ * general (the learn agent records an app's operational model there, as a JSON document) but not
+ * by a one-sentence reflection, which would corrupt what the capabilities tool parses (audit D6). */
+const WRITABLE_CATEGORIES = new Set<string>(WRITABLE_MEMORY_CATEGORIES.filter((c) => c !== "capability"));
 
 const INSTRUCTIONS = `Review the event below and decide if it reveals a durable fact worth remembering about
 this user or their server - a preference, a server fact, or a pattern. Most events reveal nothing new; it's

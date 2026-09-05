@@ -159,6 +159,7 @@ export class Registry {
   /** Runs the candidates concurrently; the first GOOD result wins and aborts the rest. Every
    * outcome is recorded against the implementation's provider. */
   #fanout<Req, Res>(capability: Capability<Req, Res>, candidates: Implementation<Req, Res>[], request: Req, remainingMs: number, attempts: Attempt[]): Promise<{ result: Res; impl: string } | null> {
+    if (candidates.length === 0) return Promise.resolve(null); // pending would start at 0 and finish() never run
     return new Promise((resolve) => {
       const group = new AbortController();
       let pending = candidates.length;

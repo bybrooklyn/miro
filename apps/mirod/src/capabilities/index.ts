@@ -37,6 +37,12 @@ export function capabilityRegistry(): Registry | null {
   return configured?.registry ?? null;
 }
 
+/** Tests only: a test that configures the module singleton must unconfigure it, or the next test
+ * file in the same process inherits a registry closed over a :memory: DB (audit T1). */
+export function resetCapabilities(): void {
+  configured = null;
+}
+
 /** The web_search tool's entry point. Unconfigured (a test harness, a bare import) means
  * unavailable, never a throw. */
 export async function searchWeb(query: string, maxResults?: number): Promise<WebSearchAnswer> {
@@ -93,7 +99,7 @@ export function capabilityContextLines(): string[] {
     const pool = impls.filter((s) => s.id.startsWith("searxng.public:"));
     for (const s of impls) if (!pool.includes(s)) parts.push(`${s.id} (${stateOf(s)})`);
     if (pool.length > 0) parts.push(`searxng.public (${pool.length} node${pool.length === 1 ? "" : "s"}, ${pool.some((s) => s.available !== false && !s.coolingDown) ? "ready" : "cooling down"})`);
-    return `${capability.replace(".", "_")}: ${parts.join(", ")}`;
+    return `${capability.replace(/\./g, "_")}: ${parts.join(", ")}`;
   });
 }
 

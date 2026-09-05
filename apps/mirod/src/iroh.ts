@@ -17,6 +17,11 @@ export function ticketFor(endpoint: Endpoint): string {
   return EndpointTicket.fromAddr(endpoint.addr()).toString();
 }
 
+/** The public NodeId alone - safe to log; the ticket (which grants access) is not. */
+export function nodeIdOf(endpoint: Endpoint): string {
+  return endpoint.addr().id().toString();
+}
+
 /** Runs until the endpoint is closed, handing each handshaked connection to onConnection. */
 export async function acceptLoop(endpoint: Endpoint, onConnection: (conn: Connection) => void): Promise<void> {
   for (;;) {

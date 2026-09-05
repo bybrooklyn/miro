@@ -126,7 +126,10 @@ test("the public pool: candidates from searx.space's shape, probing for real JSO
     const registry = new Registry(createUsageStore(new Database(":memory:")));
     registry.registerCapability(WEB_SEARCH, { groups: [["searxng.public:*"]] });
     installPublicPool(registry, pool);
-    expect(registry.implementations(WEB_SEARCH.id).map((i) => i.id)).toEqual([`searxng.public:127.0.0.1:${new URL(s.base).port}`]);
+    // The id carries the mount path: two path-mounted nodes on one host are two implementations.
+    expect(registry.implementations(WEB_SEARCH.id).map((i) => i.id)).toEqual([`searxng.public:127.0.0.1:${new URL(s.base).port}/good`]);
+    installPublicPool(registry, { nodes: [{ url: `${s.base}/good`, ms: 1 }, { url: `${s.base}/good2`, ms: 2 }], refreshedAt: 0 });
+    expect(registry.implementations(WEB_SEARCH.id)).toHaveLength(2);
   } finally {
     s.stop();
   }

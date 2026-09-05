@@ -1,5 +1,5 @@
 import { Type } from "@miro/schema-engine/typebox";
-import type { AgentToolResult } from "@miro/agent-core";
+import { textResult } from "./tool-result";
 import type { OperationToolContext } from "../operations/engine";
 import { runOperation } from "../operations/engine";
 import { systemdRestartKind } from "../operations/kinds/systemd-restart";
@@ -15,12 +15,6 @@ import { fileDeleteKind, type FileDeleteParams } from "../operations/kinds/file-
 import { httpMutationKind, takeOutput as takeHttpOutput, type HttpMutationParams } from "../operations/kinds/http-mutation";
 import { classifyCommand, redactSecretsInText } from "../operations/classify";
 import { runSandboxed } from "../operations/sandbox";
-
-function textResult(details: unknown): AgentToolResult<unknown> {
-  // details ?? null: JSON.stringify(undefined) returns the value undefined (not a string),
-  // producing a malformed {text: undefined} block - see agent/extension-tools.ts's textResult.
-  return { content: [{ type: "text", text: JSON.stringify(details ?? null, null, 2) }], details };
-}
 
 const serviceRestartParams = Type.Object({
   unit: Type.String({ description: "systemd unit name, e.g. jellyfin.service" }),

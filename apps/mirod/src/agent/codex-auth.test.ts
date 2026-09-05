@@ -108,7 +108,19 @@ test("concurrent resolves share one in-flight refresh", async () => {
 test("importCodexCredentialFromCli stores the CLI's blob verbatim and ignores anything else", () => {
   const { db, store, auth } = setup();
   expect(importCodexCredentialFromCli(db, store, { other: {} })).toBe(false);
+  // A blob missing a field the resolver needs is not "connected" - it would refresh a missing
+  // refresh token on every turn (audit B8).
+  expect(importCodexCredentialFromCli(db, store, { "openai-codex": { type: "oauth", access: "a" } })).toBe(false);
   expect(auth.isConnected()).toBe(false);
   expect(importCodexCredentialFromCli(db, store, { "openai-codex": { type: "oauth", access: "a", refresh: "r", expires: T0 + HOUR } })).toBe(true);
   expect(auth.isConnected()).toBe(true);
+});
+
+test("a corrupt stored blob reads as not connected instead of throwing into every chat turn", () => {
+  const { db, store, auth } = setup();
+  store.setSecret(db, "oauth.openai-codex", "{not json");
+  expect(auth.isConnected()).toBe(false);
+  store.setSecret(db, "oauth.openai-codex", JSON.stringify({ access: "a" }));
+  expect(auth.isConnected()).toBe(false);
+  expect(auth.apiKey("openai-codex")).toBeUndefined();
 });

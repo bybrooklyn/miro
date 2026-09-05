@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "@miro/agent-core";
+import { textResult } from "./tool-result";
 import { objectSchema } from "../extensions/declarative";
 import type { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
@@ -15,17 +15,6 @@ import { runOperation, type OperationToolContext, type OperationKind } from "../
 import { allOperationKinds } from "./operation-tools";
 import { resolveBindingUrls } from "../extensions/validate";
 import { redactSecretsInText } from "../operations/classify";
-
-function textResult(details: unknown): AgentToolResult<unknown> {
-  // details ?? null: JSON.stringify(undefined) returns the value undefined (not a string),
-  // producing a malformed {text: undefined} block that crashes downstream message processing -
-  // found live when a void-returning tool (extensions/learn-agent.ts's browser.open) hit this
-  // exact bug. null is a real JSON literal; undefined coerced through here is not.
-  // Redact the model-visible text: generated extension code holds real ctx.secrets values and its
-  // return is unconstrained, so a tool could echo a secret straight back - this is the one tool
-  // category with no scrub before now (audit L3).
-  return { content: [{ type: "text", text: redactSecretsInText(JSON.stringify(details ?? null, null, 2)) }], details };
-}
 
 // Exported for extensions/repair.ts's periodic re-probe, which needs the same secret resolution
 // this real-call path uses.

@@ -1,5 +1,6 @@
 import { Type } from "@miro/schema-engine/typebox";
 import type { AgentToolResult } from "@miro/agent-core";
+import { textResult } from "./tool-result";
 import type { ModelRegistry } from "./models";
 import type { Database } from "bun:sqlite";
 import type { ServerEvent } from "@miro/protocol";
@@ -28,10 +29,6 @@ export interface LearnToolContext {
    * and return their names, which app_learn reports as addedToolNames so the same task can use
    * them immediately. Set by agent/index.ts's createMiroAgent. */
   onPromoted?: (app: string) => string[];
-}
-
-function textResult(details: unknown): AgentToolResult<unknown> {
-  return { content: [{ type: "text", text: JSON.stringify(details ?? null, null, 2) }], details };
 }
 
 const learnParams = Type.Object({
@@ -67,12 +64,11 @@ export function buildLearnTools(ctx: LearnToolContext) {
           operationCtx: ctx.operationCtx,
           parentActivityId: id, // the learning session's tool calls nest under this app_learn call
         });
+        // The hot-load itself happens in onPromoted (agent.setTools); the names ride in the result
+        // text so the model knows what it can now call. (An `addedToolNames` field on the result
+        // object was an upstream pi-agent-core feature the vendored core dropped - audit D3.)
         const addedToolNames = result.promoted && ctx.onPromoted ? ctx.onPromoted(params.app.trim().toLowerCase()) : [];
-        return {
-          ...textResult({ ...result, addedToolNames }),
-          // pi-agent-core: tools named here are available from this transcript point onward.
-          ...(addedToolNames.length > 0 ? { addedToolNames } : {}),
-        };
+        return textResult({ ...result, addedToolNames });
       },
     },
   ];

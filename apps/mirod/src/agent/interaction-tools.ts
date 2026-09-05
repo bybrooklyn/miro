@@ -1,5 +1,5 @@
 import { Type, type Static } from "@miro/schema-engine/typebox";
-import type { AgentToolResult } from "@miro/agent-core";
+import { textResult } from "./tool-result";
 import type { ServerEvent } from "@miro/protocol";
 
 // The two tools that make the outcome loop conversational without ending the turn (PLAN.md
@@ -7,10 +7,6 @@ import type { ServerEvent } from "@miro/protocol";
 // approval an experienced self-hoster wants before a multi-component change. Both ride on the
 // existing question/secret_prompt events and the connection's pending-answer map - the same
 // mechanism operation confirmations already use - so nothing new crosses the wire for answers.
-
-function textResult(details: unknown): AgentToolResult<unknown> {
-  return { content: [{ type: "text", text: JSON.stringify(details ?? null, null, 2) }], details };
-}
 
 export interface InteractionContext {
   send: (event: ServerEvent) => void;

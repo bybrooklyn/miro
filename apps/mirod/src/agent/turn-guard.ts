@@ -93,8 +93,11 @@ export function createTurnGuard(limits: TurnGuardLimits): TurnGuard {
           const outcome = details?.outcome;
           if (typeof outcome === "string" && OUTCOMES.has(outcome)) {
             attempted++;
-            if (outcome === "rolledback") failures.push(`${event.toolName}: ${typeof details?.message === "string" ? details.message : "rolled back"}`);
-            else committed++;
+            // applied_unverified is not a commit: the write reached the app but nothing confirmed
+            // it (engine.ts). Counting it as one let a turn of unconfirmed writes end as "done" -
+            // exactly what this gate exists to stop (audit B4).
+            if (outcome === "committed") committed++;
+            else failures.push(`${event.toolName}: ${typeof details?.message === "string" ? details.message : outcome === "rolledback" ? "rolled back" : "applied but unverified"}`);
           }
         }
       });

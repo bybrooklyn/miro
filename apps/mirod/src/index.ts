@@ -19,7 +19,8 @@ import { createModelRegistry } from "./agent/models";
 import { registerOllamaIfReachable } from "./agent/ollama";
 import { ensureTimelineTable, recordEvent } from "./timeline";
 import { createSecretStore } from "./secrets";
-import { generateIrohSecretKey, startIrohEndpoint, ticketFor, acceptLoop } from "./iroh";
+import { generateIrohSecretKey, startIrohEndpoint, ticketFor, nodeIdOf, acceptLoop } from "./iroh";
+import { ensureUsageTable } from "./capabilities/usage";
 import { reconcileOperations, type OperationToolContext, type ReflectionTrigger } from "./operations/engine";
 import { reverifyCommitted } from "./operations/prodtest";
 import { configureCapabilities, refreshWebSearchPool } from "./capabilities";
@@ -61,6 +62,7 @@ db.run("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
 ensureTimelineTable(db);
 ensureMemoryTable(db);
 ensureExtensionsTable(db);
+ensureUsageTable(db);
 recordEvent(db, "mirod", "started");
 
 // Defensive re-ensure for already-promoted extensions - cheap and idempotent (see paths.ts),
@@ -113,15 +115,33 @@ const models = createModelRegistry(getStoredKey, codexAuth.apiKey);
 {
   const codexAuthDropFile = join(MIRO_DIR, "codex-auth-import.json");
   if (existsSync(codexAuthDropFile)) {
-    const parsed = JSON.parse(readFileSync(codexAuthDropFile, "utf8"));
-    if (importCodexCredentialFromCli(db, secretStore, parsed)) {
-      unlinkSync(codexAuthDropFile);
-      console.log("[mirod] imported OpenAI Codex OAuth credential");
+    // A hand-dropped file arrives half-written sometimes; an unguarded parse here was a boot loop
+    // (the file survives the crash, so every restart died the same way - audit B2). Left in place
+    // so the owner can fix it; logged on every boot until they do.
+    try {
+      const parsed = JSON.parse(readFileSync(codexAuthDropFile, "utf8"));
+      if (importCodexCredentialFromCli(db, secretStore, parsed)) {
+        unlinkSync(codexAuthDropFile);
+        console.log("[mirod] imported OpenAI Codex OAuth credential");
+      } else {
+        console.warn(`[mirod] ${codexAuthDropFile} has no usable openai-codex credential - ignored`);
+      }
+    } catch (err) {
+      console.error(`[mirod] ignoring unreadable ${codexAuthDropFile}:`, err instanceof Error ? err.message : err);
     }
   }
 }
 if (await registerOllamaIfReachable(models)) {
   console.log("[mirod] Ollama detected - its models are available with no key needed");
+}
+
+/** Ollama is registered at boot only if it answered then. When nothing at all is connected, one
+ * more 1.5s probe before giving up makes an Ollama started after the daemon usable without a
+ * restart (audit R3) - and costs nothing on the connected path. */
+async function pickModelOrProbeOllama(policy: RoutingPolicy): Promise<Model<any> | null> {
+  const picked = pickDefaultModel(models, getStoredKey, policy);
+  if (picked) return picked;
+  return (await registerOllamaIfReachable(models)) ? pickDefaultModel(models, getStoredKey, policy) : null;
 }
 
 // The capability layer (PLAN.md §5.14): web.search routed over an Ollama cloud key, a self-hosted
@@ -162,6 +182,7 @@ interface ConnState {
   pendingAnswers: Map<string, (value: string) => void>;
   turnActive?: boolean; // a chat turn is running; a second concurrent chat would race this state (audit U2)
   lastReply?: string; // for the user-correction heuristic (plan §37)
+  lastChatModelId?: string; // what this connection's status line last named (audit R7: was a module global shared by every connection)
   lastMemorySummary?: string; // forces an agent rebuild when Memory changes mid-connection
   lastExtensionVersion?: string; // forces an agent rebuild when an extension is learned/repaired
   lastContextBlock?: string; // forces an agent rebuild when the server snapshot changes
@@ -191,7 +212,7 @@ async function resolveCodegenSelection(policy: RoutingPolicy): Promise<CodegenSe
   if (codexAuth.isConnected()) {
     return { model: getBundledModel("openai-codex", "gpt-5.6-luna"), reasoning: Effort.Medium };
   }
-  const model = pickDefaultModel(models, getStoredKey, policy);
+  const model = await pickModelOrProbeOllama(policy);
   return model ? { model } : null;
 }
 
@@ -310,7 +331,7 @@ async function resolveChatSelection(): Promise<CodegenSelection | null> {
   if (codexAuth.isConnected()) {
     return { model: getBundledModel("openai-codex", "gpt-5.6-luna"), reasoning: Effort.Medium };
   }
-  const model = pickDefaultModel(models, getStoredKey, routingPolicy());
+  const model = await pickModelOrProbeOllama(routingPolicy());
   return model ? { model } : null;
 }
 
@@ -319,23 +340,27 @@ async function resolveReflectionModel(): Promise<Model<any> | null> {
   return pickDefaultModel(models, getStoredKey, "cheapest") ?? (await resolveChatSelection())?.model ?? null;
 }
 
-/** Remembered from the last chat-model resolution so the status line can name it. */
-let lastChatModelId: string | undefined;
-function statusEvent(): ServerEvent {
+/** "degraded" is the one health signal the daemon can honestly produce today: no AI provider is
+ * connected, so it can only do the fixed things. The client already renders it (audit #26). */
+function hasProvider(): boolean {
+  return codexAuth.isConnected() || pickDefaultModel(models, getStoredKey, routingPolicy()) !== null;
+}
+
+function statusEvent(state: ConnState): ServerEvent {
   return {
     type: "status",
     server: "home",
-    health: "healthy",
-    model: lastChatModelId,
+    health: hasProvider() ? "healthy" : "degraded",
+    model: state.lastChatModelId,
     privilege: typeof process.getuid === "function" && process.getuid() === 0 ? "root" : "user",
   };
 }
 
 async function handleChat(text: string, send: (event: ServerEvent) => void, state: ConnState): Promise<void> {
   const chat = await resolveChatSelection();
-  if (chat && chat.model.id !== lastChatModelId) {
-    lastChatModelId = chat.model.id;
-    send(statusEvent());
+  if (chat && chat.model.id !== state.lastChatModelId) {
+    state.lastChatModelId = chat.model.id;
+    send(statusEvent(state));
   }
   if (!chat) {
     send({
@@ -415,6 +440,9 @@ function startProviderSetup(send: (event: ServerEvent) => void): void {
       { label: "OpenAI Codex (ChatGPT login, no API key)", value: CODEX_PROVIDER },
       // Not a chat provider: the pasted key from ollama.com/settings/keys that web_search uses first.
       { label: "Ollama cloud (web search key)", value: OLLAMA_SEARCH_PROVIDER },
+      // A way out: the client renders a choice as a modal, and escape only maps to a cancel option
+      // that exists (audit #5) - without this, a stray /provider trapped the owner in the chooser.
+      { label: "Cancel", value: "cancel" },
     ],
   });
 }
@@ -424,7 +452,17 @@ function startProviderSetup(send: (event: ServerEvent) => void): void {
 function createConnectionState(send: (event: ServerEvent) => void): ConnState {
   const state: ConnState = { feed: () => {}, pendingAnswers: new Map() };
   state.feed = createLineBuffer((line) => {
-    const msg = JSON.parse(line) as ClientMessage;
+    // One malformed line is dropped with a warning, never thrown: a throw out of the unix socket's
+    // data handler reached the error callback, which cancels every pending confirmation on the
+    // connection (audit B5); on the Iroh path it ended the session. The client guards its side the
+    // same way.
+    let msg: ClientMessage;
+    try {
+      msg = JSON.parse(line) as ClientMessage;
+    } catch {
+      send({ type: "notice", level: "warn", text: "malformed message ignored" });
+      return;
+    }
 
     if (msg.type === "answer" && state.pendingAnswers.has(msg.id)) {
       const resolve = state.pendingAnswers.get(msg.id)!;
@@ -432,7 +470,9 @@ function createConnectionState(send: (event: ServerEvent) => void): ConnState {
       resolve(msg.value);
     } else if (msg.type === "answer" && msg.id === "personality") {
       setSetting("personality", msg.value);
-      send(statusEvent());
+      send(statusEvent(state));
+    } else if (msg.type === "answer" && msg.id === "provider_choice" && msg.value === "cancel") {
+      send({ type: "reply", text: "Nothing changed." });
     } else if (msg.type === "answer" && msg.id === "provider_choice" && msg.value === CODEX_PROVIDER) {
       // Device-code login (PLAN.md §5.22): the flow polls for the owner's browser authorization for
       // minutes, so it runs detached - the connection stays usable, and the outcome arrives as a
@@ -451,7 +491,7 @@ function createConnectionState(send: (event: ServerEvent) => void): ConnState {
       void loginCodex(db, secretStore, notify).then((ok) => {
         if (ok) {
           recordEvent(db, "provider", `connected ${CODEX_PROVIDER}`);
-          send(statusEvent());
+          send(statusEvent(state));
         }
       });
     } else if (msg.type === "answer" && msg.id === "provider_choice") {
@@ -543,7 +583,7 @@ function createConnectionState(send: (event: ServerEvent) => void): ConnState {
       ],
     });
   } else {
-    send(statusEvent());
+    send(statusEvent(state));
   }
 
   return state;
@@ -573,14 +613,21 @@ Bun.listen<ConnState>({
 // own TUI can connect. MIRO_GROUP names that group (default "miro", created by the installer).
 if (typeof process.getuid === "function" && process.getuid() === 0) {
   const group = process.env.MIRO_GROUP ?? "miro";
-  const gid = Number(Bun.spawnSync(["getent", "group", group]).stdout.toString().split(":")[2]);
-  if (Number.isFinite(gid)) {
-    chownSync(dirname(SOCKET_PATH), 0, gid);
-    chmodSync(dirname(SOCKET_PATH), 0o750);
-    chownSync(SOCKET_PATH, 0, gid);
-    chmodSync(SOCKET_PATH, 0o660);
-  } else {
-    console.warn(`[mirod] group ${group} not found - socket stays root-only`);
+  // A missing getent binary throws out of spawnSync (Bun 1.4: "Executable not found in $PATH") and
+  // an NSS backend over the network can block; neither may take the daemon down after it has
+  // already bound the socket (audit B1). Degrade to root-only, as the not-found branch does.
+  try {
+    const gid = Number(Bun.spawnSync(["getent", "group", group], { timeout: 5_000 }).stdout.toString().split(":")[2]);
+    if (Number.isFinite(gid)) {
+      chownSync(dirname(SOCKET_PATH), 0, gid);
+      chmodSync(dirname(SOCKET_PATH), 0o750);
+      chownSync(SOCKET_PATH, 0, gid);
+      chmodSync(SOCKET_PATH, 0o660);
+    } else {
+      console.warn(`[mirod] group ${group} not found - socket stays root-only`);
+    }
+  } catch (err) {
+    console.warn(`[mirod] could not resolve group ${group} (${err instanceof Error ? err.message : err}) - socket stays root-only`);
   }
 }
 
@@ -600,7 +647,9 @@ function loadOrCreateIrohSecretKey(): number[] {
 
 const irohEndpoint = await startIrohEndpoint(loadOrCreateIrohSecretKey());
 const irohTicket = ticketFor(irohEndpoint);
-console.log(`mirod also reachable via Iroh - ticket:\n${irohTicket}`);
+// The NodeId only: the ticket grants full daemon access and stdout is a durable, shipped log file
+// in production (audit S3). /pair hands the ticket to the owner on request.
+console.log(`mirod also reachable via Iroh - node ${nodeIdOf(irohEndpoint)}; /pair shows the pairing ticket`);
 
 acceptLoop(irohEndpoint, (conn) => {
   (async () => {

@@ -1,5 +1,6 @@
 import { Type } from "@miro/schema-engine/typebox";
-import type { AgentToolResult } from "@miro/agent-core";
+import { textResult } from "./tool-result";
+import { sanitizeNamePart } from "./extension-tools";
 import type { Database } from "bun:sqlite";
 import { getHostInfo } from "../inventory/host";
 import { listContainers } from "../inventory/containers";
@@ -60,7 +61,7 @@ export async function takeSnapshot(force = false): Promise<ServerSnapshot> {
 
 const REFUSALS = `What is refused, and what to do instead:
 - rm, rmdir, unlink, shred, find -delete, rsync --delete → file_delete (moves to trash, recoverable).
-- reboot/shutdown via shell → the reboot operation. mkfs/dd-to-device/wipefs → never; ask the owner.
+- reboot/shutdown → refused; there is no reboot operation yet - tell the owner a reboot is needed and why. mkfs/dd-to-device/wipefs → never; ask the owner.
 - Interactive shells, sudo -i, docker exec -it … bash → run the specific command instead.
 - Writing under ~/.miro, /var/lib/miro, .ssh private keys, /etc/shadow → never.
 - Reading secret material (keys, Miro's DB, .env, credential files) → refused; use secrets by reference.
@@ -123,8 +124,11 @@ export function buildContextBlock(db: Database, snapshot: ServerSnapshot): strin
   return parts.join("\n\n");
 }
 
-function textResult(details: unknown): AgentToolResult<unknown> {
-  return { content: [{ type: "text", text: JSON.stringify(details ?? null, null, 2) }], details };
+/** The callable name of an extension's entry - the same sanitisation extension-tools applies when
+ * it builds the real tool, so the agent's own reference manual never advertises a name that does
+ * not exist (audit B6: an app named `my.app` was listed as `ext_my.app_x`, callable as `ext_my_app_x`). */
+function extToolName(app: string, entry: string): string {
+  return `ext_${sanitizeNamePart(app)}_${sanitizeNamePart(entry)}`;
 }
 
 /** On-demand depth: every extension's tool descriptions and operations, every capability
@@ -149,8 +153,8 @@ export function buildCapabilitiesTool(db: Database) {
           maturity: extensions.maturityOf(row),
           baseUrl: m.baseUrl,
           successfulRuns: row.successfulRuns,
-          tools: [...m.tools, ...m.diagnostics].map((t) => ({ name: `ext_${m.app}_${t.name}`, kind: t.kind, description: t.description })),
-          operations: (m.operations ?? []).map((t) => ({ name: `ext_${m.app}_${t.name}`, description: t.description })),
+          tools: [...m.tools, ...m.diagnostics].map((t) => ({ name: extToolName(m.app, t.name), kind: t.kind, description: t.description })),
+          operations: (m.operations ?? []).map((t) => ({ name: extToolName(m.app, t.name), description: t.description })),
           operationalModel: model,
         };
       });

@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Agent, type AgentTool, type AgentToolResult } from "@miro/agent-core";
+import { Agent, type AgentTool } from "@miro/agent-core";
+import { textResult } from "../agent/tool-result";
 import { streamSimple, type Effort, type Model } from "@miro/model-client";
 import { Type, type Static } from "@miro/schema-engine/typebox";
 import type { ModelRegistry } from "../agent/models";
@@ -174,13 +175,6 @@ single tool call instead of another research session.
 You are learning, not setting up: make changes only when learning needs them (creating an API
 key, enabling an API). Leave configuration to whoever asked, unless the goal says otherwise.`;
 
-function textResult(details: unknown): AgentToolResult<unknown> {
-  // details ?? null: JSON.stringify(undefined) returns the value undefined (not a string),
-  // producing a malformed {text: undefined} block that crashes downstream message processing.
-  // Found live: browser_open (Promise<void>) resolves to undefined, and this exact shape hit
-  // "undefined is not an object (evaluating 'block.text.length')" deep inside pi-agent-core.
-  return { content: [{ type: "text", text: JSON.stringify(details ?? null, null, 2) }], details };
-}
 
 function buildBrowserTools(app: string, hostMgr: ExtensionHostManager) {
   const bridge = (name: string, label: string, description: string, parameters: any) => ({

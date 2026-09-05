@@ -45,7 +45,15 @@ export function createCodexAuth(db: Database, secretStore: SecretStore, options:
 
   const read = (): OAuthCredentials | null => {
     const raw = secretStore.getSecret(db, ref);
-    return raw ? (JSON.parse(raw) as OAuthCredentials) : null;
+    if (!raw) return null;
+    // isConnected() sits on every chat turn's path: a corrupt or partial blob (an import missing
+    // `refresh`, say) must read as "not connected", not throw into every turn (audit B8).
+    try {
+      const c = JSON.parse(raw) as Partial<OAuthCredentials>;
+      return typeof c.access === "string" && typeof c.refresh === "string" && typeof c.expires === "number" ? (c as OAuthCredentials) : null;
+    } catch {
+      return null;
+    }
   };
 
   async function refreshWithOneRetry(credentials: OAuthCredentials): Promise<OAuthCredentials> {
@@ -119,8 +127,10 @@ export async function loginCodex(db: Database, secretStore: SecretStore, notify:
  * client's OAuthCredentials still matches) into mirod's persistent store, so the daemon doesn't need
  * its own interactive OAuth login UX yet. */
 export function importCodexCredentialFromCli(db: Database, secretStore: SecretStore, cliAuthJson: Record<string, unknown>): boolean {
-  const cred = cliAuthJson[CODEX];
-  if (!cred || typeof cred !== "object") return false;
+  const cred = cliAuthJson[CODEX] as Partial<OAuthCredentials> | undefined;
+  // The same three fields the resolver needs - a blob without them would be "connected" and
+  // permanently broken (a refresh of a missing refresh token, every turn).
+  if (!cred || typeof cred !== "object" || typeof cred.access !== "string" || typeof cred.refresh !== "string" || typeof cred.expires !== "number") return false;
   secretStore.setSecret(db, `${OAUTH_REF_PREFIX}${CODEX}`, JSON.stringify(cred));
   return true;
 }

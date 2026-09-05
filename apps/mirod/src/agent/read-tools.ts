@@ -1,5 +1,5 @@
 import { Type, type Static } from "@miro/schema-engine/typebox";
-import type { AgentToolResult } from "@miro/agent-core";
+import { textResult } from "./tool-result";
 import { existsSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import { classifyCommand, isSensitivePath, isLocalOrPrivateUrl, redactSecretsInText } from "../operations/classify";
 import { anchoredView } from "../operations/hashline";
@@ -9,12 +9,9 @@ import { commandExists, run } from "../inventory/exec";
 // Read-only primitives that need a little context (PLAN.md §5.4 B): a sandboxed shell for
 // inspection, a file reader with the secret-path guard, an HTTP GET with credentials by reference,
 // and packet capture - the last rung of the learn agent's discovery ladder. Kept out of
-// agent/tools.ts's static AGENT_TOOLS only because http_get needs getSecret; everything here is
-// read-only and safe for the narrow investigation workers too.
-
-function textResult(details: unknown): AgentToolResult<unknown> {
-  return { content: [{ type: "text", text: JSON.stringify(details ?? null, null, 2) }], details };
-}
+// agent/tools.ts's static AGENT_TOOLS because http_get needs getSecret and the rest need a
+// sandbox. Everything here is read-only; the narrow investigation workers (agent/worker.ts) still
+// see only AGENT_TOOLS, so these reach a worker only if one is ever handed a context.
 
 const shellInspectParams = Type.Object({
   command: Type.String({ description: "A read-only inspection command (ip route, docker inspect, ss -tlnp, cat /etc/x, journalctl -u x, ...). Anything that would change state is refused - use shell_command for that. Use absolute paths." }),
@@ -92,8 +89,9 @@ export function buildReadTools(ctx: ReadToolContext) {
         const st = statSync(params.path);
         if (st.isDirectory()) return textResult({ directory: true, path: params.path, hint: "use shell_inspect with ls" });
         if (!st.isFile()) return textResult({ refused: true, reason: `${params.path} is not a regular file` });
-        const max = Math.min(params.maxBytes ?? 65_536, 1_048_576);
-        const offset = params.offset ?? 0;
+        // Model input: a negative maxBytes reached Buffer.alloc(-1) as an opaque RangeError (audit R5).
+        const max = Math.max(1, Math.min(params.maxBytes ?? 65_536, 1_048_576));
+        const offset = Math.max(0, params.offset ?? 0);
         const buf = readCapped(params.path, offset, max);
         const binary = buf.subarray(0, 1024).includes(0);
         return textResult({

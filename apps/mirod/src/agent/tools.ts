@@ -1,5 +1,5 @@
 import { Type, type Static } from "@miro/schema-engine/typebox";
-import type { AgentToolResult } from "@miro/agent-core";
+import { textResult } from "./tool-result";
 import { getHostInfo } from "../inventory/host";
 import { getMounts } from "../inventory/storage";
 import { listContainers, inspectContainer, containerLogs } from "../inventory/containers";
@@ -9,12 +9,6 @@ import { fetchWeb, searchWeb } from "../capabilities";
 import { indexRootOnDisk, queryByClassOnDisk } from "../inventory/filesystem";
 import { listInstalledPackages } from "../inventory/packages";
 import { detectGpus } from "../inventory/gpu";
-
-function textResult(details: unknown): AgentToolResult<unknown> {
-  // details ?? null: JSON.stringify(undefined) returns the value undefined (not a string),
-  // producing a malformed {text: undefined} block - see agent/extension-tools.ts's textResult.
-  return { content: [{ type: "text", text: JSON.stringify(details ?? null, null, 2) }], details };
-}
 
 // Schemas are named so `execute` can reference `Static<typeof schema>` explicitly - TS can't
 // infer a sibling property's type from another property within the same object literal.

@@ -33,19 +33,31 @@ function normalizeFetch(value: unknown): WebFetchResponse {
   };
 }
 
+/** The router's signal is the only timeout an implementation has; a host call cannot be cancelled
+ * mid-flight (it has its own 120s ceiling), so the promise is abandoned instead - the route moves
+ * on, the host answer is dropped when it arrives (audit B7). */
+function abortable<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(signal.reason ?? new DOMException("aborted", "AbortError"));
+    if (signal.aborted) return onAbort();
+    signal.addEventListener("abort", onAbort, { once: true });
+    p.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
+
 export function extensionImplementations(row: store.ExtensionRecord, db: Database, hostMgr: ExtensionHostManager, getSecret: (ref: string) => string | null): Implementation<any, any>[] {
   const manifest: ExtensionManifest = JSON.parse(row.manifest);
   const dir = extensionDir(manifest.app);
   const provider = `${EXTENSION_IMPL_PREFIX}${manifest.app}`;
-  const call = (entry: string, args: unknown) => hostMgr.call(dir, manifest.app, manifest.baseUrl, resolveSecrets(manifest, getSecret), entry, args);
+  const call = (entry: string, args: unknown, signal: AbortSignal) => abortable(hostMgr.call(dir, manifest.app, manifest.baseUrl, resolveSecrets(manifest, getSecret), entry, args), signal);
   const available = () => store.getExtension(db, manifest.app)?.state === "enabled";
   return (manifest.implements ?? []).flatMap((decl): Implementation<any, any>[] => {
     const id = `${provider}:${decl.capability}`;
     if (decl.capability === "web.search") {
-      return [{ id, capability: "web.search", provider, meta: { auth: "none", cost: "self-hosted" }, available, run: async (req: WebSearchRequest) => normalizeSearch(await call(decl.entry, { query: req.query }), id) }];
+      return [{ id, capability: "web.search", provider, meta: { auth: "none", cost: "self-hosted" }, available, run: async (req: WebSearchRequest, signal) => normalizeSearch(await call(decl.entry, { query: req.query }, signal), id) }];
     }
     if (decl.capability === "web.fetch") {
-      return [{ id, capability: "web.fetch", provider, meta: { auth: "none", cost: "self-hosted" }, available, run: async (req: WebFetchRequest) => normalizeFetch(await call(decl.entry, { url: req.url })) }];
+      return [{ id, capability: "web.fetch", provider, meta: { auth: "none", cost: "self-hosted" }, available, run: async (req: WebFetchRequest, signal) => normalizeFetch(await call(decl.entry, { url: req.url }, signal)) }];
     }
     return [];
   });

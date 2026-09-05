@@ -1,13 +1,7 @@
 import { Type } from "@miro/schema-engine/typebox";
-import type { AgentToolResult } from "@miro/agent-core";
+import { textResult } from "./tool-result";
 import type { Database } from "bun:sqlite";
 import { remember, query, confidenceLabel } from "../memory/store";
-
-function textResult(details: unknown): AgentToolResult<unknown> {
-  // details ?? null: JSON.stringify(undefined) returns the value undefined (not a string),
-  // producing a malformed {text: undefined} block - see agent/extension-tools.ts's textResult.
-  return { content: [{ type: "text", text: JSON.stringify(details ?? null, null, 2) }], details };
-}
 
 // Plain JSON-Schema `enum` (Type.Enum emits exactly {type:"string", enum:[...]}), not Type.Union-
 // of-Type.Literal's `anyOf`-of-`const`. Live-tested against a real tool-calling model (Ollama
