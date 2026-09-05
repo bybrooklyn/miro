@@ -221,7 +221,7 @@ async function handle(req: HostRequest): Promise<void> {
   if (req.type === "init") {
     mode = "init";
     browser = createBrowserSession();
-    const ctx: ExtensionContext = { http: createHttpClient(req.baseUrl, authHeaders(req.secrets)), browser, secrets: req.secrets, ...createReadPrimitives() };
+    const ctx: ExtensionContext = { http: createHttpClient(req.baseUrl, authHeaders(req.secrets), req.secrets), browser, secrets: req.secrets, ...createReadPrimitives() };
     loaded = await loadExtension(ctx);
     send({ type: "ready" });
     return;

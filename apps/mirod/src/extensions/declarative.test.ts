@@ -48,6 +48,10 @@ test("applyPick keeps only picked fields, over an object or an array response", 
 test("moduleAuthHeaders sends the named secret under the declared header, or nothing", () => {
   const mod = { auth: { header: "X-Emby-Token", secret: "api_key" }, entries: [] } as ExtensionModule;
   expect(moduleAuthHeaders(mod, { api_key: "tok" })).toEqual({ "X-Emby-Token": "tok" });
+  // The scheme word an Authorization-style header needs in front of the token (found live: Jellyfin's
+  // "MediaBrowser Token=" has no way to be expressed otherwise).
+  const prefixed: ExtensionModule = { auth: { header: "Authorization", secret: "api_key", prefix: "Bearer " }, entries: [] };
+  expect(moduleAuthHeaders(prefixed, { api_key: "tok" })).toEqual({ Authorization: "Bearer tok" });
   expect(moduleAuthHeaders({ entries: [] } as ExtensionModule, { api_key: "tok" })).toEqual({});
   expect(moduleAuthHeaders(mod, {})).toEqual({}); // secret absent → no header (never send the literal "undefined")
 });

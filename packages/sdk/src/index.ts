@@ -30,12 +30,33 @@ function response(status: number, body: string): HttpResponse {
   return { status, ok: status >= 200 && status < 300, body, json: <T,>() => JSON.parse(body) as T };
 }
 
+const SECRET_PLACEHOLDER = /\{\{secret:([^}]+)\}\}/g;
+
+/** `{{secret:<ref>}}` placeholders, resolved at request time from the secrets the host was given
+ * (keyed by short name; a full `extension.<app>.<name>` ref resolves by its last segment). The same
+ * placeholder the daemon substitutes in a declarative write binding - so the one auth idiom the
+ * learn prompt teaches works in a code entry's ctx.http.get too. Found live: a Jellyfin re-learn
+ * failed six validations in a row sending the literal placeholder in an Authorization header. An
+ * unknown reference throws, so the failure names the ref instead of surfacing as a bare 401. */
+function substituteSecrets(value: string, secrets: Record<string, string>): string {
+  return value.replace(SECRET_PLACEHOLDER, (placeholder, ref: string) => {
+    const resolved = secrets[ref] ?? secrets[ref.split(".").pop()!];
+    if (resolved === undefined) throw new Error(`${placeholder}: no such secret is on file for this extension`);
+    return resolved;
+  });
+}
+
 /** Real client - used by extensions/host-entry.ts's `init`/`learn_init` modes. Per-call headers
- * merge over the client's fixed auth headers. */
-export function createHttpClient(baseUrl: string, headers: Record<string, string>): HttpClient {
+ * merge over the client's fixed auth headers; `{{secret:<ref>}}` placeholders in the path, query
+ * and per-call headers are substituted from `secrets`. */
+export function createHttpClient(baseUrl: string, headers: Record<string, string>, secrets: Record<string, string> = {}): HttpClient {
+  const substituted = (values?: Record<string, string>) =>
+    values && Object.fromEntries(Object.entries(values).map(([key, value]) => [key, substituteSecrets(value, secrets)]));
   return {
     async get(path, opts) {
-      const res = await fetch(new URL(withQuery(path, opts?.query), baseUrl), { headers: { ...headers, ...opts?.headers } });
+      const res = await fetch(new URL(withQuery(substituteSecrets(path, secrets), substituted(opts?.query)), baseUrl), {
+        headers: { ...headers, ...substituted(opts?.headers) },
+      });
       return response(res.status, await res.text());
     },
   };
@@ -203,11 +224,14 @@ export interface ReadBinding {
   expectStatus?: number[];
 }
 
-/** Shared declarative auth for every `read`: send `{ [header]: <value of the named secret> }`.
+/** Shared declarative auth for every `read`: send `{ [header]: <prefix><value of the named secret> }`.
  * `code`/`bind` entries read ctx.secrets directly instead. */
 export interface AuthSpec {
   header: string;
   secret: string;
+  /** The scheme word the header needs in front of the secret - "Bearer ", "MediaBrowser Token=" -
+   * for apps whose token does not go bare into a vendor header. */
+  prefix?: string;
 }
 
 /** One capability the extension offers. Exactly one of `read`/`bind`/`code` is present:

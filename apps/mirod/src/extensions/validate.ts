@@ -142,8 +142,8 @@ const HINTS: { match: RegExp; fix: string; example?: string }[] = [
   },
   {
     match: /\b(401|403)\b|unauthori[sz]ed|forbidden(?! import)|invalid (api )?key|authentication/i,
-    fix: "The app rejected the credential. Check the auth SCHEME first: the exact header name the app documents (X-Api-Key vs Authorization vs a vendor header), any required prefix (\"Bearer \", \"MediaBrowser Token=\"), and that the module's auth.secret names a secret you actually stored.",
-    example: 'auth: { header: "X-Emby-Token", secret: "api_key" }',
+    fix: "The app rejected the credential. Check the auth SCHEME first: the exact header name the app documents (X-Api-Key vs Authorization vs a vendor header), any scheme word it needs in front of the token (auth.prefix: \"Bearer \", \"MediaBrowser Token=\"), and that auth.secret names a secret you actually stored. In a code entry, read the real value from ctx.secrets.<name> or pass {{secret:<ref>}} in the header - never a literal.",
+    example: 'auth: { header: "Authorization", secret: "api_key", prefix: "Bearer " }',
   },
   {
     match: /ECONNREFUSED|ENOTFOUND|\b404\b|not found|Unable to connect|fetch failed/i,

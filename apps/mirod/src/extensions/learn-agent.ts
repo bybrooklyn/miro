@@ -89,8 +89,12 @@ DECLARATIVE FIRST - write DATA, not code. The extension is ONE file, extension.t
   combining calls, a health check that returns a boolean instead of throwing): { name, kind,
   parameters, code: (ctx, args) => Promise<unknown> }. ctx is read-only (ctx.http.get, ctx.exec,
   ctx.readFile, ctx.secrets). Reach for it last.
-AUTH is declarative: set the module's auth: { header, secret } (e.g. { header: "X-Emby-Token",
-secret: "api_key" }) and every read sends it automatically; a code entry reads ctx.secrets.
+AUTH is declarative: set the module's auth: { header, secret, prefix? } and every read sends it
+automatically - { header: "X-Emby-Token", secret: "api_key" } sends the bare token; when the app
+wants a scheme word in front of it, say so with prefix: { header: "Authorization", secret: "api_key",
+prefix: "Bearer " } or { header: "Authorization", secret: "session_token", prefix: "MediaBrowser Token=" }.
+A code entry reads ctx.secrets.<name> (the real value), or writes the placeholder {{secret:<ref>}} in a
+header or query it passes to ctx.http.get - substituted at request time.
 Credentials never appear as values: in a write header use secretHeader: { name, ref }; anywhere in a
 body or URL write the placeholder {{secret:<ref>}} (e.g.
 {"Name":"admin","Password":"{{secret:extension.jellyfin.admin_password}}"}) - the daemon

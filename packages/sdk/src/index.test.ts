@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { createFakeHttpClient, Type } from "./index";
+import { createFakeHttpClient, createHttpClient, Type } from "./index";
 
 test("createFakeHttpClient wraps a fixture as a 200 HttpResponse with a json() body", async () => {
   const client = createFakeHttpClient({ "/health": { health: "green" } });
@@ -23,6 +23,28 @@ test("createFakeHttpClient ignores query strings and can fix a non-200", async (
 test("createFakeHttpClient throws for an unfixtured path", async () => {
   const client = createFakeHttpClient({ "/health": {} });
   await expect(client.get("/nope")).rejects.toThrow("No fixture for GET /nope");
+});
+
+// A real local server, no mocks: what actually goes on the wire when generated code writes a
+// {{secret:<ref>}} placeholder into a header or query (found live: a literal placeholder reached
+// Jellyfin's Authorization header and failed six validations in a row).
+test("createHttpClient substitutes {{secret:<ref>}} placeholders in headers, query and path at request time", async () => {
+  const server = Bun.serve({
+    port: 0,
+    fetch: (req) => new Response(JSON.stringify({ auth: req.headers.get("authorization"), url: new URL(req.url).pathname + new URL(req.url).search })),
+  });
+  try {
+    const client = createHttpClient(`http://127.0.0.1:${server.port}`, {}, { session_token: "tok-123" });
+    const res = await client.get("/users/{{secret:extension.jellyfin.session_token}}", {
+      query: { key: "{{secret:session_token}}" },
+      headers: { Authorization: "MediaBrowser Token={{secret:extension.jellyfin.session_token}}" },
+    });
+    expect(res.json<{ auth: string; url: string }>()).toEqual({ auth: "MediaBrowser Token=tok-123", url: "/users/tok-123?key=tok-123" });
+    // An unknown reference fails loudly, naming the ref, instead of sending the placeholder.
+    await expect(client.get("/x", { headers: { Authorization: "{{secret:nope}}" } })).rejects.toThrow("{{secret:nope}}: no such secret");
+  } finally {
+    server.stop(true);
+  }
 });
 
 test("re-exports the same Type schema builder every other tool file uses", () => {

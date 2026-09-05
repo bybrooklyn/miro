@@ -60,7 +60,10 @@ export function applyPick(value: unknown, pick?: string[]): unknown {
 export function moduleAuthHeaders(mod: ExtensionModule, secrets: Record<string, string>): Record<string, string> {
   if (!mod.auth) return {};
   const value = secrets[mod.auth.secret];
-  return value ? { [mod.auth.header]: value } : {};
+  // prefix: the scheme word an Authorization-style header needs in front of the secret ("Bearer ",
+  // "MediaBrowser Token=") - the "undocumented auth prefix" bucket of the failure taxonomy, and the
+  // reason a live Jellyfin re-learn abandoned declarative auth for a code entry (PLAN.md §5.20).
+  return value ? { [mod.auth.header]: `${mod.auth.prefix ?? ""}${value}` } : {};
 }
 
 export async function runRead(ctx: ExtensionContext, mod: ExtensionModule, read: ReadBinding, args: any): Promise<unknown> {
