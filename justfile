@@ -4,11 +4,11 @@
 default:
     @just --list
 
-# Use when deps look corrupt ("Cannot find module '@miro/*'" or "'@earendil-works/*'")
-# - a partial or emptied node_modules makes a plain `bun install` report "no changes"
-# without recreating the workspace symlinks, so force a full reinstall.
-# NEVER wipe ~/.bun/install/cache here: the private pi.dev packages are slow and hard
-# to refetch, and a warm cache makes this reset take seconds.
+# Use when deps look corrupt ("Cannot find module '@miro/*'") - a partial or emptied
+# node_modules makes a plain `bun install` report "no changes" without recreating the
+# workspace symlinks, so force a full reinstall. If packages still install as bare
+# package.json + README (Bun's global cache corrupted - seen twice, PLAN.md gotchas), also
+# `rm -rf ~/.bun/install/cache` first; everything is public now, so a cold cache costs a minute.
 # Reinstall the workspace from scratch (nuke every node_modules, then reinstall).
 renv:
     rm -rf node_modules apps/*/node_modules packages/*/node_modules

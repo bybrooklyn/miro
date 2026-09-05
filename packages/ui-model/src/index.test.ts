@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
 import type { ServerEvent } from "@miro/protocol";
-import { initialState, reduce, userSent, answered, keyToAnswer, footerHints, secondsLeft, isQuiet, type Block } from "./index";
+import { initialState, reduce, userSent, answered, keyToAnswer, footerHints, secondsLeft, isQuiet, slashCommand, SLASH_COMMANDS, countSteps, type Block } from "./index";
 
 // Drives the reducer with the event sequence a real "set up jellyfin" turn produces (shape taken
 // from the live acceptance run on the dev VM), asserting the transcript a renderer would draw.
@@ -158,4 +158,52 @@ test("free-text and secret prompts, notices", () => {
 test("an activity for an unknown parent still shows, at top level", () => {
   const s = reduce(initialState(), { type: "activity", id: "z", parentId: "missing", label: "Late join", status: "running" }, T);
   expect(s.blocks[0]).toMatchObject({ kind: "activity", node: { label: "Late join" } });
+});
+
+// Audit 2026-09-05 (#3, #5, #12, #15, #28).
+test("a dropped connection ends the turn and forgets the daemon's open questions", () => {
+  let s = userSent(initialState(), "restart jellyfin", T);
+  s = reduce(s, { type: "question", id: "op_confirm:o1", prompt: "Approve?", options: [{ label: "Approve", value: "approve" }, { label: "Cancel", value: "cancel" }] }, T);
+  s = reduce(s, { type: "question", id: "op_confirm:o2", prompt: "Approve?", options: [{ label: "Approve", value: "approve" }] }, T);
+  expect(s.working).toBe(true);
+  expect(s.pending).not.toBeNull();
+  expect(s.pendingQueue).toHaveLength(1);
+  s = reduce(s, { type: "status", server: "home", health: "connecting" }, T);
+  expect(s).toMatchObject({ health: "connecting", working: false, pending: null, pendingQueue: [] });
+  // A healthy status does not touch a turn in flight.
+  s = userSent(s, "again", T);
+  s = reduce(s, { type: "status", server: "home", health: "healthy" }, T);
+  expect(s.working).toBe(true);
+});
+
+test("a letter answers only a question that has that option - no first-option fallback", () => {
+  const s = reduce(initialState(), { type: "question", id: "codegen_policy", prompt: "Which tier?", options: [{ label: "Cheapest", value: "cheapest" }, { label: "Best - Recommended", value: "best" }] }, T);
+  expect(keyToAnswer(s.pending, "y")).toBeNull();
+  expect(keyToAnswer(s.pending, "a")).toBeNull();
+  expect(keyToAnswer(s.pending, "return")).toBeNull();
+  expect(keyToAnswer(s.pending, "escape")).toBeNull();
+  expect(keyToAnswer(s.pending, "2")).toBe("best");
+  expect(footerHints(s).map((h) => h.key)).toEqual(["1", "2"]);
+});
+
+test("the footer never advertises an interrupt key that does not exist", () => {
+  const s = userSent(initialState(), "x", T);
+  expect(footerHints(s).map((h) => h.label)).toEqual(["scroll"]);
+});
+
+test("slashCommand parses the table's commands, flags a typo, and leaves chat alone", () => {
+  expect(slashCommand("/provider")).toEqual({ type: "provider_setup" });
+  expect(slashCommand("/pair")).toEqual({ type: "pair_request" });
+  expect(slashCommand("/memory")).toEqual({ type: "memory_list" });
+  expect(slashCommand("/memory forget m12")).toEqual({ type: "memory_forget", id: "m12" });
+  expect(slashCommand("/memory forget ")).toEqual({ unknown: "/memory forget " });
+  expect(slashCommand("/prov")).toEqual({ unknown: "/prov" });
+  expect(slashCommand("restart jellyfin")).toBeNull();
+  expect(SLASH_COMMANDS.map((c) => c.command)).toEqual(["/provider", "/pair", "/memory", "/memory forget"]);
+});
+
+test("countSteps counts every descendant of a finished tree", () => {
+  const node = { id: "a", label: "learn", status: "done" as const, startedAt: T, children: [{ id: "b", label: "x", status: "done" as const, startedAt: T, children: [{ id: "c", label: "y", status: "done" as const, startedAt: T, children: [] }] }] };
+  expect(countSteps(node)).toBe(2);
+  expect(isQuiet(node)).toBe(true);
 });

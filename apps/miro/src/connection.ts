@@ -76,7 +76,7 @@ export function useMiroConnection(onEvent: (event: ServerEvent) => void) {
 
     const establish = () => {
       if (cancelled) return;
-      const connect = ticket ? dialIrohTicket(ticket, feed) : connectWithRetry(feed, onClose);
+      const connect = ticket ? dialIrohTicket(ticket, feed, onClose) : connectWithRetry(feed, onClose);
       connect
         .then((socket) => {
           if (cancelled) {
@@ -107,5 +107,12 @@ export function useMiroConnection(onEvent: (event: ServerEvent) => void) {
     };
   }, []);
 
-  return (msg: ClientMessage) => socketRef.current?.write(encodeLine(msg));
+  // true when the message went out; false while disconnected (a reconnect window), so the caller
+  // does not advance its local state for a message nothing received (audit #9).
+  return (msg: ClientMessage): boolean => {
+    const socket = socketRef.current;
+    if (!socket) return false;
+    socket.write(encodeLine(msg));
+    return true;
+  };
 }

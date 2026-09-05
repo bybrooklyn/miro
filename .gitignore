@@ -5,5 +5,9 @@ tools/dev-vm/state/
 # macOS AppleDouble sidecars and Finder metadata - Bun's test runner tries to run ._*.test.ts files.
 ._*
 .DS_Store
-# Claude Code subagent worktrees (their branches are pushed; the checkouts are scratch).
+# Claude Code subagent worktrees (their branches are pushed; the checkouts are scratch) and its
+# per-session lock files (a pid + session id, never source).
 .claude/worktrees/
+.claude/*.lock
+# A provider CLI login drops its credential here relative to the cwd - a real secret, never tracked.
+auth.json

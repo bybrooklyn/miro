@@ -1,4 +1,4 @@
-import type { ServerEvent, SystemPlanEvent, OperationPlanEvent, QuestionOption, OperationProgressEvent } from "@miro/protocol";
+import type { ServerEvent, ClientMessage, SystemPlanEvent, OperationPlanEvent, QuestionOption, OperationProgressEvent } from "@miro/protocol";
 
 // The headless view-model (PLAN.md §5.9 client decision: "one view-model, two thin renderers").
 // A pure reducer from protocol events to what a client shows: a transcript of blocks, the one
@@ -140,8 +140,14 @@ function updateNode(node: ActivityNode, path: number[], fn: (n: ActivityNode) =>
 /** Apply one server event. `now` is injectable so tests are deterministic. */
 export function reduce(state: UiState, event: ServerEvent, now = Date.now()): UiState {
   switch (event.type) {
-    case "status":
-      return { ...state, server: event.server, health: event.health, model: event.model ?? state.model, privilege: event.privilege ?? state.privilege };
+    case "status": {
+      const next = { ...state, server: event.server, health: event.health, model: event.model ?? state.model, privilege: event.privilege ?? state.privilege };
+      // "connecting" is the client noticing the socket dropped (a daemon restart): the turn in
+      // flight is gone, and so is every question the daemon had open - it settles and forgets
+      // them on close. Left as they were, the TUI showed "working…" with no input forever and
+      // offered answers nobody was listening for (audit #3).
+      return event.health === "connecting" ? { ...next, working: false, pending: null, pendingQueue: [] } : next;
+    }
 
     case "reply_delta": {
       const l = last(state);
@@ -251,10 +257,13 @@ export function keyToAnswer(pending: Pending | null, key: string): string | null
   const values = pending.options.map((o) => o.value);
   const has = (v: string) => (values.includes(v) ? v : null);
   switch (key) {
+    // A letter answers only a question that has that option. The old fallback to the first option
+    // made `y` pick "Anthropic" on the provider chooser and "cheapest" on the codegen question
+    // whose recommended answer is "best" - with nothing on screen saying so (audit #5).
     case "a":
     case "y":
     case "return":
-      return has("approve") ?? has("keep") ?? values[0];
+      return has("approve") ?? has("keep");
     case "c":
       return has("change");
     case "x":
@@ -285,9 +294,40 @@ export function footerHints(state: UiState): { key: string; label: string }[] {
     }
     return hints;
   }
+  // No "esc interrupt" while working: there is no interrupt message in the protocol yet, so the
+  // hint advertised a key that did nothing (audit #12). Add it back with the message.
   return state.working
-    ? [{ key: "esc", label: "interrupt" }, { key: "↑↓", label: "scroll" }]
+    ? [{ key: "↑↓", label: "scroll" }]
     : [{ key: "enter", label: "send" }, { key: "/", label: "commands" }, { key: "↑↓", label: "scroll" }];
+}
+
+/** The slash commands a client understands, in one place: the parser, the footer and the help
+ * text read this table (audit #15: two hand-kept lists had already drifted). */
+export const SLASH_COMMANDS: { command: string; usage: string; help: string }[] = [
+  { command: "/provider", usage: "/provider", help: "connect an AI provider or a search key" },
+  { command: "/pair", usage: "/pair", help: "show the ticket a remote miro needs" },
+  { command: "/memory", usage: "/memory", help: "list what Miro remembers" },
+  { command: "/memory forget", usage: "/memory forget <id>", help: "forget one memory" },
+];
+
+/** A typed `/command` as the client message it means; null for anything else. An unknown slash
+ * command is `{ unknown }` so the client can say so locally instead of spending a model turn on a
+ * typo (audit #28). */
+export function slashCommand(text: string): ClientMessage | { unknown: string } | null {
+  if (!text.startsWith("/")) return null;
+  if (text === "/provider") return { type: "provider_setup" };
+  if (text === "/pair") return { type: "pair_request" };
+  if (text === "/memory") return { type: "memory_list" };
+  if (text.startsWith("/memory forget ")) {
+    const id = text.slice("/memory forget ".length).trim();
+    return id ? { type: "memory_forget", id } : { unknown: text };
+  }
+  return { unknown: text };
+}
+
+/** Steps under an activity node - every descendant. Shown on the collapsed line of a finished tree. */
+export function countSteps(node: ActivityNode): number {
+  return node.children.reduce((n, c) => n + 1 + countSteps(c), 0);
 }
 
 /** Seconds left on a lifeline countdown, or null. */

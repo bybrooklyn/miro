@@ -21,9 +21,15 @@ Bun workspaces monorepo (`workspaces: ["apps/*", "packages/*"]`):
 - `packages/protocol` - the client-facing wire protocol shared by both apps (`ClientMessage`/
   `ServerEvent`, JSON-line framing over `encodeLine`/`createLineBuffer`).
 - `packages/sdk` - `@miro/sdk`, the API surface handed to generated extension code
-  (`HttpClient` GET-only, `BrowserSession`, `ExtensionTool`/`ExtensionContext` with read-only
-  `exec`/`readFile`, and `ExtensionOperation` - writes as declarative bindings the daemon runs
-  through its engine). Never leaks daemon internals (no DB, no secrets, no raw exec).
+  (`ExtensionModule`/`ExtensionEntry` - the single-file declarative shape, `HttpClient` GET-only
+  and same-origin, `BrowserSession`, `ExtensionContext` with read-only `exec`/`readFile`, and
+  `OperationBinding` - writes as declarative bindings the daemon runs through its engine). Never
+  leaks daemon internals (no DB, no secrets, no raw exec).
+- `packages/{agent-core,model-client,model-catalog,schema-engine,agent-sys,agent-wire,context-compact,native}`
+  - the eight packages vendored from oh-my-pi (MIT, `private: true`; PLAN.md §5.17). Miro's own
+  code imports only `@miro/agent-core`, `@miro/model-client`, `@miro/model-catalog` and
+  `@miro/schema-engine/typebox`; the rest are transitive. Local changes are marked `Vendoring note`
+  / `Miro hardfork` in place - fix what breaks Miro, do not tidy upstream code.
 - `packages/ui-model` - `@miro/ui-model`, the headless view-model: a pure reducer from protocol
   events to transcript blocks / pending prompt / keymap, tested against real event sequences.
   The terminal client renders it; a web client will render the same state. Put UI *logic* here,
@@ -36,13 +42,17 @@ Bun workspaces monorepo (`workspaces: ["apps/*", "packages/*"]`):
 
 ```
 bun install                          # from repo root - installs all workspaces
-bun test                             # from repo root - runs every *.test.ts in the monorepo
-bunx tsc --noEmit                    # run inside each package (apps/mirod, apps/miro,
-                                      # packages/protocol, packages/sdk) - no repo-wide typecheck script
+just check                           # typecheck every package that has a tsconfig (13) - the gate
+just test                            # = bun test from the repo root (every *.test.ts in the monorepo)
+just renv                            # nuke every node_modules and reinstall (workspace links go missing)
 bun run --cwd apps/mirod dev         # run the daemon locally
 bun run --cwd apps/miro dev          # run the TUI client locally
-bun run dev                          # (repo root) runs both together
+bun run dev                          # (repo root) runs both together, daemon stopped when the TUI exits
 ```
+
+`just` is the front door; the raw equivalents are `bun test` and `bunx tsc --noEmit` run inside a
+package. `bun test` paths are relative to the cwd - run it from the repo root or a path filter
+silently matches nothing. On this dev Mac `timeout(1)` does not exist; use the tool's own timeout.
 
 No lint config exists anywhere in this repo. Don't invent one unless asked.
 
@@ -159,4 +169,5 @@ Gotchas worth knowing before you try:
   `qemu-img convert -O qcow2 -B <base> -F qcow2 disk.qcow2 compact.qcow2` and swap it in. After
   any boot: restart mirod, and `docker start jellyfin` (that container has no restart policy).
 
-See `PLAN.md`'s "Working notes / gotchas" section for the full, current list.
+This list is the current one. `PLAN.md`'s "Working notes / gotchas" section is the historical
+record from earlier stages - read it for context, keep new gotchas here.

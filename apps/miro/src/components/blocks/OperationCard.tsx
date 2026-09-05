@@ -35,7 +35,7 @@ export function OperationCard({
   phase?: Phase;
   result?: { outcome: "committed" | "rolledback" | "applied_unverified"; message: string };
 }) {
-  const d = (plan.details ?? {}) as Record<string, unknown>;
+  const d = plan.details ?? {};
   const cls = str(d.class);
   const writes = Array.isArray(d.writes) ? d.writes.map(String) : null;
   const network = typeof d.network === "boolean" ? d.network : undefined;
@@ -43,6 +43,10 @@ export function OperationCard({
   const command = str(d.command);
   const diff = str(d.diff);
   const proposed = str(d.proposed);
+  // The repair contract the engine ships with every plan (audit #11): a dry run that proved
+  // nothing must say so where the owner approves, and the scope's justification is theirs to read.
+  const effectUnknown = d.dryRunFidelity === "none";
+  const scopeEvidence = str(d.scopeEvidence);
 
   return (
     <box
@@ -61,11 +65,13 @@ export function OperationCard({
         ) : null}
         {plan.autoApprove ? null : <text fg={theme.textMuted}>needs approval</text>}
         {d.irreversible === true ? <text fg={theme.error}>cannot be rolled back</text> : null}
+        {effectUnknown ? <text fg={theme.warning}>effect unknown until run</text> : null}
       </box>
       {writes ? (
         <text fg={theme.textMuted}>
           {`may write: ${writes.length > 0 ? writes.join(", ") : "nothing"}`}
           {network === undefined ? "" : network ? " · network on" : " · network off"}
+          {scopeEvidence ? ` · ${scopeEvidence}` : ""}
         </text>
       ) : null}
       {warning ? <text fg={theme.warning}>{`! ${warning}`}</text> : null}

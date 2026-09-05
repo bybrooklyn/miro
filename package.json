@@ -1,10 +1,10 @@
 {
-  "name": "miro",
+  "name": "miro-monorepo",
   "license": "AGPL-3.0-only",
   "private": true,
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {
-    "dev": "(bun run --cwd apps/mirod dev &) ; sleep 0.3 ; bun run --cwd apps/miro dev",
+    "dev": "trap 'kill 0' EXIT; bun run --cwd apps/mirod dev & sleep 0.3; bun run --cwd apps/miro dev",
     "test": "bun test"
   },
   "devDependencies": {

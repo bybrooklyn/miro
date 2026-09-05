@@ -1,10 +1,6 @@
-import { isQuiet, type ActivityNode } from "@miro/ui-model";
+import { isQuiet, countSteps, type ActivityNode } from "@miro/ui-model";
 import { theme } from "../../theme";
 import { Spinner } from "../Spinner";
-
-function countSteps(node: ActivityNode): number {
-  return node.children.reduce((n, c) => n + 1 + countSteps(c), 0);
-}
 
 function NodeView({ node, indent }: { node: ActivityNode; indent: number }) {
   const failed = node.status === "failed";

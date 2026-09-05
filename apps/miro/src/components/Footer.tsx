@@ -1,5 +1,5 @@
 import { Fragment } from "react";
-import { footerHints, type UiState } from "@miro/ui-model";
+import { footerHints, SLASH_COMMANDS, type UiState } from "@miro/ui-model";
 import { theme } from "../theme";
 
 export function Footer({ state }: { state: UiState }) {
@@ -15,7 +15,7 @@ export function Footer({ state }: { state: UiState }) {
           </Fragment>
         ))}
       </text>
-      {state.pending ? null : <text fg={theme.border}>/provider /pair /memory</text>}
+      {state.pending ? null : <text fg={theme.border}>{[...new Set(SLASH_COMMANDS.map((c) => c.command.split(" ")[0]))].join(" ")}</text>}
     </box>
   );
 }

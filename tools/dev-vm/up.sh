@@ -14,9 +14,14 @@ IMAGE_URL="https://cloud.debian.org/images/cloud/trixie/latest/$IMAGE_NAME"
 SUMS_URL="https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS"
 BASE_IMAGE="$STATE/$IMAGE_NAME"
 
-QEMU_SHARE="$(brew --prefix qemu)/share/qemu"
+QEMU_SHARE="$(brew --prefix qemu 2>/dev/null)/share/qemu"
 FIRMWARE_CODE="$QEMU_SHARE/edk2-aarch64-code.fd"
 FIRMWARE_VARS_TEMPLATE="$QEMU_SHARE/edk2-arm-vars.fd"
+# Name the real cause up front: a missing qemu used to surface as a raw brew error or a cryptic
+# firmware failure, and a moved readiness helper as a three-minute "timed out waiting for SSH".
+[[ -f "$FIRMWARE_CODE" ]] || { echo "qemu firmware not found at $FIRMWARE_CODE - brew install qemu" >&2; exit 1; }
+PROBE_HELPER="$DIR/../../apps/miro/src/setup/reachability.ts"
+[[ -f "$PROBE_HELPER" ]] || { echo "readiness probe helper moved: $PROBE_HELPER" >&2; exit 1; }
 
 # 1. Base image: download once, verify against Debian's own published SHA512SUMS (not a value
 # hardcoded into this script, since "latest" is a rolling pointer that gets rebuilt).
@@ -108,7 +113,7 @@ fi
 echo "Waiting for SSH on 127.0.0.1:2222..."
 for _ in $(seq 1 90); do
   if bun -e '
-import { probePort } from "'"$DIR"'/../../apps/miro/src/setup/reachability.ts";
+import { probePort } from "'"$PROBE_HELPER"'";
 process.exit((await probePort("127.0.0.1", 2222, 1000)) ? 0 : 1);
 ' 2>/dev/null; then
     echo "SSH is up. tools/dev-vm/ssh.sh to connect."

@@ -14,11 +14,13 @@ export const SYSTEM_SOCKET_PATH = "/run/miro/mirod.sock";
 export const SOCKET_PATH = process.env.MIRO_SOCKET ?? (isRoot ? SYSTEM_SOCKET_PATH : join(MIRO_DIR, "mirod.sock"));
 export const DB_PATH = join(MIRO_DIR, "miro.db");
 
-/** Client-side socket discovery. */
+/** Client-side socket discovery: the system socket if a root daemon is running, else the same
+ * per-user path the daemon computes (so MIRO_DIR moves both ends - audit #4: the client used to
+ * hardcode ~/.miro and miss a daemon started with MIRO_DIR set). */
 export function resolveSocketPath(): string {
   if (process.env.MIRO_SOCKET) return process.env.MIRO_SOCKET;
   if (existsSync(SYSTEM_SOCKET_PATH)) return SYSTEM_SOCKET_PATH;
-  return join(homedir(), ".miro", "mirod.sock");
+  return join(MIRO_DIR, "mirod.sock");
 }
 
 export interface StatusEvent {
@@ -99,13 +101,34 @@ export interface SecretPromptEvent {
 /** Visible plan for a tracked mutation before it runs (plan §38, §54 Stage B). Auto-approved
  * operations still send this for transparency; non-auto-approved ones pair it with a `question`
  * (id `op_confirm:<id>`, Approve/Cancel options) that actually gates execution. */
+/** What the engine puts in `details` (operations/engine.ts): the classifier's class, the sandbox
+ * scope, the repair contract (expects / rollbackWhen / scopeEvidence / dryRunFidelity - "none"
+ * means the effect is unknown, on purpose), plus whatever the kind added (a command, a diff).
+ * Named here so a renderer's typechecker can see a field exists instead of guessing at a
+ * Record<string, unknown> (audit #11: the client silently dropped the safety-relevant ones). */
+export interface OperationPlanDetails {
+  class?: "read" | "mutate" | "destructive" | "lifeline" | "forbidden";
+  writes?: string[];
+  network?: boolean;
+  irreversible?: boolean;
+  warning?: string;
+  expects?: string;
+  rollbackWhen?: string;
+  scopeEvidence?: string;
+  dryRunFidelity?: "exact" | "partial" | "none";
+  command?: string;
+  diff?: string;
+  proposed?: string;
+  [key: string]: unknown;
+}
+
 export interface OperationPlanEvent {
   type: "operation_plan";
   id: string;
   goal: string;
   summary: string;
   autoApprove: boolean;
-  details: Record<string, unknown> | null;
+  details: OperationPlanDetails | null;
 }
 
 /** Final outcome of a tracked operation (plan §38). `applied_unverified`: the change reached the
@@ -197,25 +220,40 @@ export type ClientMessage =
 /** ALPN identifying the miro wire protocol to Iroh - bump the suffix on any breaking wire change. */
 export const IROH_ALPN = "miro/mirod/1";
 
-/** Iroh's connect/stream APIs take byte arrays, not Buffers. */
-export function alpnBytes(alpn: string): number[] {
-  return Array.from(Buffer.from(alpn, "utf8"));
+/** UTF-8 bytes as a plain array - Iroh's connect/stream APIs take byte arrays, not Buffers. Used
+ * for the ALPN and for every protocol line sent over Iroh (audit #27: it was named alpnBytes and
+ * carried JSON lines at four of its call sites). */
+export function utf8Bytes(text: string): number[] {
+  return Array.from(Buffer.from(text, "utf8"));
 }
 
 export function encodeLine(msg: object): string {
   return JSON.stringify(msg) + "\n";
 }
 
-/** Feeds arbitrary chunks in, calls onLine once per newline-delimited JSON line out. */
+/** Feeds arbitrary chunks in, calls onLine once per newline-delimited JSON line out. Bytes are
+ * decoded as a stream: a multi-byte character split across two chunks (both transports hand over
+ * raw byte chunks) used to decode as U+FFFD - "café" in a streamed reply became "caf��" (audit #2).
+ * A line longer than MAX_LINE_BYTES is dropped, not accumulated: a peer that never sends a newline
+ * is otherwise an unbounded buffer at the daemon's trust boundary. */
+export const MAX_LINE_BYTES = 16 * 1024 * 1024;
+
 export function createLineBuffer(onLine: (line: string) => void) {
+  const decoder = new TextDecoder();
   let buf = "";
+  let overflowed = false;
   return (chunk: Buffer | string) => {
-    buf += chunk.toString();
+    buf += typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
     let idx: number;
     while ((idx = buf.indexOf("\n")) >= 0) {
       const line = buf.slice(0, idx);
       buf = buf.slice(idx + 1);
-      if (line) onLine(line);
+      if (overflowed) overflowed = false; // the rest of the oversized line ends here; drop it
+      else if (line) onLine(line);
+    }
+    if (buf.length > MAX_LINE_BYTES) {
+      buf = "";
+      overflowed = true;
     }
   };
 }

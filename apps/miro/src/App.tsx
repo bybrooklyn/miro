@@ -1,8 +1,8 @@
 import { useRef, useState } from "react";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type { ScrollBoxRenderable } from "@opentui/core";
-import type { ClientMessage, ServerEvent } from "@miro/protocol";
-import { answered, initialState, reduce, userSent } from "@miro/ui-model";
+import type { ServerEvent } from "@miro/protocol";
+import { answered, initialState, reduce, userSent, slashCommand, SLASH_COMMANDS } from "@miro/ui-model";
 import { useMiroConnection } from "./connection";
 import { theme } from "./theme";
 import { StatusLine } from "./components/StatusLine";
@@ -11,14 +11,6 @@ import { PromptArea } from "./components/PromptArea";
 import { Footer } from "./components/Footer";
 
 const SCROLL_STEP = 2;
-
-function slashCommand(text: string): ClientMessage | null {
-  if (text === "/provider") return { type: "provider_setup" };
-  if (text === "/pair") return { type: "pair_request" };
-  if (text === "/memory") return { type: "memory_list" };
-  if (text.startsWith("/memory forget ")) return { type: "memory_forget", id: text.slice("/memory forget ".length).trim() };
-  return null;
-}
 
 export function App() {
   const [state, setState] = useState(initialState);
@@ -42,15 +34,31 @@ export function App() {
     else if (!choosing && key.name === "down") box.scrollTop += SCROLL_STEP;
   });
 
+  // A local line in the transcript, for things the client itself has to say (no daemon involved).
+  const notice = (text: string) => setState((s) => reduce(s, { type: "notice", level: "warn", text }));
+
   function handleAnswer(id: string, value: string) {
-    send({ type: "answer", id, value });
-    setState((s) => answered(s, id, value));
+    // Only advance the local state when the daemon actually received the answer; during a
+    // reconnect window the prompt stays put instead of vanishing unsent (audit #9).
+    if (send({ type: "answer", id, value })) setState((s) => answered(s, id, value));
+    else notice("not connected - try again in a moment");
   }
 
   function handleChat(text: string) {
     const trimmed = text.trim();
-    setState((s) => userSent(s, trimmed));
-    send(slashCommand(trimmed) ?? { type: "chat", text });
+    if (!trimmed) return;
+    const slash = slashCommand(trimmed);
+    if (slash && "unknown" in slash) {
+      // A typo'd command is answered here, never sent to the model as a chat turn (audit #28).
+      notice(`unknown command ${slash.unknown} - commands: ${SLASH_COMMANDS.map((c) => c.usage).join(", ")}`);
+      return;
+    }
+    const msg = slash ?? { type: "chat" as const, text: trimmed };
+    if (!send(msg)) {
+      notice("not connected - try again in a moment");
+      return;
+    }
+    if (msg.type === "chat") setState((s) => userSent(s, trimmed));
   }
 
   return (

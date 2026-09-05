@@ -959,6 +959,9 @@ belt-and-suspenders.
 (open/snapshot/find/click/fill/select/read/wait/close - implemented only inside `host-entry.ts`,
 since only that process has `Bun.WebView`), `ExtensionTool`/`ExtensionContext`, re-exports
 `Type`/`Static` from `@earendil-works/pi-ai` (the schema convention every tool file already uses).
+*(Historical record. Since then: the four-file format became the single-file `ExtensionModule` -
+§5.13; `Type` comes from `@miro/schema-engine/typebox` - §5.17/§5.19; `ExtensionTool` and the
+`tests.ts` fakes were removed in the 2026-09-05 audit - §5.28.)*
 
 **Browser tools** (8, built on `Bun.WebView`, run inside the extension-host process): `browser_open`,
 `browser_snapshot` (the hand-written DOM walker), `browser_find` (same walker, filtered),
@@ -1856,8 +1859,6 @@ finding is what surfaced the credential-bootstrap and control-method gaps in 5.3
   `README.md`, no real `dist`/source, despite `bun install` reporting success. Fix both times: `rm
   -rf node_modules ~/.bun/install/cache && bun install --force`. Check for this specifically after
   any future Bun version change, not just on first install.
-- **This repo is not a git repository** (`git status` fails - no `.git` directory). Everything
-  described here is uncommitted working tree state as of this writing.
 - **`tools/dev-vm/` is dev-only, not shipped** - a disposable QEMU Debian 13 (arm64) VM used for
   every piece of live verification in this project (SSH bootstrap originally, now systemd operation
   testing). `up.sh`/`down.sh`/`ssh.sh`. Cloud-init only applies on a *fresh* disk - delete
@@ -1913,15 +1914,12 @@ finding is what surfaced the credential-bootstrap and control-method gaps in 5.3
   needs a one-line `bun -e` script using `bun:sqlite` directly (`new Database(process.env.HOME +
   "/.miro/miro.db")`), not the `sqlite3 ~/.miro/miro.db "select ..."` pattern used earlier stages'
   narratives assumed would work everywhere.
-- **`pi-ai`'s own CLI (`dist/cli.js`, `bin: {"pi-ai": "dist/cli.js"}`) already has a `login
-  <provider>` command**, including a device-code flow (`Select ... 2. Device code login (headless)`
-  - pipe `"2"` as stdin non-interactively) for providers like `openai-codex` that need real browser
-  OAuth. Genuinely useful for standing up a new provider login fast without writing any OAuth flow
-  code - the credential lands in `./auth.json` (relative to wherever the CLI was invoked from) in
-  pi-ai's own `{providerId: {type, access, refresh, expires, ...}}` shape, which matches pi-ai's
-  `OAuthCredential` type exactly and can be handed straight to a `CredentialStore.modify()`. Treat
-  that file as a real secret the moment it's written - move/import it and delete the original
-  immediately, never leave it sitting in a repo directory.
+- **Codex login is the daemon's own now** (§5.22): `/provider` → "OpenAI Codex" runs the vendored
+  client's device-code flow inside mirod; the credential lands in the encrypted secret store. The
+  pre-vendor route (pi-ai's CLI writing `./auth.json`, then a drop file the daemon imported) is gone
+  with pi-ai; `auth.json` is gitignored in case a provider CLI ever writes one into the tree again.
+
+## Part 5 (continued) - the design records, in order
 
 ### 5.11 Audit + hardening pass (2026-09-02)
 
