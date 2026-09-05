@@ -73,6 +73,11 @@ export interface OperationKind<P = any, S = any> {
   /** Best-effort - must not throw; reconciliation and runOperation both treat a rollback failure
    * as "already in the worst case we can detect," not something to retry. */
   rollback(params: P, captured: S): Promise<void>;
+  /** Prodtest (PLAN.md §5.15 A, operations/prodtest.ts): what this operation's `verify` keeps
+   * checking after commit - a target key (a path, a unit, a URL) so only the LATEST committed
+   * operation per target is re-verified, or null when there is nothing re-runnable (a shell
+   * command with no verify). Absent: every commit is its own target. */
+  prodtest?(params: P): string | null;
 }
 
 export interface OperationToolContext {

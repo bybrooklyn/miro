@@ -54,6 +54,8 @@ function preview(text: string): string {
 
 export const fileWriteKind: OperationKind<FileWriteParams, FileWriteCaptured> = {
   kind: "file.write",
+  // Prodtest: the file still holds what Miro wrote - the latest write per path is what counts.
+  prodtest: (p) => p.path,
 
   async describe(p) {
     // Check the path as the kernel will see it: a symlink at /srv/app/config pointing into /etc

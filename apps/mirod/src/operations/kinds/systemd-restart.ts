@@ -62,4 +62,6 @@ export const systemdRestartKind: OperationKind<Params, Captured> = {
   async rollback({ unit }, captured) {
     await run("sudo", ["systemctl", captured.active ? "start" : "stop", unit]).catch(() => {});
   },
+
+  prodtest: ({ unit }) => unit,
 };

@@ -21,6 +21,7 @@ import { ensureTimelineTable, recordEvent } from "./timeline";
 import { createSecretStore } from "./secrets";
 import { generateIrohSecretKey, startIrohEndpoint, ticketFor, acceptLoop } from "./iroh";
 import { reconcileOperations, type OperationToolContext, type ReflectionTrigger } from "./operations/engine";
+import { reverifyCommitted } from "./operations/prodtest";
 import { allOperationKinds } from "./agent/operation-tools";
 import { buildContextBlock, takeSnapshot } from "./agent/context";
 import { runDiscovery } from "./discovery";
@@ -261,6 +262,19 @@ function reprobeExtensionsPeriodically(): void {
   ).catch((err) => console.error("[mirod] extension re-probe failed", err));
 }
 setInterval(reprobeExtensionsPeriodically, REPROBE_INTERVAL_MS);
+
+// Prodtest per repair (PLAN.md §5.15 A, operations/prodtest.ts): on the same idle period, re-run the
+// verify of the latest committed operation per target. Drift becomes a reinforced incident the
+// agent sees in its context - surfaced, never re-applied on its own.
+function reverifyPeriodically(): void {
+  reverifyCommitted(db, OPERATION_KINDS)
+    .then((r) => {
+      if (r.drifted.length > 0) console.log(`[mirod] prodtest: ${r.drifted.length} of ${r.checked} committed operation(s) no longer verify: ${r.drifted.map((d) => d.goal).join("; ")}`);
+      else if (r.checked > 0) console.log(`[mirod] prodtest: ${r.checked} committed operation(s) still verify`);
+    })
+    .catch((err) => console.error("[mirod] prodtest failed", err));
+}
+setInterval(reverifyPeriodically, REPROBE_INTERVAL_MS);
 
 // Discover what's on this box and persist it as durable server_facts (PLAN.md §5.13). Fire-and-
 // forget so a slow or absent Docker never delays boot; refreshed on the same long period as the

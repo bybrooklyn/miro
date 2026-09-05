@@ -27,6 +27,9 @@ const pending = new Map<string, TrashEntry>();
 
 export const fileDeleteKind: OperationKind<FileDeleteParams, FileDeleteCaptured> = {
   kind: "file.delete",
+  // Prodtest: the path is still gone. Same target key as file.write, so a later write of the same
+  // path supersedes the delete instead of reporting it as drift.
+  prodtest: (p) => p.path,
 
   async describe(p) {
     if (!existsSync(p.path)) throw new Error(`${p.path} does not exist`);

@@ -110,4 +110,8 @@ export const systemdUnitKind: OperationKind<SystemdUnitParams, Captured> = {
     const undo = p.action === "start" || p.action === "stop" ? (captured.active ? "start" : "stop") : captured.enabled ? "enable" : "disable";
     await run("sudo", ["systemctl", undo, unit]).catch(() => {});
   },
+
+  // start/stop share a target with restart-style ops on the same unit; enable/disable are their own
+  // axis, so a later `start` does not supersede an earlier `enable` of the same unit.
+  prodtest: (p) => (p.action === "daemon-reload" ? null : p.action === "enable" || p.action === "disable" ? `${p.unit}#enabled` : p.unit!),
 };

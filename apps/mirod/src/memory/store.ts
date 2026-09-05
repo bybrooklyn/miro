@@ -308,7 +308,7 @@ export function buildSummary(db: Database): string {
 /** Mechanical write for a terminal operation - no LLM, straight from the operation's own fields. */
 export function recordIncident(
   db: Database,
-  info: { kind: string; goal: string; phase: "committed" | "rolledback"; error: string | null },
+  info: { kind: string; goal: string; phase: "committed" | "rolledback" | "drift"; error: string | null },
 ): MemoryRecord {
   const slug = info.goal.toLowerCase().replace(/[^a-z0-9]+/g, "_").slice(0, 60);
   const value = info.error ? `${info.goal} - ${info.phase}: ${info.error}` : `${info.goal} - ${info.phase}`;

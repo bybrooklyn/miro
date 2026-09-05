@@ -36,6 +36,8 @@ export function takeOutput(params: object): SandboxResult | undefined {
 
 export const shellCommandKind: OperationKind<ShellCommandParams, ShellCommandCaptured> = {
   kind: "shell.command",
+  // Prodtest: only a command that declared a verify has anything re-runnable (read-only sandbox).
+  prodtest: (p) => (p.verify ? p.command : null),
 
   async describe(p) {
     const c = classifyCommand(p.command);

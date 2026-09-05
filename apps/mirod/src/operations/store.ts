@@ -124,6 +124,12 @@ export function listByPhases(db: Database, phases: OperationPhase[]): OperationR
   return rows.map(fromRow);
 }
 
+/** Newest first - operations/prodtest.ts re-verifies the latest committed operation per target. */
+export function listCommitted(db: Database, limit: number): OperationRecord[] {
+  const rows = db.query("SELECT * FROM operations WHERE phase = 'committed' ORDER BY updated_at DESC, rowid DESC LIMIT ?").all(limit) as Row[];
+  return rows.map(fromRow);
+}
+
 export function countByKindAndPhase(db: Database, kind: string, phase: OperationPhase): number {
   const row = db.query("SELECT COUNT(*) as n FROM operations WHERE kind = ? AND phase = ?").get(kind, phase) as { n: number };
   return row.n;

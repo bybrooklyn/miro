@@ -118,6 +118,8 @@ export function httpMutationKind(
 
   return {
     kind: "http.mutation",
+    // Prodtest: only a mutation that declared a verifyUrl has anything re-runnable.
+    prodtest: (p) => (p.verifyUrl ? p.url : null),
 
     async describe(p) {
       // Every URL the secret header could be sent to, not just the primary one (adversarial
