@@ -36,7 +36,9 @@ Bun workspaces monorepo (`workspaces: ["apps/*", "packages/*"]`):
   never in a renderer.
 - `tools/dev-vm` - a disposable QEMU Debian 13 (arm64) VM, dev-only, not shipped. The only
   reliable way to live-test anything needing real systemd/Docker/network, since this dev Mac has
-  neither a working systemd nor (usually) a reachable Docker/Podman daemon.
+  neither a working systemd nor (usually) a reachable Docker/Podman daemon. `install-mirod.sh`
+  installs `apps/mirod/mirod.service` (the daemon's hardened systemd unit, which ships with it) on
+  the VM.
 
 ## Commands
 
@@ -146,13 +148,16 @@ Gotchas worth knowing before you try:
 - `rm -rf apps && tar xzf ...` on the VM also deletes the nested workspace `node_modules` symlinks
   - follow any resync that touched `apps/` with `bun install --force`, since a plain `bun install`
   will report "no changes" without recreating them.
-- The daemon on the VM runs as root: `cd apps/mirod && sudo sh -c 'HOME=/root MIRO_HOST_USER=miro
-  nohup /home/miro/.bun/bin/bun run src/index.ts > /var/log/mirod.log 2>&1 < /dev/null &'`; socket
-  `/run/miro/mirod.sock`. It is not a systemd unit - restart it after every `up.sh` and every sync.
-  (The `&` inside the `sh -c` matters: with `sudo -b` instead, the `sh` parent keeps the ssh
-  session's stdout and the ssh command never returns.) Drive it headlessly with the scratchpad
-  `chat-driver.ts` (one chat message, auto-answers prompts) - `bun` is not on a non-interactive
-  ssh PATH there, call `/home/miro/.bun/bin/bun`.
+- The daemon on the VM is a systemd unit (`apps/mirod/mirod.service`, hardened per §5.30). Install
+  it once per fresh disk with `tools/dev-vm/install-mirod.sh` (writes `/usr/local/bin/mirod`, a
+  wrapper that runs the source tree as root; socket `/run/miro/mirod.sock`, state `/var/lib/miro`,
+  DB `/var/lib/miro/miro.db`). After a sync: `tools/dev-vm/ssh.sh 'sudo systemctl restart mirod'` -
+  `Type=notify`, so it returns once the socket is up; logs `journalctl -u mirod -b`. A sync that
+  does not even parse trips the start limit: `sudo systemctl reset-failed mirod` then restart. It
+  is enabled, so it comes back after `up.sh` and after a guest reboot - never run the old nohup
+  line while the unit is active (two daemons fight over the socket). Drive it headlessly with the
+  scratchpad `chat-driver.ts` (one chat message, auto-answers prompts) - `bun` is not on a
+  non-interactive ssh PATH there, call `/home/miro/.bun/bin/bun`.
 - `pkill -f '<pattern>'` inside an ssh command whose own text contains the pattern kills your shell
   (ssh exits 255, no output). Anchor it: `pkill -f '^/home/miro/.bun/bin/bun run src/index.ts'`.
 - SLIRP networking tops out around 1.2 Mbit/s. Big files (Docker images) go in through
@@ -169,8 +174,10 @@ Gotchas worth knowing before you try:
   releases freed clusters (the drive is attached with `discard=unmap`). An image that bloated
   before that was on (found at 11G for 4.2G of data): `docker image prune -a`, `apt-get clean`,
   zero-fill (`dd if=/dev/zero of=/var/tmp/zero`, then rm), clean `poweroff`, then on the Mac
-  `qemu-img convert -O qcow2 -B <base> -F qcow2 disk.qcow2 compact.qcow2` and swap it in. After
-  any boot: restart mirod, and `docker start jellyfin` (that container has no restart policy).
+  `qemu-img convert -O qcow2 -B <base> -F qcow2 disk.qcow2 compact.qcow2` and swap it in. After a
+  clean `poweroff`, `up.sh` cold-boots and the enabled unit brings mirod back on its own; the media
+  containers now carry `restart=unless-stopped` (the `system_reboot` operation set it, §5.30), so
+  the old "restart mirod, then `docker start jellyfin`" chore is gone.
 
 This list is the current one. `PLAN.md`'s "Working notes / gotchas" section is the historical
 record from earlier stages - read it for context, keep new gotchas here.
