@@ -104,21 +104,20 @@ describe("system.reboot", () => {
   });
 
   const base: RebootCaptured = {
-    units: ["ssh.service", "docker.service"],
     containers: ["jellyfin"],
+    activeServices: 40,
     dockerAvailable: true,
     severity: 0,
     bootId: "a",
     issuedAt: 0,
-    disabled: [],
     notes: [{ name: "jellyfin", from: "no", update: true }],
   };
-  const same: RebootSnapshot = { units: ["ssh.service", "docker.service"], containers: ["jellyfin"], dockerAvailable: true, severity: 0 };
+  const same: RebootSnapshot = { containers: ["jellyfin"], activeServices: 40, dockerAvailable: true, severity: 0 };
 
-  test("rebootOutcome: everything back and severity not worse -> committed", () => {
+  test("rebootOutcome: containers back and severity not worse -> committed", () => {
     const r = rebootOutcome("kernel update", base, same);
     expect(r.outcome).toBe("committed");
-    expect(r.message).toMatch(/verified: 2 units and 1 containers back, severity 0->0/);
+    expect(r.message).toMatch(/verified: 1 containers back and no failed units, severity 0->0/);
   });
 
   test("rebootOutcome: a compose container updated at runtime came back, and the file to fix is named", () => {
@@ -129,20 +128,14 @@ describe("system.reboot", () => {
     expect(r.message).toContain("restart: unless-stopped");
   });
 
-  test("rebootOutcome: a missing container names its compose file; a missing disabled unit names systemctl enable", () => {
-    const captured: RebootCaptured = {
-      ...base,
-      units: ["ssh.service", "cron.service"],
-      disabled: ["cron.service"],
-      notes: [{ name: "jellyfin", from: "no", update: true, composeFile: "/srv/media/compose.yml" }],
-    };
-    const r = rebootOutcome("kernel update", captured, { ...same, units: ["ssh.service"], containers: [] });
+  test("rebootOutcome: a missing container names its compose file to fix", () => {
+    const captured: RebootCaptured = { ...base, notes: [{ name: "jellyfin", from: "no", update: true, composeFile: "/srv/media/compose.yml" }] };
+    const r = rebootOutcome("kernel update", captured, { ...same, containers: [] });
     expect(r.outcome).toBe("applied_unverified");
-    expect(r.message).toContain("cron.service (not enabled at boot - approve `systemctl enable cron.service`)");
     expect(r.message).toContain("jellyfin (restart policy set at runtime; add `restart: unless-stopped` to /srv/media/compose.yml)");
   });
 
-  test("rebootOutcome: nothing missing but severity worse -> applied_unverified, and says so", () => {
+  test("rebootOutcome: containers back but a unit failed (severity worse) -> applied_unverified, and says so", () => {
     const r = rebootOutcome("kernel update", base, { ...same, severity: 2 });
     expect(r.outcome).toBe("applied_unverified");
     expect(r.message).toMatch(/severity got worse \(0->2\)/);

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { uptime } from "node:os";
 import { isAbsolute, join } from "node:path";
-import { run, runPrivileged } from "../../inventory/exec";
+import { runPrivileged } from "../../inventory/exec";
 import { listServices, type ServiceInfo } from "../../inventory/systemd";
 import { inspectContainer, listContainers, type ContainerSummary } from "../../inventory/containers";
 import { getMounts, type MountInfo } from "../../inventory/storage";
@@ -39,10 +39,16 @@ export interface ContainerNote {
   composeFile?: string;
 }
 
-/** What was running - the same three inputs severity.ts scores, with the running sets kept. */
+/** What was running. Containers are the reboot's explicit target (the restart-policy mechanism);
+ * unit health is the severity number, NOT a name-by-name diff. Found live (PLAN.md §5.30): diffing
+ * the active-unit set at early boot flagged mirod itself (mid-reconcile, before it is `active`),
+ * oneshots that had already exited, and dbus/socket-activated units not yet triggered - all false
+ * "missing". severityFrom counts FAILED units, which is the honest "a unit did not come back and
+ * errored" signal; a clean-inactive on-demand unit is not a reboot failure. `activeServices` is a
+ * plain count for the plan, never a pass/fail. */
 export interface Snapshot {
-  units: string[];
   containers: string[];
+  activeServices: number;
   dockerAvailable: boolean;
   severity: number;
 }
@@ -51,16 +57,8 @@ export interface Captured extends Snapshot {
   /** /proc/sys/kernel/random/boot_id at capture ("" if unreadable) - a different one proves the reboot. */
   bootId: string;
   issuedAt: number;
-  /** Active units whose unit file is `disabled` - they will not come back; named, never enabled. */
-  disabled: string[];
   notes: ContainerNote[];
 }
-
-// Login-session units are active only while someone is logged in and would read as "missing"
-// after every reboot. ponytail: three families; widen when another transient one shows up. Not
-// agent/context.ts's NOISE_UNIT: that drops ssh/cron/networking, the very units a reboot must
-// prove came back (and operations/ importing agent/ is the circular-import bug class).
-const SESSION_UNIT = /^(user@|user-runtime-dir@|session-)/;
 
 const BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id";
 
@@ -80,21 +78,12 @@ async function snapshot(): Promise<Snapshot & { running: ContainerSummary[] }> {
   ]);
   const running = docker.containers.filter((c) => c.state === "running");
   return {
-    units: services.filter((s) => s.active === "active" && !SESSION_UNIT.test(s.unit)).map((s) => s.unit),
     containers: running.map((c) => c.name),
+    activeServices: services.filter((s) => s.active === "active").length,
     dockerAvailable: docker.available,
     severity: severityFrom({ services, containers: docker.containers, mounts }),
     running,
   };
-}
-
-/** Active units that will not start at boot. `systemctl is-enabled` answers static/indirect/
- * generated for most of a box's services, so only the `disabled` unit-file list means "has an
- * [Install] section and is off" - one call, intersected with what is active. */
-async function disabledActive(units: string[]): Promise<string[]> {
-  const out = await run("systemctl", ["list-unit-files", "--type=service", "--state=disabled", "--no-legend", "--plain"]).catch(() => "");
-  const disabled = new Set(out.split("\n").map((l) => l.trim().split(/\s+/)[0]).filter(Boolean));
-  return units.filter((u) => disabled.has(u));
 }
 
 /** The explicit `restart:` of one service in a compose file, or undefined when the key is absent
@@ -153,27 +142,25 @@ function missingFrom(before: string[], after: string[]): string[] {
   return before.filter((x) => !now.has(x));
 }
 
-/** Pure: the post-boot verdict from the pre-reboot capture and the post-boot snapshot. */
+/** Pure: the post-boot verdict from the pre-reboot capture and the post-boot snapshot. Keys on the
+ * containers (the explicit restart-policy target) and the severity number (which counts failed
+ * units); a clean-inactive on-demand unit is not a reboot failure, so it is never a "miss". */
 export function rebootOutcome(goal: string, captured: Captured, post: Snapshot): { outcome: OperationOutcome; message: string } {
-  const missingUnits = missingFrom(captured.units, post.units);
   const missingContainers = post.dockerAvailable ? missingFrom(captured.containers, post.containers) : captured.containers;
   const severity = `severity ${captured.severity}->${post.severity}`;
   const composeReminders = captured.notes
     .filter((n) => n.update && n.composeFile)
     .map((n) => `${n.name}'s restart policy was set at runtime - add \`restart: unless-stopped\` to ${n.composeFile} so compose keeps it`);
 
-  if (missingUnits.length === 0 && missingContainers.length === 0 && post.severity <= captured.severity) {
+  if (missingContainers.length === 0 && post.severity <= captured.severity) {
     const reminder = composeReminders.length ? ` ${composeReminders.join("; ")}.` : "";
     return {
       outcome: "committed",
-      message: `Rebooted - ${goal}, verified: ${captured.units.length} units and ${captured.containers.length} containers back, ${severity}.${reminder}`,
+      message: `Rebooted - ${goal}, verified: ${captured.containers.length} containers back and no failed units, ${severity}.${reminder}`,
     };
   }
 
   const missing: string[] = [];
-  for (const u of missingUnits) {
-    missing.push(captured.disabled.includes(u) ? `${u} (not enabled at boot - approve \`systemctl enable ${u}\`)` : `${u} (enabled but not active - check \`journalctl -u ${u}\`)`);
-  }
   if (!post.dockerAvailable && captured.containers.length > 0) {
     missing.push(`docker is not reachable - ${captured.containers.length} containers unverified: ${captured.containers.join(", ")}`);
   } else {
@@ -197,17 +184,15 @@ export const rebootKind: OperationKind<Params, Captured> = {
 
   async describe({ reason }) {
     const s = await snapshot();
-    const disabled = await disabledActive(s.units);
     const notes = await containerNotes(s.running);
     const changed = notes.filter((n) => n.update).map((n) => n.name);
     const warnings = [
       "every connection drops; Miro reports what came back to the first client after boot",
       changed.length ? `containers set to restart=unless-stopped first: ${changed.join(", ")}` : "",
-      disabled.length ? `active but NOT enabled - will not come back: ${disabled.join(", ")} (systemctl enable fixes that; not done here)` : "",
       s.dockerAvailable ? "" : "docker is not reachable - containers cannot be checked",
     ].filter(Boolean);
     return {
-      summary: `Reboot the server now - ${reason} (${s.units.length} units, ${s.containers.length} containers running${changed.length ? `; ${changed.length} containers get restart=unless-stopped first` : ""})`,
+      summary: `Reboot the server now - ${reason} (${s.activeServices} services, ${s.containers.length} containers running${changed.length ? `; ${changed.length} containers get restart=unless-stopped first` : ""})`,
       autoApprove: false,
       class: "lifeline",
       irreversible: true,
@@ -215,13 +200,12 @@ export const rebootKind: OperationKind<Params, Captured> = {
       network: false,
       warning: warnings.join(". "),
       details: {
-        units: s.units.length,
+        services: s.activeServices,
         containers: s.containers.length,
         policyChanges: changed,
         composeFilesToEdit: notes.filter((n) => n.update && n.composeFile).map((n) => n.composeFile),
-        notEnabled: disabled,
       },
-      expects: "after the reboot the same units and containers are running and severity is not worse - checked by Miro at its next boot, reported on the first connection",
+      expects: "after the reboot the same containers are running and no unit has failed - checked by Miro at its next boot, reported on the first connection",
       rollbackWhen: "never - a reboot cannot be undone; if the server does not actually reboot, the container restart policies are restored",
       scopeEvidence: "docker's socket for the restart-policy updates; systemd for the reboot itself",
       dryRunFidelity: "partial",
@@ -231,7 +215,7 @@ export const rebootKind: OperationKind<Params, Captured> = {
   async captureState(params) {
     // Re-gathered, not reused from describe: the owner may take minutes to approve.
     const { running, ...s } = await snapshot();
-    const captured: Captured = { ...s, bootId: readBootId(), issuedAt: Date.now(), disabled: await disabledActive(s.units), notes: await containerNotes(running) };
+    const captured: Captured = { ...s, bootId: readBootId(), issuedAt: Date.now(), notes: await containerNotes(running) };
     plans.set(params, captured);
     return captured;
   },
@@ -268,14 +252,15 @@ export const rebootKind: OperationKind<Params, Captured> = {
       await restorePolicies(captured);
       return { outcome: "rolledback", message: `Rolled back - ${reason}: the server did not reboot (Miro restarted, the box did not); container restart policies restored.` };
     }
-    // Bounded settle: blocks until systemd's startup finishes; degraded (exit 1) and the timeout
-    // both fall through to the check.
-    await run("systemctl", ["is-system-running", "--wait"], { timeoutMs: 120_000 }).catch(() => {});
+    // Bounded settle: poll until everything is back, or 2 minutes. NOT `is-system-running --wait` -
+    // reconcile runs before the socket binds, so the daemon is itself an unfinished unit systemd's
+    // startup is waiting on; --wait would deadlock against mirod's own start until the timeout. A
+    // poll of what actually matters (docker back, the containers and units that were running are
+    // again) breaks in seconds when healthy and reports precisely what is missing when not.
+    const deadline = Date.now() + 120_000;
     let post = await snapshot();
-    // dockerd reports ready before it has restarted every policy'd container - one re-look before
-    // judging. ponytail: a single 15s wait; widen if a slow box keeps reporting misses.
-    if (rebootOutcome(reason, captured, post).outcome !== "committed") {
-      await Bun.sleep(15_000);
+    while (Date.now() < deadline && rebootOutcome(reason, captured, post).outcome !== "committed") {
+      await Bun.sleep(5_000);
       post = await snapshot();
     }
     return rebootOutcome(reason, captured, post);
