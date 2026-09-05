@@ -14,6 +14,7 @@ import type { OperationToolContext } from "../operations/engine";
 import { getByKey, buildSummary } from "../memory/store";
 import { getExtension } from "../extensions/store";
 import { PROVIDER_CATALOG, resolveApiKey, runTurn } from "./model-utils";
+import { createTurnGuard, limitsFor, modelTier } from "./turn-guard";
 
 // Re-exported so no existing import site (apps/mirod/src/index.ts, agent/worker.ts) needs to
 // change - see model-utils.ts's own comment for why these moved out of this file.
@@ -170,12 +171,20 @@ export function createMiroAgent(
   ];
   const learnedStyle = operationCtx ? (getByKey(operationCtx.db, "preference", "reply_style")?.value ?? null) : null;
   const memorySummary = operationCtx ? buildSummary(operationCtx.db) : "";
+  // The loop's own stop hooks (agent/turn-guard.ts), sized by the model's tier: thrash blocking,
+  // the done-without-commit gate, and the undo-then-retry ledger the engine consults. The ledger
+  // rides on the operation context so extension operations and the learning agent's operations
+  // (same context, same task) count toward the same turn.
+  const guard = createTurnGuard(limitsFor(modelTier(model)));
+  if (operationCtx) operationCtx.retries = guard.retries;
   agent = new Agent({
     // Heterogeneous per-tool parameter schemas can't unify into one array type without erasure -
     // this is how agent-core's own AgentState.tools is typed.
     initialState: { systemPrompt: [systemPrompt(personality, learnedStyle, memorySummary, contextBlock)], model, tools: tools as AgentTool<any>[] },
     streamFn: (m, context, options) => streamSimple(m, context, reasoning ? { ...options, reasoning } : options),
     getApiKey: (m) => models.getApiKey(m),
+    beforeToolCall: guard.beforeToolCall,
   });
+  guard.attach(agent);
   return agent;
 }

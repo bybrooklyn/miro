@@ -59,6 +59,10 @@ function generateCredential(kind: "password" | "token"): string {
   return Array.from(bytes, (b) => alphabet[b % alphabet.length]).join("");
 }
 
+/** What an autonomous session (a repair, with nobody on the other end) answers every question
+ * with. The model is told to decide or stop; it is never a value to store anywhere. */
+export const NO_USER_ANSWER = "[no user available - decide yourself or stop]";
+
 export function buildInteractionTools(ctx: InteractionContext) {
   return [
     {
@@ -89,11 +93,13 @@ export function buildInteractionTools(ctx: InteractionContext) {
           if (q.secretRef) {
             ctx.send({ type: "secret_prompt", id, prompt: q.question });
             const value = (await ctx.waitForAnswer(id)).trim();
-            if (value) {
+            // Never store the no-user marker as a credential: found live on the dev VM, where an
+            // autonomous repair had stored it as an app's API key (PLAN.md §5.20).
+            if (value && value !== NO_USER_ANSWER) {
               ctx.setSecret(q.secretRef, value);
               answers[q.key] = `[stored as ${q.secretRef}]`;
             } else {
-              answers[q.key] = "[no value given]";
+              answers[q.key] = value === NO_USER_ANSWER ? value : "[no value given]";
             }
             continue;
           }

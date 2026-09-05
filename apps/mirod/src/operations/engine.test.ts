@@ -4,6 +4,7 @@ import type { ServerEvent } from "@miro/protocol";
 import { runOperation, reconcileOperations, type OperationKind, type OperationToolContext, type ReflectionTrigger } from "./engine";
 import { createOperation, setCapturedAndApplying, setPlan, getOperation, ensureOperationsTable } from "./store";
 import { ensureMemoryTable, listAll } from "../memory/store";
+import { createRetryLedger } from "./retry-ledger";
 
 function freshDb(): Database {
   const db = new Database(":memory:");
@@ -59,6 +60,36 @@ function fakeKind(behavior: { autoApprove?: boolean; verifyResult?: boolean; app
     },
   };
 }
+
+// Undo-then-retry (PLAN.md §5.15 A): the engine restores s_pre on failure; the ledger refuses the
+// SAME plan again this turn before it is even described, and a different plan runs.
+test("runOperation: an identical plan that already rolled back this turn is refused before it is planned; a different one runs", async () => {
+  const db = freshDb();
+  const { ctx } = fakeCtx(db);
+  ctx.retries = createRetryLedger(3);
+  const kind = fakeKind({ verifyResult: false });
+  expect((await runOperation(ctx, kind, "do", { x: 1 })).outcome).toBe("rolledback");
+  const callsAfterFirst = kind.calls.length;
+  const again = await runOperation(ctx, kind, "do", { x: 1 });
+  expect(again.outcome).toBe("rolledback");
+  expect(again.message).toMatch(/exact plan already failed this turn/);
+  expect(kind.calls.length).toBe(callsAfterFirst); // not described, not captured, not applied
+  expect((db.query("SELECT COUNT(*) AS n FROM operations").get() as { n: number }).n).toBe(1); // no row for a refusal
+  await runOperation(ctx, kind, "do", { x: 2 });
+  expect(kind.calls.length).toBeGreaterThan(callsAfterFirst);
+});
+
+test("runOperation: a user cancellation is not a failed plan - the same plan may be asked again", async () => {
+  const db = freshDb();
+  const ledger = createRetryLedger(3);
+  const cancelled = fakeCtx(db, "cancel");
+  cancelled.ctx.retries = ledger;
+  const kind = fakeKind({ autoApprove: false });
+  expect((await runOperation(cancelled.ctx, kind, "do", { x: 1 })).message).toBe("Cancelled - nothing was changed.");
+  const approved = fakeCtx(db, "approve");
+  approved.ctx.retries = ledger;
+  expect((await runOperation(approved.ctx, kind, "do", { x: 1 })).outcome).toBe("committed");
+});
 
 test("runOperation: destructive/lifeline/irreversible plans never auto-approve, whatever the kind says", async () => {
   for (const plan of [{ class: "destructive" as const }, { class: "lifeline" as const }, { irreversible: true }]) {

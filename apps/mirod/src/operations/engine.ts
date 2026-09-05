@@ -4,6 +4,7 @@ import * as store from "./store";
 import * as memory from "../memory/store";
 import type { CommandClass } from "./classify";
 import { computeSeverity as computeSeverityLive } from "./severity";
+import type { RetryLedger } from "./retry-ledger";
 
 export interface OperationPlan {
   summary: string;
@@ -94,6 +95,10 @@ export interface OperationToolContext {
   /** Optional: triggers a budgeted LLM reflection pass (plan §36-37). Fire-and-forget - never
    * awaited by the caller, never blocks the user-facing operation_result. */
   reflect?: (trigger: ReflectionTrigger) => void;
+  /** The agent's undo-then-retry ledger (operations/retry-ledger.ts, reset per turn by
+   * agent/turn-guard.ts): a plan that already rolled back this turn is refused before anything is
+   * planned, and past the cap every plan is, with the trajectory to report. */
+  retries?: RetryLedger;
 }
 
 export async function runOperation<P, S>(
@@ -103,6 +108,10 @@ export async function runOperation<P, S>(
   params: P,
 ): Promise<{ outcome: OperationOutcome; message: string }> {
   const { db, send, waitForAnswer, reflect } = ctx;
+  // Undo-then-retry (PLAN.md §5.15 A): an identical plan that already rolled back this turn, or
+  // any plan past the turn's failure cap, is refused here - nothing planned, asked, or recorded.
+  const refusal = ctx.retries?.check(kind.kind, params);
+  if (refusal) return { outcome: "rolledback", message: refusal };
   const id = crypto.randomUUID();
   store.createOperation(db, id, kind.kind, goal, JSON.stringify(params));
 
@@ -112,6 +121,7 @@ export async function runOperation<P, S>(
   function onTerminal(outcome: "committed" | "rolledback", message: string) {
     memory.recordIncident(db, { kind: kind.kind, goal, phase: outcome, error: outcome === "rolledback" ? message : null });
     if (outcome === "rolledback") {
+      ctx.retries?.record(kind.kind, params, message);
       const repeatFailureCount = store.countByKindAndPhase(db, kind.kind, "rolledback");
       if (repeatFailureCount >= REPEAT_FAILURE_THRESHOLD) {
         reflect?.({ kind: kind.kind, goal, outcome, message, repeatFailureCount });

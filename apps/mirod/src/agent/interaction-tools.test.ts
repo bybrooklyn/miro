@@ -40,6 +40,19 @@ test("ask_user batches questions, returns answers by key, and stores secrets by 
   expect(free.options).toEqual([]); // free text
 });
 
+test("ask_user never stores the no-user marker or an empty answer as a credential", async () => {
+  const { NO_USER_ANSWER } = await import("./interaction-tools");
+  const h = harness((_id, events) => ((events[events.length - 1] as { prompt: string }).prompt.includes("key") ? NO_USER_ANSWER : ""));
+  const r = await h.tool("ask_user").execute("1", {
+    questions: [
+      { key: "k", question: "Paste the API key", secretRef: "extension.gotify.api_key" },
+      { key: "p", question: "Paste the password", secretRef: "extension.gotify.password" },
+    ],
+  });
+  expect(h.secrets).toEqual({});
+  expect(r.details).toEqual({ answers: { k: NO_USER_ANSWER, p: "[no value given]" } });
+});
+
 test("credential_create stores a strong value by reference, shows it to the user once, never returns it to the model", async () => {
   const h = harness({});
   const r = await h.tool("credential_create").execute("1", { ref: "extension.jellyfin.admin_password", purpose: "Jellyfin admin password" });

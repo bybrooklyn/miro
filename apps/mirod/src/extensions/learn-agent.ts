@@ -14,7 +14,7 @@ import { AGENT_TOOLS } from "../agent/tools";
 // when tried, but that's fragile luck, not a real fix - this is the correct, leaf-module import.
 import { limitTurns, runTurn } from "../agent/model-utils";
 import { buildReadTools } from "../agent/read-tools";
-import { buildInteractionTools } from "../agent/interaction-tools";
+import { buildInteractionTools, NO_USER_ANSWER } from "../agent/interaction-tools";
 import { buildOperationTools } from "../agent/operation-tools";
 import type { OperationToolContext } from "../operations/engine";
 import { remember } from "../memory/store";
@@ -222,7 +222,10 @@ function buildSecretStoreTool(app: string, setSecret: (ref: string, value: strin
       // (found live, run #10). Strip any leading extension.<app>. and sanitise to a bare name.
       const name = args.name.replace(/^extension\.[^.]+\./, "").replace(/[^A-Za-z0-9_]/g, "_");
       const ref = `extension.${app}.${name}`;
-      setSecret(ref, args.value);
+      const value = args.value.trim();
+      // The no-user marker is an answer, never a credential (found stored as one, live - PLAN.md §5.20).
+      if (!value || value === NO_USER_ANSWER) return textResult({ saved: false, reason: "that is not a credential value - nothing stored" });
+      setSecret(ref, value);
       return textResult({ saved: true, ref });
     },
   };
@@ -418,7 +421,7 @@ export async function spawnLearningAgent(o: LearnAgentOptions): Promise<LearnAge
       send: o.send,
       // No user on the other end (autonomous repair): every question resolves to a marker the
       // prompt tells the agent to treat as "decide yourself or stop".
-      waitForAnswer: o.waitForAnswer ?? (async () => "[no user available - decide yourself or stop]"),
+      waitForAnswer: o.waitForAnswer ?? (async () => NO_USER_ANSWER),
       setSecret: o.setSecret,
     }).filter((t) => t.name === "ask_user" || t.name === "credential_create"),
     ...(o.operationCtx ? buildOperationTools(o.operationCtx) : []),
