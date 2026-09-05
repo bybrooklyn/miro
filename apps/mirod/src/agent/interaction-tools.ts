@@ -5,6 +5,7 @@ import { openSync, readSync, closeSync, existsSync } from "node:fs";
 import { containerLogs } from "../inventory/containers";
 import { serviceLogs } from "../inventory/systemd";
 import { isSensitivePath, redactSecretsInText } from "../operations/classify";
+import { notify as busNotify, testAndConfigure } from "../notifications";
 
 // The two tools that make the outcome loop conversational without ending the turn (PLAN.md
 // §5.4 A): ask_user for the intent Miro genuinely cannot infer, and system_plan for the one
@@ -44,6 +45,20 @@ const systemPlanParams = Type.Object({
   steps: Type.Array(Type.String(), { description: "Ordered steps you will take." }),
   verification: Type.Array(Type.String(), { description: "How you will prove the whole system works - architecture checks, not 'the container started'." }),
   notes: Type.Optional(Type.Array(Type.String(), { description: "Irreversible parts, credentials you will create, tradeoffs the user should know." })),
+});
+
+const notifyParams = Type.Object({
+  tier: Type.Enum(["routine", "worth_knowing", "needs_attention"], {
+    description: "needs_attention reaches the owner's phone (a push) AND the TUI - use it for anything you judge worth interrupting them for. worth_knowing shows in the TUI (now, or on their next connect) but does not push. routine is logged only. Most of what you do should be invisible; do not narrate routine work as notifications.",
+  }),
+  title: Type.String({ description: "One line, the headline the owner sees first." }),
+  body: Type.Optional(Type.String({ description: "Optional detail below the title." })),
+});
+
+const notifyConfigureParams = Type.Object({
+  channel: Type.Enum(["ntfy", "gotify"], { description: "Which push service to set up." }),
+  url: Type.String({ description: "Base URL of the service, e.g. http://127.0.0.1:8090 (ntfy) or the Gotify server URL." }),
+  topic: Type.Optional(Type.String({ description: "ntfy only: the topic the owner subscribes to (their address on the server)." })),
 });
 
 const credentialCreateParams = Type.Object({
@@ -160,6 +175,28 @@ export function buildInteractionTools(ctx: InteractionContext) {
           return textResult({ saved: true, ref: params.ref, source, line: i + 1, matched: redactSecretsInText(lines[i]!.slice(0, 200)), note: "the newest matching line was taken" });
         }
         return textResult({ saved: false, reason: `no line in ${source} matched the pattern (${lines.length} lines read)` });
+      },
+    },
+    {
+      name: "notify",
+      label: "Notify the owner",
+      description:
+        "Surface something to the owner proactively, outside a reply they are reading. Choose the tier by how much it warrants their attention: needs_attention pushes to their phone, worth_knowing shows in the TUI, routine is logged. This is how you reach them when they are away or not watching - a job you finished, something you noticed, a problem you handled or could not. You decide what is worth it; keep the routine invisible.",
+      parameters: notifyParams,
+      execute: async (_id: string, params: Static<typeof notifyParams>) => {
+        busNotify({ tier: params.tier, title: params.title, body: params.body ?? "", source: "agent", at: Date.now() });
+        return textResult({ notified: true, tier: params.tier, reachedPhone: params.tier === "needs_attention" });
+      },
+    },
+    {
+      name: "notify_configure",
+      label: "Set up notifications",
+      description:
+        "Connect a push channel so your needs_attention notifications reach the owner's phone. For ntfy, give the server url and a topic. For Gotify, FIRST call ask_user with secretRef 'notify.gotify.token' to get the owner's Gotify app token (it never reaches you), then call this with the server url. This sends one test notification and only saves the channel if it is accepted.",
+      parameters: notifyConfigureParams,
+      execute: async (_id: string, params: Static<typeof notifyConfigureParams>) => {
+        const result = await testAndConfigure(params.channel, { url: params.url, topic: params.topic });
+        return textResult(result.ok ? { configured: true, channel: params.channel } : { configured: false, reason: result.reason });
       },
     },
     {

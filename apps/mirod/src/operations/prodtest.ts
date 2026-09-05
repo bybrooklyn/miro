@@ -1,6 +1,8 @@
 import type { Database } from "bun:sqlite";
 import * as store from "./store";
 import * as memory from "../memory/store";
+import { isLifelinePath, LIFELINE_UNITS } from "./classify";
+import { notify } from "../notifications";
 import type { OperationKind } from "./engine";
 
 // Prodtest per repair (PLAN.md §5.15 A, after Google's Prodtest: a test paired with an idempotent
@@ -52,7 +54,33 @@ export async function reverifyCommitted(db: Database, kinds: Record<string, Oper
       .catch(() => false);
     if (ok) continue;
     report.drifted.push({ id: op.id, kind: op.kind, goal: op.goal });
-    memory.recordIncident(db, { kind: op.kind, goal: op.goal, phase: "drift", error: `no longer verifies (committed ${new Date(op.updatedAt).toISOString().slice(0, 10)})` });
+    const incident = memory.recordIncident(db, { kind: op.kind, goal: op.goal, phase: "drift", error: `no longer verifies (committed ${new Date(op.updatedAt).toISOString().slice(0, 10)})` });
+    // Notify only on the FIRST sighting of a given drift (occurrenceCount === 1); a recurring drift
+    // reinforces the incident silently, so the phone is not buzzed every 24h sweep. Drift on a
+    // lifeline target (SSH/firewall/network/Miro) needs attention; other drift is worth knowing.
+    if (incident.occurrenceCount === 1) {
+      notify({
+        tier: driftTouchesLifeline(op.kind, op.params) ? "needs_attention" : "worth_knowing",
+        title: `Drift: "${op.goal}" no longer holds`,
+        body: "Something Miro set up has been undone or has decayed. It is not re-applied on its own.",
+        source: "drift",
+        at: Date.now(),
+      });
+    }
   }
   return report;
+}
+
+/** Whether a drifted operation touched a lifeline target - the SSH/firewall/network/Miro surfaces
+ * whose decay the owner must hear about at once. Derived from the op's own params, the same fields
+ * the systemd and file kinds carry. */
+function driftTouchesLifeline(kind: string, paramsJson: string): boolean {
+  try {
+    const p = JSON.parse(paramsJson) as { unit?: string; path?: string };
+    if (typeof p.unit === "string" && LIFELINE_UNITS.test(p.unit)) return true;
+    if (typeof p.path === "string" && isLifelinePath(p.path)) return true;
+  } catch {
+    // unreadable params - treat as ordinary drift, the same conservative default reverify uses
+  }
+  return false;
 }

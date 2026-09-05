@@ -4,6 +4,7 @@ import * as store from "./store";
 import * as memory from "../memory/store";
 import { isBlockDevicePath, type CommandClass } from "./classify";
 import { computeSeverity as computeSeverityLive } from "./severity";
+import { notify } from "../notifications";
 import type { RetryLedger } from "./retry-ledger";
 
 export interface OperationPlan {
@@ -138,6 +139,12 @@ export async function runOperation<P, S>(
   // fires when a repeat-failure pattern justifies the cost (plan §36's Reflexion grounding).
   function onTerminal(outcome: "committed" | "rolledback", message: string) {
     memory.recordIncident(db, { kind: kind.kind, goal, phase: outcome, error: outcome === "rolledback" ? message : null });
+    // A rollback of an operation that would have auto-approved is one no human was watching - it
+    // ran unattended and failed, so the owner should hear about it (a confirmed operation's cancel
+    // was already on their screen). notify() no-ops when the bus is unconfigured (every engine test).
+    if (outcome === "rolledback" && effectiveAutoApprove(plan)) {
+      notify({ tier: "needs_attention", title: `Auto-rolled back: ${goal}`, body: message, source: "operation", at: Date.now() });
+    }
     if (outcome === "rolledback") {
       ctx.retries?.record(kind.kind, params, message);
       const repeatFailureCount = store.countByKindAndPhase(db, kind.kind, "rolledback");

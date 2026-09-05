@@ -11,6 +11,7 @@ import { listSecretRefs } from "../secrets";
 import type { ExtensionManifest } from "../extensions/manifest";
 import { query as queryMemory } from "../memory/store";
 import { capabilityContextLines, capabilityStatus } from "../capabilities";
+import { notificationChannelLines } from "../notifications";
 
 // Self-assembling context (PLAN.md §5.9 client decisions: "assembled block + on-demand tool").
 // The agent is handed a map of itself every turn - what is on this server right now, which
@@ -120,6 +121,10 @@ export function buildContextBlock(db: Database, snapshot: ServerSnapshot): strin
   // whether web_search has a keyed or self-hosted source behind it or only the public pool.
   const providers = capabilityContextLines();
   if (providers.length > 0) parts.push(`Research providers (web_search / web_fetch route through these, best first):\n- ${providers.join("\n- ")}`);
+  // Whether a needs_attention notification will actually reach a phone right now (PLAN.md §5.31),
+  // so the agent knows before it relies on one, and can offer to set a channel up if none is configured.
+  const channels = notificationChannelLines();
+  if (channels.length > 0) parts.push(channels.join("\n"));
   parts.push(REFUSALS);
   return parts.join("\n\n");
 }

@@ -37,6 +37,7 @@ import { maybeTriggerRepair, reprobeExtensions, type RepairTrigger } from "./ext
 import { requiresArguments } from "./extensions/validate";
 import { createCodexAuth, importCodexCredentialFromCli, loginCodex } from "./agent/codex-auth";
 import { run } from "./inventory/exec";
+import { configureNotifications, notify, replayUndelivered } from "./notifications";
 
 const OPERATION_KINDS = allOperationKinds((ref) => secretStore.getSecret(db, ref), (ref, value) => secretStore.setSecret(db, ref, value));
 
@@ -89,6 +90,29 @@ function setSetting(key: string, value: string) {
     [key, value],
   );
 }
+
+// Every connected client's event sink. The notification bus broadcasts to all of them, so a
+// background signal (a repair that gave up, drift) reaches whoever is watching. A connection MUST
+// deregister on teardown (disconnect()), or a dead sink lingers and broadcast writes to a closed
+// socket. Declared before the boot sequence so the reboot verdict at reconcile time can notify().
+const connections = new Set<(event: ServerEvent) => void>();
+
+function broadcast(event: ServerEvent): number {
+  let reached = 0;
+  for (const send of connections) {
+    try {
+      send(event);
+      reached++;
+    } catch {
+      // A socket that closed between here and its own teardown; the delete still happens there.
+    }
+  }
+  return reached;
+}
+
+// Configured before reconcileOperations below: a reboot's post-boot verdict is emitted there, with
+// no client yet connected, so notify() must already be live to persist it for replay + phone it.
+configureNotifications({ db, getSetting, setSetting, getSecret: (ref) => secretStore.getSecret(db, ref), broadcast });
 
 function personality(): "casual" | "professional" {
   const stored = getSetting("personality");
@@ -153,10 +177,11 @@ const hostMgr = createExtensionHostManager();
 setInterval(() => hostMgr.reapIdle(), 60_000);
 
 // Resume any operation interrupted by a crash/power loss before accepting connections (plan §47).
-// A reboot's post-boot verdict (the kind's reconcile hook, PLAN.md §5.30) goes to the first client
-// after boot. ponytail: last report wins - only one daemon-ending operation can be in flight.
+// A reboot's post-boot verdict (the kind's reconcile hook, PLAN.md §5.30) becomes a notification:
+// persisted now with no client connected, phoned if it needs attention, and replayed to the first
+// TUI to connect. A clean reboot is worth_knowing (TUI only); a bad one needs attention (phones).
 for (const report of await reconcileOperations(db, OPERATION_KINDS)) {
-  setSetting("boot_report", JSON.stringify({ level: report.outcome === "committed" ? "info" : "warn", text: report.message }));
+  notify({ tier: report.outcome === "committed" ? "worth_knowing" : "needs_attention", title: report.message, body: "", source: "reboot", at: Date.now() });
 }
 
 // Budgeted Dreaming reflection pass (plan §36-37) - fire-and-forget, never spends the user's
@@ -179,6 +204,9 @@ function extensionVersionHash(): string {
 
 interface ConnState {
   feed: (chunk: Buffer) => void;
+  /** This connection's own event sink - held so teardown can deregister it from the broadcast set
+   * by identity (the notification bus reaches every connected client through `connections`). */
+  send: (event: ServerEvent) => void;
   agent?: Agent;
   pendingProvider?: string;
   // Lets an operation tool's execute() genuinely block on a human answer (e.g. approve/cancel a
@@ -207,6 +235,13 @@ const CONNECTION_CLOSED = "\u0000connection-closed"; // leading NUL: no typed an
 function cancelPending(state: ConnState): void {
   for (const resolve of state.pendingAnswers.values()) resolve(CONNECTION_CLOSED);
   state.pendingAnswers.clear();
+}
+
+/** The single teardown path for every transport: settle outstanding questions AND deregister the
+ * connection's sink from the broadcast set. One helper so a new transport cannot forget half of it. */
+function disconnect(state: ConnState): void {
+  cancelPending(state);
+  connections.delete(state.send);
 }
 
 /** Confirmed preference: whenever an OpenAI Codex login is connected, codegen ALWAYS uses it -
@@ -455,7 +490,8 @@ function startProviderSetup(send: (event: ServerEvent) => void): void {
 /** Shared by both the local unix-socket transport and the remote Iroh transport (plan §54 Stage A) -
  * whichever transport a connection arrives on, it gets the exact same personality/provider/chat routing. */
 function createConnectionState(send: (event: ServerEvent) => void): ConnState {
-  const state: ConnState = { feed: () => {}, pendingAnswers: new Map() };
+  const state: ConnState = { feed: () => {}, send, pendingAnswers: new Map() };
+  connections.add(send);
   state.feed = createLineBuffer((line) => {
     // One malformed line is dropped with a warning, never thrown: a throw out of the unix socket's
     // data handler reached the error callback, which cancels every pending confirmation on the
@@ -590,13 +626,10 @@ function createConnectionState(send: (event: ServerEvent) => void): ConnState {
   } else {
     send(statusEvent(state));
   }
-  // One-shot boot report (a reboot's post-boot verdict): this connection is the reachability
-  // proof a reboot has no timed handshake for, so it is cleared on delivery.
-  const bootReport = getSetting("boot_report");
-  if (bootReport) {
-    send({ type: "notice", ...(JSON.parse(bootReport) as { level: "info" | "warn"; text: string }) });
-    setSetting("boot_report", "");
-  }
+  // Replay every worth_knowing+ notification the owner has not yet seen (a reboot verdict from a
+  // boot with no client, a background repair/drift that fired while they were away), then mark them
+  // delivered. This generalizes the old one-shot boot_report into the durable notification queue.
+  replayUndelivered(send);
 
   return state;
 }
@@ -612,11 +645,11 @@ Bun.listen<ConnState>({
       socket.data.feed(chunk);
     },
     close(socket) {
-      if (socket.data) cancelPending(socket.data);
+      if (socket.data) disconnect(socket.data);
     },
     error(socket, err) {
       console.error("[mirod] socket error", err);
-      if (socket.data) cancelPending(socket.data);
+      if (socket.data) disconnect(socket.data);
     },
   },
 });
@@ -690,7 +723,7 @@ acceptLoop(irohEndpoint, (conn) => {
         state.feed(Buffer.from(chunk));
       }
     } finally {
-      cancelPending(state); // same leak fix as the unix socket close (audit D2)
+      disconnect(state); // settle questions + deregister from broadcast (audit D2)
     }
   })().catch((err) => console.error("[mirod] iroh session error", err));
 }).catch((err) => console.error("[mirod] iroh accept loop stopped", err));

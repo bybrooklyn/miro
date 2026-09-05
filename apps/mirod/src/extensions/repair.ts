@@ -9,6 +9,7 @@ import type { ExtensionManifest } from "./manifest";
 import { spawnLearningAgent } from "./learn-agent";
 import { extensionDir } from "./paths";
 import { assertPinned, PinMismatchError } from "./pin";
+import { notify } from "../notifications";
 import * as store from "./store";
 
 // Dreaming's repair half (plan §36, §8 of PLAN.md's self-extension design) - the OTHER real event
@@ -61,6 +62,7 @@ export async function maybeTriggerRepair(
   if (ext.repairAttempts >= MAX_REPAIR_ATTEMPTS) {
     store.disable(db, trigger.app, `Exceeded max repair attempts (${MAX_REPAIR_ATTEMPTS}): ${trigger.error}`);
     send({ type: "notice", level: "warn", text: `Gave up repairing ${trigger.app} after ${MAX_REPAIR_ATTEMPTS} attempts - disabled.` });
+    notify({ tier: "needs_attention", title: `Gave up repairing ${trigger.app} - disabled`, body: `After ${MAX_REPAIR_ATTEMPTS} attempts. Last error: ${trigger.error}`, source: "repair", at: Date.now() });
     return false;
   }
 
@@ -108,6 +110,7 @@ same wherever the app still supports them.`;
   if (!result.promoted && attempts >= MAX_REPAIR_ATTEMPTS) {
     store.disable(db, trigger.app, `Repair failed after ${MAX_REPAIR_ATTEMPTS} attempts: ${trigger.error}`);
     send({ type: "notice", level: "warn", text: `Gave up repairing ${trigger.app} after ${MAX_REPAIR_ATTEMPTS} attempts - disabled.` });
+    notify({ tier: "needs_attention", title: `Gave up repairing ${trigger.app} - disabled`, body: `Repair failed after ${MAX_REPAIR_ATTEMPTS} attempts. Last error: ${trigger.error}`, source: "repair", at: Date.now() });
   }
   return result.promoted;
 }
