@@ -178,6 +178,16 @@ Gotchas worth knowing before you try:
   clean `poweroff`, `up.sh` cold-boots and the enabled unit brings mirod back on its own; the media
   containers now carry `restart=unless-stopped` (the `system_reboot` operation set it, §5.30), so
   the old "restart mirod, then `docker start jellyfin`" chore is gone.
+- Self-update layout on the VM (§5.32): mirod runs from `/opt/miro/current` (a symlink; the wrapper
+  exports `MIRO_VERSION` = its target's basename, surfaced in `StatusEvent.version`). Version 0.0.1
+  is a symlink to the live dev tree `/home/miro/miro`, so sync-and-restart still works AS LONG AS
+  `current -> versions/0.0.1`. A self-update test repoints `current` to a copied version; if the dev
+  loop stops reflecting your syncs, check `readlink /opt/miro/current` and repoint it to `0.0.1`
+  (`sudo ln -sfn /opt/miro/versions/0.0.1 /opt/miro/current.tmp && sudo mv -T ...`), then restart.
+  `ExecStartPre=/usr/local/bin/mirod-preflight` runs `apps/mirod/preflight.mjs` (a FIXED copy at
+  `/opt/miro/preflight.mjs`, re-copied by `install-mirod.sh`). To test an update: `sudo cp -a
+  /home/miro/miro /opt/miro/versions/<v>`, mutate the copy, drive `install_update`. The daemon
+  restarts into the swap; the bless/revert verdict is a notification on reconnect.
 - Notification bus channels on the VM (§5.31): a Gotify server runs as `gotify.service` on 8080
   (admin/admin default, no cloud-init override) - mint an app token with `curl -u admin:admin -X
   POST http://127.0.0.1:8080/application` and store it as the secret `notify.gotify.token` (settings

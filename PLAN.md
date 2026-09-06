@@ -71,7 +71,7 @@ the original plan called Stage 4 (Jellyfin) with the media slice of the original
 | **B. Safe action** | Operation engine w/ visible plan-diffs, recovery points, rollback, lifelines, reboot recovery, SecretRef secrets | **Slice 1 shipped** (operation engine core, live-verified); lifelines shipped (§5.7 F3); **reboot recovery shipped** (§5.30: the hardened systemd unit + the `system_reboot` operation with post-boot pending-bless, live-verified through two real guest reboots) |
 | **C. Memory & Learning** | §37 Memory, communication-style personality adaptation, personalized quiet-competence thresholds - unified with self-extension/Dreaming foundations | **Slice 1 shipped** (Memory + Reflexion-shaped Dreaming reflection, live-verified). **Slice 2 shipped, both phases** (self-extension: learn→generate→validate→promote, AND Dreaming's repair loop - a real induced failure was detected, self-repaired, and re-verified working, all live on the VM - see Part 4). Personalized quiet-competence thresholds not started. |
 | **D. Media flagship** | Full acquisition+playback stack set up end-to-end (Sonarr/Radarr/Prowlarr/qBittorrent/Jellyfin/Portainer) | **Slice 1 in progress** (Jellyfin, adopt-existing, live discovery - see Part 5 / §5.13) |
-| **E. Capstone** | Immich, remaining self-hoster stack, notification bus (ntfy-first), GitHub config backup, power/UPS | **Started** - notification bus shipped (§5.31: the notify() bus + connection registry, ntfy and Gotify sinks, live-verified to both channels and the TUI). Immich, remaining stack, GitHub backup, power/UPS not started |
+| **E. Capstone** | Immich, remaining self-hoster stack, notification bus (ntfy-first), GitHub config backup, power/UPS | **Started** - notification bus shipped (§5.31), self-update+auto-heal core shipped (§5.32: stage/swap/bless/revert live-verified across healthy/unhealthy/crash-on-boot). Immich, remaining stack, GitHub backup, power/UPS, and self-update's GitHub-fetch+signing not started |
 
 Why this order, confirmed explicitly: remote reachability matters enough to front-load ahead of
 safety fundamentals, because day-to-day usefulness - and thus how often the learning flywheel turns
@@ -2805,3 +2805,71 @@ GitHub backup, power/UPS) is unstarted.
 
 **State:** 408 pass / 0 fail / 14 skip; every package typechecks (`just check`, 13/13). PRs #3 → …
 → #10 stacked.
+
+### 5.32 Self-update & auto-heal - the core mechanism (2026-09-05)
+
+Branch `self-update` (stacked on `notify-bus`, PR #11 on #10). §5.16 grilled self-update at length
+but nothing was built, and the daemon was unversioned (every package.json 0.0.0, no tags, no version
+in StatusEvent). This slice builds the dangerous heart - stage a new version, swap it in, prove
+health, AUTO-REVERT if worse, with zero human involvement and safe against the daemon bricking
+itself - reusing the reboot slice's severity oracle and the notification bus this session built.
+The GitHub fetch, Sigstore signing, channels, the migration counter, the diagnostic buffer, and the
+update UI are later slices; slice 1 updates between two local versions to prove the loop.
+
+**Decisions.** Source-tree versioning (the daemon runs from source; `bun build --compile` is
+scaffolded but unrun and depends on the unbuilt `@miro/native` - the compiled binary is §5.16's
+eventual form). A "version" is a directory under `/opt/miro/versions/<v>/`; `/opt/miro/current` is
+the symlink the wrapper follows, swapped atomically. State (`/var/lib/miro`) is shared across
+versions - what makes a revert "old code against current data" free. Auto-heal is autonomous
+(the mechanical "did it come back healthy" bless/revert); the owner-facing install is a confirmed
+action.
+
+**The one divergence from the reboot slice, and why.** Reboot's marker is the DB `applying` row,
+judged by `reconcileOperations`. That recovers "boots but unhealthy" but NOT "crashes on boot" - a
+daemon that throws at startup never reaches its own reconcile. Auto-heal must recover a daemon that
+bricks itself, so the swap decision and a crash-loop counter live in a FILE marker
+(`/opt/miro/update.json`) a standalone `ExecStartPre` preflight (`apps/mirod/preflight.mjs`, a fixed
+copy that imports nothing from the versioned tree and swallows every error to exit 0) reads and
+mutates BEFORE mirod runs. Self-update is a dedicated module (`apps/mirod/src/self-update/`), not an
+OperationKind (the engine's verify/rollback assume a live daemon; here the boot-time bless is the
+verify and the preflight is the crash recovery). The marker phase machine
+(pending → swapped → revert_requested → reverting) deletes the file at every terminal, so an infinite
+loop is impossible. The pure core (`marker.ts`: `blessDecision`, `crashLoopNext`, `versionsToGC`
+keep-3-protecting-current+prev) is unit-tested; the preflight duplicates ~30 lines on purpose.
+
+**The daemon side.** `blessOrRevertUpdate(deps)` runs at the reconcile slot at boot (before the
+socket binds, `notify()` already live): a `swapped` marker → a bounded severity settle (<= 45s,
+under WatchdogSec=60, `WATCHDOG=1` each iteration) → `blessDecision(running, muPre, muPost)` →
+bless (GC, `worth_knowing` notice, clear) / revert (write `revert_requested`, restart - the preflight
+swaps back next boot) / swap_failed (`needs_attention`, clear); a `reverting` marker → the old
+version is back, `needs_attention` notice, clear. `stageUpdate()` captures μ_pre, writes a `pending`
+marker, restarts. The owner tool `install_update` (in the mutating set, kept from read-only
+subagents) confirms then stages. The daemon knows its version via the wrapper's `MIRO_VERSION`
+(the current dir's name), surfaced in a new `StatusEvent.version`; `apps/mirod/package.json` is an
+honest 0.0.1. `mirod.service` gains `ExecStartPre=/usr/local/bin/mirod-preflight` and StartLimit
+headroom so the crash-loop revert fires before systemd's limiter.
+
+**Live-verified on the VM - all three recovery cases, each checked independently** (running version
+via `MIRO_VERSION` in `/proc/<pid>/environ`, `readlink /opt/miro/current`, the journal, the marker,
+the Gotify push).
+1. **Healthy** (0.0.2 = a copy): swapped and blessed, `current`/version → 0.0.2, marker cleared, a
+   `worth_knowing` "Updated to 0.0.2" notice persisted for TUI replay (correctly not phoned).
+2. **Boots but unhealthy** (0.0.3 = a copy whose `computeSeverity` returns base+5): booted, settled
+   unhealthy for ~45s, wrote `revert_requested`, restarted; the preflight swapped back to 0.0.2; the
+   old version reported it - `needs_attention` "Update to 0.0.3 was rolled back" landed in Gotify at
+   priority 8.
+3. **Crashes on boot** (0.0.4 = a copy with `throw` at the top of index.ts): the preflight swapped it
+   in; it threw twice (journal shows the uncaught exceptions); on the 3rd un-blessed boot
+   (attempts>MAX) the preflight reverted to 0.0.2 in ~10s total; `needs_attention` push delivered;
+   `NRestarts=2`, `Result=success` - the crash-loop revert fired BEFORE systemd's start limiter.
+The design worked first try - no live-found bugs this slice (the preflight phase machine was proven
+locally through a full crash-loop revert before it reached the VM).
+
+**Not done, by scope.** The transport (GitHub Releases fetch, stable/beta channels) and Sigstore
+signature verification (slice 2); the migration counter (exempt until 0.0.1 ships); the rolling
+diagnostic buffer, the update-notification UI, the automatic quiescence-gated auto-install; a
+compiled single-file binary (pending the `@miro/native` story). node_modules is a per-version copy
+(`ponytail:` shared root if disk/copy-time matters).
+
+**State:** 417 pass / 0 fail / 14 skip; every package typechecks (`just check`, 13/13). PRs #3 → …
+→ #11 stacked.

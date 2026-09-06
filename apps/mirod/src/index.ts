@@ -38,6 +38,8 @@ import { requiresArguments } from "./extensions/validate";
 import { createCodexAuth, importCodexCredentialFromCli, loginCodex } from "./agent/codex-auth";
 import { run } from "./inventory/exec";
 import { configureNotifications, notify, replayUndelivered } from "./notifications";
+import { blessOrRevertUpdate } from "./self-update";
+import { computeSeverity } from "./operations/severity";
 
 const OPERATION_KINDS = allOperationKinds((ref) => secretStore.getSecret(db, ref), (ref, value) => secretStore.setSecret(db, ref, value));
 
@@ -183,6 +185,18 @@ setInterval(() => hostMgr.reapIdle(), 60_000);
 for (const report of await reconcileOperations(db, OPERATION_KINDS)) {
   notify({ tier: report.outcome === "committed" ? "worth_knowing" : "needs_attention", title: report.message, body: "", source: "reboot", at: Date.now() });
 }
+
+// Self-update auto-heal (PLAN.md §5.32): if this boot is a just-swapped new version, prove it is
+// healthy and bless it, else revert to the previous version; if it is the old version back after an
+// auto-revert, tell the owner. Same slot as reconcile - before the socket binds, notify() live, so
+// the verdict persists and replays on reconnect. No-op unless a version swap is in flight.
+await blessOrRevertUpdate({
+  db,
+  computeSeverity,
+  notify,
+  restart: () => run("systemctl", ["restart", "mirod"]),
+  heartbeat: () => { if (process.env.NOTIFY_SOCKET) run("systemd-notify", ["WATCHDOG=1"]).catch(() => {}); },
+});
 
 // Budgeted Dreaming reflection pass (plan §36-37) - fire-and-forget, never spends the user's
 // "best" routing budget, never blocks the operation/chat turn that triggered it.
@@ -393,6 +407,7 @@ function statusEvent(state: ConnState): ServerEvent {
     health: hasProvider() ? "healthy" : "degraded",
     model: state.lastChatModelId,
     privilege: typeof process.getuid === "function" && process.getuid() === 0 ? "root" : "user",
+    version: process.env.MIRO_VERSION,
   };
 }
 

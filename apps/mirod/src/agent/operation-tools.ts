@@ -7,6 +7,9 @@ import { systemdUnitKind, UNIT_ACTIONS, type SystemdUnitParams } from "../operat
 import { rebootKind } from "../operations/kinds/reboot";
 import { searxngInstallKind, searxngBaseUrl, DEFAULT_SEARXNG_PORT, SEARXNG_SETTING } from "../operations/kinds/searxng-install";
 import { ntfyInstallKind, resolveNtfyBaseUrl, generateTopic, ntfyLocalUrl, DEFAULT_NTFY_PORT, NTFY_URL_SETTING, NTFY_TOPIC_SETTING } from "../operations/kinds/ntfy-install";
+import { stageUpdate, availableVersions, currentVersion } from "../self-update";
+import { computeSeverity } from "../operations/severity";
+import { runPrivileged } from "../inventory/exec";
 import { shellCommandKind, takeOutput as takeShellOutput, type ShellCommandParams } from "../operations/kinds/shell-command";
 import { fileWriteKind, type FileWriteParams } from "../operations/kinds/file-write";
 import { fileEditKind } from "../operations/kinds/file-edit";
@@ -46,6 +49,11 @@ const shellCommandParams = Type.Object({
 const searxngInstallParams = Type.Object({
   port: Type.Optional(Type.Integer({ description: `Loopback port for the node (default ${DEFAULT_SEARXNG_PORT}).` })),
   reason: Type.String({ description: "Why, in one line - shown to the user as the goal." }),
+});
+
+const installUpdateParams = Type.Object({
+  toVersion: Type.String({ description: "The staged version to update to (a directory under the versions root, e.g. 0.0.2)." }),
+  reason: Type.String({ description: "Why, in one line - shown to the owner as the goal." }),
 });
 
 const ntfyInstallParams = Type.Object({
@@ -157,6 +165,34 @@ export function buildOperationTools(ctx: OperationToolContext) {
         // The commit configures Miro itself: web.search's self-hosted implementation reads this.
         if (result.outcome === "committed") ctx.setSetting?.(SEARXNG_SETTING, baseUrl);
         return textResult({ ...result, ...(result.outcome === "committed" ? { baseUrl, setting: SEARXNG_SETTING } : {}) });
+      },
+    },
+    {
+      name: "install_update",
+      label: "Update Miro",
+      description:
+        "Update Miro itself to a staged version, then restart into it. Miro proves the new version is healthy at its next boot and AUTO-REVERTS to the current version if it is worse or does not come back - you do not have to babysit it. This call does not return: every connection drops when it restarts, then reconnects and reports whether the update was kept or rolled back. Only for a genuine update; there is no undo beyond the automatic health revert.",
+      parameters: installUpdateParams,
+      execute: async (_id: string, params: { toVersion: string; reason: string }) => {
+        const available = availableVersions();
+        if (!available.includes(params.toVersion)) {
+          return textResult({ refused: true, reason: `version ${params.toVersion} is not staged`, running: currentVersion(), available });
+        }
+        const confirmId = `op_confirm:update:${crypto.randomUUID()}`;
+        ctx.send({
+          type: "question",
+          id: confirmId,
+          prompt: `Update Miro ${currentVersion() ?? "?"} -> ${params.toVersion} and restart into it? It auto-reverts if unhealthy. Every connection drops; the client reconnects and reports the result.`,
+          options: [
+            { label: "Update", value: "approve" },
+            { label: "Cancel", value: "cancel" },
+          ],
+        });
+        if ((await ctx.waitForAnswer(confirmId)) !== "approve") return textResult({ installed: false, cancelled: true });
+        // Restarts the daemon; this call does not return. The bless/revert verdict arrives as a
+        // notification on the client's reconnect (self-update/blessOrRevertUpdate at the next boot).
+        const result = await stageUpdate({ db: ctx.db, computeSeverity, restart: () => runPrivileged(["systemctl", "restart", "mirod"]) }, params.toVersion);
+        return textResult(result.ok ? { installing: true, toVersion: params.toVersion } : { installed: false, reason: result.reason });
       },
     },
     {
