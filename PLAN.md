@@ -3021,3 +3021,58 @@ Mac, and the Mac's daemon is down; (3) the VM has ~1.8 GiB free RAM with the 7-c
 running - the Immich ML container alone would exceed it. Ready to drive on a box with real RAM + network
 (or by starting Docker Desktop to pre-stage arm64 images to a cargo drive and pausing the media stack
 for RAM, installing Immich without the ML container to fit). No code owed.
+
+### 5.38 GitHub config backup + agent-driven restore (2026-09-07)
+
+The first of the three owner-unblocked capstone items (grilled end-to-end via the design-tree
+interview before building). Miro now versions the server's declarative configs + its own non-secret
+state into a local git repo and pushes it to a private GitHub repo it creates for itself, so a rebuilt
+box can be mostly reconstructed from the repo. **Never commits a plaintext secret.**
+
+**Module `apps/mirod/src/backup/`:**
+- `snapshot.ts` - rebuilds the working tree each run (so a removed config records as a deletion):
+  `configs/<abs-path>` from a curated allowlist (`/etc/docker/daemon.json`, `/etc/fstab`,
+  `/etc/systemd/system` owner units + drop-ins - symlinks skipped so vendor units in `/usr/lib` are
+  not pulled in) plus compose files discovered from container labels plus `backup.extra_paths`; and
+  `miro/` as a secret-free NDJSON export of settings/memories/operations/extensions + the generated
+  extension source. Every text file runs through `redactSecretsInText` (classify.ts:449); binary/
+  oversized files are skipped, never risked. The raw `miro.db` and the `secrets` table are NEVER
+  committed. Opt-in `secrets.age`: secret.key + the secret store, age-encrypted to the owner's PUBLIC
+  key over stdin (encrypt-only - the box can never decrypt its own past backups; no plaintext on disk).
+- `git.ts` - the repo's git run as the daemon's OWN uid (repo under MIRO_DIR, so plain `run`, no sudo,
+  never the classifier/sandbox). Forces `commit.gpgsign=false` repo-local (a global one hangs `git
+  commit` on a passphrase prompt - found live). Push over a per-repo ed25519 **deploy key**
+  (GIT_SSH_COMMAND, no `~/.ssh/config` edit, no `core.sshCommand`), or the `provider.github` token via
+  `-c http.extraHeader` (token never in the stored remote URL), or `gh` - precedence deploy-key >
+  token > gh.
+- `index.ts` - `runBackup` (snapshot + commit-iff-changed), `pushBackup` (never throws), and a
+  one-time `bootstrap` that creates the private repo `<hostname>-miro-backup` under the token's account
+  and registers the deploy key via the GitHub API, then steady-state pushes need only the key.
+- `restore.ts` - the agent-driven `restore_from_backup`: on a freshly deployed mirod it imports Miro's
+  own state directly, and re-establishes secrets by **decrypting the age bundle with the bundle's own
+  key and re-`setSecret`-ing each under this box's current key** (no key-file swap, no restart), then
+  returns the server's config files for the agent to reconstruct through the operation engine.
+
+**Triggers:** a new `OperationToolContext.afterOperation` hook, fired at `onTerminal` (the single
+terminal choke point in `runOperation`), wrapped so it can never break the operation result - a
+debounced snapshot-commit after each committed operation, a commit+push after a rollback, and a daily
+snapshot+push on the existing 24h `setInterval` cluster. Tools `backup_configure` / `backup_now` /
+`restore_from_backup` live in the mutating op-tools set (hidden from read-only subagents).
+
+**Live-verified on the dev VM, each step checked independently.** Ran the real `buildSnapshot`/
+`pushBackup` against the live box: 4 configs mirrored + redacted, the `secrets` table absent, zero
+token/key shapes anywhere in the tree, all 6 extensions at clean relative paths. `pushBackup`
+bootstrapped a **private** repo `bybrooklyn/miro-test-vm-miro-backup`, registered the deploy key, and
+pushed over SSH; a **fresh independent clone via the deploy key** returned the commit with the configs
+present and no `secrets.ndjson`, repo confirmed `private:true`. Age round-trip: `secrets.age` written +
+armored, no plaintext leak, and a secret restored under a **fresh box key** read back byte-identical;
+restore imported settings(10)/memories(104)/extensions(7) + 22 secrets against the real schemas. The
+running daemon's own boot-time `dailyBackup` produced a fresh commit with no errors. **Two real bugs
+found live:** the gpgsign commit hang, and the extensions subtree copied with its absolute path (which
+would have made restore's `cpSync` place it wrong) - both fixed and guarded by tests. Gate: `just
+check` 13/13, `just test` 454 pass / 0 fail.
+
+**Not done (later):** the daily push has no backoff/jitter; config discovery is file-based, so a
+`docker run`-managed container (no compose file) contributes only its learned extension, not a
+re-runnable run-spec; restore replays configs but re-enabling systemd units and bringing compose up is
+the agent's job, not yet a single mechanical step.
