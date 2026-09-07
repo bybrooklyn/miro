@@ -2873,3 +2873,48 @@ compiled single-file binary (pending the `@miro/native` story). node_modules is 
 
 **State:** 417 pass / 0 fail / 14 skip; every package typechecks (`just check`, 13/13). PRs #3 → …
 → #11 stacked.
+
+### 5.33 Sensitivity-tiered egress - slice 1 (2026-09-06)
+
+The safety moat for what leaves the box for an LLM (the §2367 design, unbuilt until now): before any
+message content reaches a provider, classify its sensitivity and keep it within what that provider is
+cleared for. Branch `egress-tiers` (off master, after the 11-PR stack landed at b3467f8). Built,
+unit-tested, wired, and **live-verified on the VM** - which found a real bug unit tests could not.
+
+**The model.** Three FIXED tiers (not a score): `secret` > `internal` > `public`. A provider's TRUST
+is what it may receive; content's SENSITIVITY is what it carries. Enforcement is redaction, not a
+block: secret-shaped strings are ALWAYS scrubbed (reusing `redactSecretsInText`, which protects
+`{{secret:ref}}`) - even to a trusted provider, so a secret the user typed or that rode in from memory
+never egresses; private IPs / internal hostnames are redacted only for a provider below `internal`
+trust (the free/anonymous endpoints that may train on inputs). The main no-train providers stay
+`internal`, so Miro can still reason about the box's topology with them - the whole point of a sysadmin
+agent. `providerTrust`: a local/private baseUrl is `secret` whatever the provider id; else a per-install
+`egress.provider_tiers` override; else the default map; else `public` (fail closed).
+
+**The chokepoint - no vendored fork.** `apps/mirod/src/agent/egress.ts` (`scrubText`, `classifyContentTier`,
+`gateEgress`) is wired into agent-core's first-class `transformProviderContext(context, model)` option -
+the one synchronous seam before every provider stream (`agent.ts:801`) - at all three Agent sites: the
+chat agent and the learning agent (full: db-backed audit + the tier overrides), and the narrow worker
+subagent (fail-safe defaults, no db). `egress-store.ts` holds the bounded `egress_audit` table and the
+shared `egressGate()` factory; only sensitivity-bearing egresses are logged. This closed a real gap:
+`redactSecretsInText` ran on tool output flowing IN, but NOTHING scrubbed the outbound provider payload.
+
+**Live verification (the house style earned its keep).** No cloud key was on the VM, so a local
+echo-provider (pointed at a public-looking host via /etc/hosts so it read as `public` trust) stood in,
+and a real turn carrying a private IP + an internal host + a fake `ghp_` token was driven through the
+real daemon. The `egress_audit` rows proved the hook fires on the real assembled context and that
+secrets AND infra were redacted before the wire (3 → 73 identifiers stripped as the context grew).
+**The bug it found:** Miro's usual primary model logs in as the provider **`openai-codex`** (ChatGPT
+OAuth), not `openai`, so it fell through to `public` and the gate stripped ALL server topology from the
+daemon's own brain - safe (fail-closed worked) but crippling for a sysadmin. Fixed: `openai-codex` →
+`internal` (the deliberately-chosen primary provider is trusted to see the topology it must reason over;
+secrets still always scrubbed; owner can tighten via the setting - owner decision). Re-verified live: a
+second turn showed `trust=internal, secret_redacted=1, infra_redacted=0`. This is exactly the class of
+runtime-against-a-real-system bug that `tsc` and unit tests both miss.
+
+**Not done, by scope (slice 2+).** Round-tripping the placeholders back on the RESPONSE (both-direction
+filtering); a hard block (slice 1 redacts to fit, never refuses); per-key free-vs-paid distinction
+(Gemini/OpenRouter `:free` train, paid does not - slice 1 tiers by provider id, not credential);
+walking tool-call ARGUMENT JSON (only text content + system prompt are scrubbed today); logging EVERY
+egress rather than only the sensitivity-bearing ones. Gate after: `just check` 13/13, `just test`
+427 pass / 0 fail.
