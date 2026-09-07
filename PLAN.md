@@ -3118,3 +3118,42 @@ Gate: `just check` 13/13, `just test` 459 pass / 0 fail.
 **Not done (later):** if a box boots into low battery and power never returns, the armed guard means it
 warns rather than auto-shutting-down (relies on the UPS itself cutting out) - a max-on-battery timer
 would close that; real-hardware validation (a `usbhid-ups` driver) is the owner's, on the real server.
+
+### 5.40 Stage D VPN half - gluetun with secret-into-env, live-driven (2026-09-07)
+
+Third of the three owner-unblocked capstone items, and the completion of Stage D (§5.29 built the
+media acquisition stack; the VPN half was deferred for a credential). Route the download client through
+a gluetun WireGuard tunnel with a kill-switch. **Live-driven end to end on the dev VM with a real Proton
+VPN WireGuard credential the owner provided.**
+
+The only NEW Miro code the VPN half needed is **`operations/kinds/secret-file.ts`** (`secret.file`,
+tool `write_secret_file`) - the reference-safe way to get a credential into a container's env_file
+without the value reaching the model, the approval plan, or a committed/backed-up file. It resolves
+`{{secret:<ref>}}` placeholders at apply time (reusing http-mutation's `substituteSecrets`), writes
+0600, shows only the template in the plan, and refuses a template with no placeholder (use file_write)
+or a secret-material path. Everything else is agent-driven with existing tools: `file_write` the
+compose, `shell.command`/`docker run` to bring gluetun up, and a client on `network_mode:
+service:gluetun` (`--network container:gluetun` without the compose plugin) - no gluetun-specific
+daemon code.
+
+**Live-verified, each step checked independently.** `write_secret_file` wrote gluetun's env from a
+template whose `WIREGUARD_PRIVATE_KEY` was a `{{secret:...}}` placeholder in the plan and landed
+resolved at mode 600 (the key never appeared in model-visible output). gluetun (custom provider,
+WireGuard, the owner's Proton US-NY endpoint) brought the tunnel up and reported exit IP
+`31.13.189.234` (US-NY); a client routed through gluetun's netns exited at that VPN IP while the host's
+own egress was `174.231.96.164` (**different -> the download-client-through-VPN routing works**);
+stopping gluetun left the client with zero egress (`wget: bad address` -> **kill-switch fail-closed, no
+leak**). **A finding:** `secret.file` correctly refuses to write under `/var/lib/miro` (a sensitive-read
+path guarding secret.key + the db), so an app's secret env_file goes in the app's own project dir
+(`/srv/gluetun`), not Miro's state dir - the guard working as designed, not a bug. gluetun warned that
+`VPN_ENDPOINT_IP` is now `WIREGUARD_ENDPOINT_IP` (still worked; a template tweak for later). The media
+stack (5/5) was untouched throughout. Gate: `just check` 13/13, `just test` 465 pass / 0 fail.
+
+**Security:** the owner pasted the WireGuard private key, so it is in this session's transcript in
+plaintext and was stored as the VM secret `extension.gluetun.wg_private_key` (encrypted) - ROTATE IT.
+The plaintext env_file was removed after the drive.
+
+**Not done (later):** wiring the *real* running qBittorrent through the tunnel (proven with a throwaway
+client to avoid disturbing the live media stack; the production step is the same `network_mode` change,
+agent-driven); DNS-leak assertion beyond exit-IP (gluetun's DNS-over-the-tunnel + the kill-switch cover
+the main risk); IPv6 (dropped for the SLIRP drive).
