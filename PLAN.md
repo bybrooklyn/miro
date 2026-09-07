@@ -3157,3 +3157,45 @@ The plaintext env_file was removed after the drive.
 client to avoid disturbing the live media stack; the production step is the same `network_mode` change,
 agent-driven); DNS-leak assertion beyond exit-IP (gluetun's DNS-over-the-tunnel + the kill-switch cover
 the main risk); IPv6 (dropped for the SLIRP drive).
+
+### 5.41 Secure secret intake + strict mode (2026-09-07)
+
+First slice of the "secure, fast, magical setup" program (north star: *deploy Miro and manage your
+server from anywhere; crazy features but amazing to use; feels like magic*). The sharp edge it fixes:
+three times this session the owner pasted a live secret (a GitHub token, a Proton WireGuard key) into
+the chat, where it entered the transcript and the model context. Grilled end-to-end; this makes secret
+entry **secure by construction**. The secure half already half-existed - the `secret_prompt` event, the
+masked `SecretField` (`apps/miro/src/components/PromptArea.tsx:79`), and `ask_user(secretRef)` storing by
+ref. This adds the missing surfaces + a guard + a parser.
+
+- **Two agent tools** (`agent/interaction-tools.ts`): `request_secret(ref, prompt)` raises the masked
+  prompt for ANY ref; `paste_config(app)` takes a whole pasted config through the masked prompt and
+  parses it. Both return only refs / non-secret config - the raw paste and secret values never reach
+  the model.
+- **`secret-intake/parse-config.ts`** - a format-aware recognizer registry: WireGuard `.conf` first
+  (PrivateKey→ref, endpoint/pubkey/address→config), then `.env` (secret-named keys→refs), a raw-blob
+  fallback. The `summary` carries no secret value. Extensible (the "insanely large corpus" grows here).
+- **`secret-intake/cli.ts`** - `mirod secret set <ref>` reads the value from stdin/`--file`/env and
+  exits before the daemon boots; never through the agent. (Found live: the `/usr/local/bin/mirod`
+  wrapper exec'd bun without `"$@"`, so subcommand args were dropped - fixed in `install-mirod.sh`.)
+- **`secret-intake/drop-file.ts`** - a file dropped in `<MIRO_DIR>/secrets.d/` named after its ref is
+  imported to the store and shredded; swept at boot and on any change (an `fs.watch`). Ref-validated.
+- **The leak guard** (`index.ts` `handleChat`): a secret-shaped chat message (caught by
+  `redactSecretsInText`'s shapes) is intercepted BEFORE the model - **default** warns + confirms
+  ("send anyway / store securely"), **strict mode** refuses and redirects.
+- **Strict mode** (`mode.strict`, tool `set_strict_mode`): the opt-in locked-down inverse of the
+  default easy/magic posture - the leak guard hard-refuses, EVERY operation is confirmed (forced in
+  `runOperation`'s autoApprove, `operations/engine.ts`), and no autonomous action runs (the UPS monitor
+  notifies instead of powering off; the self-update auto-install gate, slice 4, will check it too).
+  Miro still *suggests* in strict mode - it just never acts unasked.
+
+**Live-verified on the VM, each checked independently:** `mirod secret set` stored a ref (decrypted back
+correctly, value only via stdin); a `secrets.d/` drop-file was imported + shredded (decrypted back); a
+`ghp_` token pasted into chat was caught - **default** raised the warn-question with **no model reply**,
+**strict** returned the refusal reply, neither reaching the model. The wrapper-argv bug was the one real
+find. Gate: `just check` 13/13, `just test` 472 pass / 0 fail.
+
+**Not done (this slice):** the config-paste corpus beyond WireGuard/.env (extensible, grown on demand);
+a bare unlabeled base64 key in chat isn't caught by the guard (only labeled/prefixed shapes are - the
+common leak); a `paste_config` multi-line paste depends on the client's masked-field paste handling
+(the CLI/drop-file cover big multi-line configs).
