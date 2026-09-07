@@ -433,6 +433,12 @@ setInterval(dailyBackup, REPROBE_INTERVAL_MS);
 const POWER_POLL_MS = 30_000;
 const lastUpsStatus: Record<string, string> = {};
 let upsShutdownTriggered = false;
+// Armed only after the UPS has been seen NOT on low battery. A box that boots straight into a
+// low-battery reading (found live: after the auto-shutdown, the sim was still LB, so the next boot
+// shut down again - a loop) must NOT immediately shut down again; it warns and waits until it has
+// seen line power. ponytail: no auto-shutdown if power never returns after such a boot - it warns
+// and relies on the UPS itself cutting out; add a max-on-battery timer if that case matters.
+let upsArmed = false;
 // An autonomous op context: broadcasts events to any watching TUI, and auto-approves (the emergency
 // path - the box is going down regardless; the notify below is how the owner hears about it).
 const powerOpCtx: OperationToolContext = {
@@ -454,17 +460,23 @@ async function powerMonitorTick(): Promise<void> {
   if (!name) return;
   const ups = await readUps(name);
   if (!ups.status) return; // upsd unreachable - not a transition, just no reading
+  if (!ups.lowBattery) upsArmed = true; // any non-LB reading arms the trigger
   const prev = lastUpsStatus[name];
   lastUpsStatus[name] = ups.status;
   if (ups.status === prev) return;
   const detail = `status ${ups.status}, charge ${ups.charge ?? "?"}%, runtime ${ups.runtimeSec ?? "?"}s`;
-  if (ups.lowBattery && !upsShutdownTriggered) {
-    upsShutdownTriggered = true;
-    notify({ tier: "needs_attention", title: `UPS ${name} low battery - powering off`, body: detail, source: "ups", at: Date.now() });
-    await pushBackup(backupDeps).catch((err) => console.error("[mirod] pre-shutdown backup push failed", err));
-    await runOperation(powerOpCtx, shutdownKind, `UPS ${name} on low battery`, { reason: `UPS ${name} low battery (charge ${ups.charge ?? "?"}%)` }).catch((err) =>
-      console.error("[mirod] UPS-triggered shutdown failed", err),
-    );
+  if (ups.lowBattery) {
+    if (upsArmed && !upsShutdownTriggered) {
+      upsShutdownTriggered = true;
+      notify({ tier: "needs_attention", title: `UPS ${name} low battery - powering off`, body: detail, source: "ups", at: Date.now() });
+      await pushBackup(backupDeps).catch((err) => console.error("[mirod] pre-shutdown backup push failed", err));
+      await runOperation(powerOpCtx, shutdownKind, `UPS ${name} on low battery`, { reason: `UPS ${name} low battery (charge ${ups.charge ?? "?"}%)` }).catch((err) =>
+        console.error("[mirod] UPS-triggered shutdown failed", err),
+      );
+    } else if (!upsArmed) {
+      // Booted into low battery - warn, do NOT loop the shutdown; wait until line power is seen.
+      notify({ tier: "needs_attention", title: `UPS ${name} still on low battery`, body: `${detail} (not auto-shutting down: no line power seen since boot)`, source: "ups", at: Date.now() });
+    }
   } else if (ups.onBattery) {
     notify({ tier: "worth_knowing", title: `UPS ${name} on battery`, body: detail, source: "ups", at: Date.now() });
   } else if (prev) {
