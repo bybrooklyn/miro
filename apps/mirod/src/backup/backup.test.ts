@@ -28,8 +28,15 @@ test("buildSnapshot mirrors configs redacted, exports non-secret state, never th
   const composeFile = join(configDir, "docker-compose.yml");
   writeFileSync(composeFile, "services:\n  app:\n    environment:\n      DB_PASSWORD: hunter2\n");
   const backupDir = tmp("miro-bk-");
+  const extDir = tmp("miro-ext-");
+  mkdirSync(join(extDir, "gotify"), { recursive: true });
+  writeFileSync(join(extDir, "gotify", "extension.ts"), "export default {};\n");
 
-  const r = await buildSnapshot(db, backupDir, { configPaths: [composeFile], skipComposeDiscovery: true });
+  const r = await buildSnapshot(db, backupDir, { configPaths: [composeFile], skipComposeDiscovery: true, extensionsDir: extDir });
+
+  // extensions land at a clean relative path, NOT mirrored with their absolute source path
+  expect(existsSync(join(backupDir, "miro", "extensions", "gotify", "extension.ts"))).toBe(true);
+  expect(existsSync(join(backupDir, "miro", "extensions", extDir.replace(/^\/+/, "")))).toBe(false);
 
   // config mirrored at its absolute path, secret redacted
   const mirrored = join(backupDir, "configs", composeFile.replace(/^\/+/, ""));

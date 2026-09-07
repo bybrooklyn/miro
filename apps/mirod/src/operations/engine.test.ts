@@ -598,3 +598,28 @@ test("selector sanity: a root write scope is refused before anything is planned,
   expect(events.map((e) => e.type)).toEqual(["operation_result"]); // no plan event, no question
   expect(listAll(db)).toEqual([]); // no incident - nothing touched
 });
+
+test("runOperation: afterOperation fires with the terminal outcome (the config-backup hook)", async () => {
+  const db = freshDb();
+  const committed = fakeCtx(db);
+  const seen: { outcome: string; kind: string; goal: string }[] = [];
+  committed.ctx.afterOperation = (info) => seen.push(info);
+  await runOperation(committed.ctx, fakeKind({ verifyResult: true }), "do the thing", { x: 1 });
+  expect(seen).toEqual([{ outcome: "committed", kind: "test.kind", goal: "do the thing" }]);
+
+  const rolled = fakeCtx(db);
+  const seen2: { outcome: string; kind: string; goal: string }[] = [];
+  rolled.ctx.afterOperation = (info) => seen2.push(info);
+  await runOperation(rolled.ctx, fakeKind({ verifyResult: false }), "undo the thing", { x: 2 });
+  expect(seen2).toEqual([{ outcome: "rolledback", kind: "test.kind", goal: "undo the thing" }]);
+});
+
+test("runOperation: a throwing afterOperation never breaks the operation result", async () => {
+  const db = freshDb();
+  const { ctx } = fakeCtx(db);
+  ctx.afterOperation = () => {
+    throw new Error("backup hook blew up");
+  };
+  const result = await runOperation(ctx, fakeKind({ verifyResult: true }), "do the thing", { x: 1 });
+  expect(result.outcome).toBe("committed");
+});

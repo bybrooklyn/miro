@@ -72,9 +72,11 @@ function collectFiles(root: string, out: string[]): void {
   if (st.isFile()) out.push(root);
 }
 
-/** Copy each source file to <destRoot>/<absolute-path-without-leading-slash>, redacted. Binary or
- * oversized files are skipped (never risk an un-redactable blob), and their paths are returned. */
-function redactCopyInto(files: string[], destRoot: string): string[] {
+/** Copy each source file to <destRoot>/<relative>, redacted. `relativeTo` strips a base dir so a
+ * subtree (the extensions dir) maps to a clean relative path; without it the absolute path is
+ * mirrored (configs, so restore knows each file's target). Binary or oversized files are skipped
+ * (never risk an un-redactable blob), and their paths are returned. */
+function redactCopyInto(files: string[], destRoot: string, relativeTo?: string): string[] {
   const skipped: string[] = [];
   for (const f of files) {
     try {
@@ -83,7 +85,8 @@ function redactCopyInto(files: string[], destRoot: string): string[] {
         skipped.push(f);
         continue;
       }
-      const dest = join(destRoot, f.replace(/^\/+/, ""));
+      const rel = relativeTo && f.startsWith(relativeTo) ? f.slice(relativeTo.length).replace(/^\/+/, "") : f.replace(/^\/+/, "");
+      const dest = join(destRoot, rel);
       mkdirSync(dirname(dest), { recursive: true });
       writeFileSync(dest, redactSecretsInText(raw.toString("utf8")));
     } catch {
@@ -175,7 +178,7 @@ export async function buildSnapshot(db: Database, backupDir: string, opts: Snaps
   if (opts.extensionsDir && existsSync(opts.extensionsDir)) {
     const extFiles: string[] = [];
     collectFiles(opts.extensionsDir, extFiles);
-    redactCopyInto(extFiles, join(miroDir, "extensions"));
+    redactCopyInto(extFiles, join(miroDir, "extensions"), opts.extensionsDir);
   }
 
   let ageBundle: SnapshotResult["ageBundle"] = "no-recipient";

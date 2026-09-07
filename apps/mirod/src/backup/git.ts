@@ -21,9 +21,13 @@ async function git(dir: string, args: string[], env?: Record<string, string>): P
 export async function ensureRepo(dir: string): Promise<void> {
   mkdirSync(dir, { recursive: true });
   if (!existsSync(join(dir, ".git"))) await git(dir, ["init", "-q"]);
-  // Repo-local identity so a commit never depends on (or pollutes) global git config.
+  // Repo-local identity so a commit never depends on (or pollutes) global git config. Signing is
+  // forced off: a global commit.gpgsign would make `git commit` hang on a GPG passphrase prompt,
+  // which the daemon can never answer (found live - the backup unit test hung on it).
   await git(dir, ["config", "user.name", "Miro"]);
   await git(dir, ["config", "user.email", "miro@localhost"]);
+  await git(dir, ["config", "commit.gpgsign", "false"]);
+  await git(dir, ["config", "tag.gpgsign", "false"]);
   writeFileSync(join(dir, ".gitignore"), GITIGNORE);
 }
 
