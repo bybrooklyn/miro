@@ -1,0 +1,66 @@
+# Cut a signed Miro release (PLAN.md §5.16 / §5.33). Push a tag `vX.Y.Z` (stable) or `vX.Y.Z-beta.N`
+# (beta channel) and this builds the source-tree artifact, writes the signed manifest the daemon
+# verifies, keyless-signs it with Sigstore (ambient GitHub OIDC), and publishes the release. The
+# daemon's self-update fetch (apps/mirod/src/self-update) downloads and verifies these assets offline.
+name: release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  id-token: write # ambient OIDC for keyless Sigstore signing
+  contents: write # create the Release + upload assets
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 } # need the annotated-tag object for its message
+
+      # Node runs the signing step: the sigstore JS lib + tuf-js work under Node, NOT under Bun
+      # (Bun's BoringSSL rejects crypto.verify(null,...) on EC keys - see verify.ts / §5.33).
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      # Bun builds the artifact so the tree matches the daemon's runtime.
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: "1.4.0" }
+
+      - name: Build artifact + signed manifest
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          case "$VERSION" in *-*) CHANNEL=beta ;; *) CHANNEL=stable ;; esac
+          NAME="miro-v${VERSION}.tar.gz"
+          mkdir -p dist
+          # The shippable source tree - no node_modules (the daemon runs bun install after unpack),
+          # no .git, no tools/dev-vm. Deterministic-ish ordering.
+          tar --sort=name --owner=0 --group=0 --numeric-owner \
+              -czf "dist/${NAME}" apps packages package.json bun.lock justfile LICENSE
+          SHA=$(shasum -a 256 "dist/${NAME}" | cut -d' ' -f1)
+          SIZE=$(wc -c < "dist/${NAME}" | tr -d ' ')
+          MSG=$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")
+          SUMMARY=$(printf '%s\n' "$MSG" | head -1)
+          [ -n "$SUMMARY" ] || SUMMARY="Miro ${VERSION}"
+          # jq guarantees valid JSON - the daemon verifies these EXACT bytes against the signature.
+          jq -n --arg version "$VERSION" --arg channel "$CHANNEL" --arg summary "$SUMMARY" \
+                --arg notes "$MSG" --arg commit "$GITHUB_SHA" --arg name "$NAME" --arg sha "$SHA" \
+                --argjson size "$SIZE" --argjson createdAt "$(date +%s)" \
+                '{schema:1,version:$version,channel:$channel,summary:$summary,notes:$notes,commit:$commit,artifact:{name:$name,sha256:$sha,size:$size},createdAt:$createdAt}' \
+                > dist/manifest.json
+          echo "NAME=$NAME" >> "$GITHUB_ENV"
+          echo "CHANNEL=$CHANNEL" >> "$GITHUB_ENV"
+
+      - name: Sign manifest.json -> manifest.json.sigstore
+        run: |
+          npm install --no-save sigstore@5.0.0
+          node scripts/sign-manifest.mjs
+
+      - name: Create Release and upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PRERELEASE=""
+          [ "$CHANNEL" = beta ] && PRERELEASE="--prerelease"
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes $PRERELEASE \
+            "dist/${NAME}" dist/manifest.json dist/manifest.json.sigstore

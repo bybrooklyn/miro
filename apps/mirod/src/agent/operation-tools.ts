@@ -8,7 +8,9 @@ import { rebootKind } from "../operations/kinds/reboot";
 import { searxngInstallKind, searxngBaseUrl, DEFAULT_SEARXNG_PORT, SEARXNG_SETTING } from "../operations/kinds/searxng-install";
 import { ntfyInstallKind, resolveNtfyBaseUrl, generateTopic, ntfyLocalUrl, DEFAULT_NTFY_PORT, NTFY_URL_SETTING, NTFY_TOPIC_SETTING } from "../operations/kinds/ntfy-install";
 import { stageUpdate, availableVersions, currentVersion } from "../self-update";
-import { UPDATE_CHANNEL_SETTING } from "../self-update/config";
+import { checkForUpdate, fetchAndStage, type FetchDeps } from "../self-update/fetch";
+import { makeVerifyManifest } from "../self-update/verify";
+import { UPDATE_CHANNEL_SETTING, GITHUB_TOKEN_SECRET, getChannel, getRepo } from "../self-update/config";
 import { computeSeverity } from "../operations/severity";
 import { runPrivileged } from "../inventory/exec";
 import { shellCommandKind, takeOutput as takeShellOutput, type ShellCommandParams } from "../operations/kinds/shell-command";
@@ -128,6 +130,18 @@ const httpMutationParams = Type.Object({
  * agent/tools.ts's read-only AGENT_TOOLS so subagents spawned via worker.ts never see these. */
 export function buildOperationTools(ctx: OperationToolContext) {
   const httpKind = httpMutationKind(ctx.getSecret ?? (() => null), ctx.setSecret);
+  // The self-update fetch dependencies: repo/channel from settings, the token from its secret ref,
+  // and the Sigstore verifier bound to this repo's release-workflow identity. Never surfaces the token.
+  const buildFetchDeps = (): FetchDeps => {
+    const getSetting = ctx.getSetting ?? (() => null);
+    return {
+      repo: getRepo(getSetting),
+      token: ctx.getSecret?.(GITHUB_TOKEN_SECRET) ?? null,
+      channel: getChannel(getSetting),
+      currentVersion: currentVersion(),
+      verify: makeVerifyManifest(getSetting),
+    };
+  };
   return [
     {
       name: "service_restart",
@@ -173,15 +187,49 @@ export function buildOperationTools(ctx: OperationToolContext) {
       },
     },
     {
+      name: "check_for_update",
+      label: "Check for update",
+      description:
+        "Check the configured GitHub release channel for a newer signed Miro version. Verifies the release's Sigstore signature before reporting anything, and only reads - it does not download the artifact or install. Returns the version and summary if an update is available, or that Miro is current.",
+      parameters: Type.Object({}),
+      execute: async () => {
+        const deps = buildFetchDeps();
+        if (!deps.token) return textResult({ error: `no GitHub token configured (secret ${GITHUB_TOKEN_SECRET})` });
+        try {
+          const up = await checkForUpdate(deps);
+          return textResult(
+            up
+              ? { available: true, version: up.version, summary: up.summary, channel: deps.channel, current: currentVersion() }
+              : { available: false, channel: deps.channel, current: currentVersion() },
+          );
+        } catch (e) {
+          return textResult({ error: (e as Error).message });
+        }
+      },
+    },
+    {
       name: "install_update",
       label: "Update Miro",
       description:
-        "Update Miro itself to a staged version, then restart into it. Miro proves the new version is healthy at its next boot and AUTO-REVERTS to the current version if it is worse or does not come back - you do not have to babysit it. This call does not return: every connection drops when it restarts, then reconnects and reports whether the update was kept or rolled back. Only for a genuine update; there is no undo beyond the automatic health revert.",
+        "Update Miro itself to a version, then restart into it. If the version is not already staged locally, Miro fetches the newest signed release on the active channel from GitHub, verifies its Sigstore signature and digest, and stages it first. Miro then proves the new version is healthy at its next boot and AUTO-REVERTS to the current version if it is worse or does not come back - you do not have to babysit it. This call does not return: every connection drops when it restarts, then reconnects and reports whether the update was kept or rolled back. Use check_for_update first to see what is available. Only for a genuine update; there is no undo beyond the automatic health revert.",
       parameters: installUpdateParams,
       execute: async (_id: string, params: { toVersion: string; reason: string }) => {
-        const available = availableVersions();
-        if (!available.includes(params.toVersion)) {
-          return textResult({ refused: true, reason: `version ${params.toVersion} is not staged`, running: currentVersion(), available });
+        if (!availableVersions().includes(params.toVersion)) {
+          // Not staged locally - fetch it from the release channel (slice 2): download, verify the
+          // Sigstore signature + digest, unpack + install into the versions dir. Only the newest
+          // release on the active channel is fetchable; an arbitrary older version must be staged.
+          const deps = buildFetchDeps();
+          if (!deps.token) return textResult({ refused: true, reason: `version ${params.toVersion} is not staged and no GitHub token is configured (secret ${GITHUB_TOKEN_SECRET})`, running: currentVersion() });
+          let up;
+          try {
+            up = await checkForUpdate(deps);
+          } catch (e) {
+            return textResult({ refused: true, reason: `fetch/verify failed: ${(e as Error).message}` });
+          }
+          if (!up) return textResult({ refused: true, reason: `nothing named ${params.toVersion} is staged and no update is available on the ${deps.channel} channel` });
+          if (up.version !== params.toVersion) return textResult({ refused: true, reason: `the available ${deps.channel} release is ${up.version}, not ${params.toVersion}` });
+          const staged = await fetchAndStage(deps, up);
+          if (!staged.ok) return textResult({ refused: true, reason: staged.reason });
         }
         const confirmId = `op_confirm:update:${crypto.randomUUID()}`;
         ctx.send({
