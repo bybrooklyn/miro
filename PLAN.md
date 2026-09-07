@@ -3233,3 +3233,32 @@ check` 13/13, `just test` 475 pass / 0 fail.
 data; the screen is polish); update-checking isn't in the baseline gap set yet (it arrives with
 self-update slice 3); the proposal's per-item approve/pick/skip is the agent's system_plan + the
 existing operation confirms, not a bespoke multi-select UI.
+
+### 5.43 Quiet-competence tiers: learned per-class notification tiers (2026-09-07)
+
+Third slice of the setup program. Miro learns which notification classes the owner cares about, from
+a lightweight explicit signal (settled in the grill over fragile implicit inference): the owner taps
+"quiet this kind" / "keep" and Miro tiers that class down over time.
+
+- **Protocol**: `NoticeEvent` gains `source` (the class - ups/reboot/operation/repair/update/agent/...)
+  so the client can attribute feedback; a new `notice_feedback` ClientMessage `{source, action:
+  quiet|keep}`.
+- **`notifications/index.ts`**: `demoteTier(tier, steps)` steps down the ladder
+  (needs_attention→worth_knowing→routine); `applyNoticeFeedback` writes a per-source offset
+  (`notify.demote.<source>`, quiet increments capped at 2, keep resets to 0); `notify()` reads the
+  offset and demotes the tier BEFORE the phone/broadcast/persist decision; `noticeFor` carries source.
+- **Daemon dispatcher** (`index.ts`) handles `notice_feedback` with a one-line confirmation (no model
+  turn). **ui-model** carries `source` on notice blocks; the **TUI** binds ctrl+q (quiet) / ctrl+k
+  (keep) to the most recent notice's class.
+
+**Live-verified on the VM**: sending `notice_feedback{ups,quiet}` over the socket returned "ups
+notifications tiered down" (offset 1), again "now log-only" (offset 2, capped), and keep "reset to
+normal" (offset 0) - the protocol→handler→per-class override on the real daemon. The demotion EFFECT
+in notify() (a needs_attention ups notice becoming worth_knowing then routine) is unit-tested
+deterministically (a demoted class stops broadcasting; another class is unaffected; keep restores).
+Gate: `just check` 13/13, `just test` 477 pass / 0 fail.
+
+**Not done (this slice):** the TUI keybind's ergonomics are unverified headlessly (ctrl+q may hit
+terminal flow-control on some terminals - a trivial key-choice fix; the wire + daemon are verified);
+no implicit/behavioral inference (deliberately - the explicit tap is the reliable signal); a
+Dreaming-style "you keep quieting X, demote it?" suggestion is a natural later add on top of the offset.
