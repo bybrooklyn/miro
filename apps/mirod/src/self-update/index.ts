@@ -22,6 +22,16 @@ function paths(root = UPDATE_ROOT) {
 
 /** The version this daemon is running, from the wrapper's MIRO_VERSION (the basename of the current
  * symlink's target). Absent on a dev nohup run (no wrapper) - then self-update simply no-ops. */
+/** Safe to restart into a new version right now (PLAN.md self-update slice 3): no operation is
+ * mid-apply and no chat/learn turn is active. An `applying` row means a mutation is in flight
+ * (interrupting it is crash-recoverable but not free); an active turn means the owner is mid-flow.
+ * Gates the OPT-IN autonomous auto-install; a human-confirmed install never consults it. */
+export function isQuiescent(db: Database, anyTurnActive: boolean): boolean {
+  if (anyTurnActive) return false;
+  const row = db.query("SELECT COUNT(*) AS n FROM operations WHERE phase = 'applying'").get() as { n: number };
+  return row.n === 0;
+}
+
 export function currentVersion(): string | null {
   return process.env.MIRO_VERSION ?? null;
 }

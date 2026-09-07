@@ -41,7 +41,20 @@ export function computeSetupStatus(db: Database): SetupStatus {
   if (ups) configured.push(`UPS/power monitoring → ${ups}`);
   else gaps.push({ key: "ups", label: "UPS/power monitoring", how: "nut_install" });
 
+  // Automatic update checks need a GitHub token on file (provider.github); its presence is enough,
+  // no decryption. A well-run box knows when an update is out.
+  if (hasSecret(db, "provider.github")) configured.push("automatic update checks");
+  else gaps.push({ key: "updates", label: "automatic update checks", how: "store a GitHub token: `mirod secret set provider.github` - Miro then checks daily" });
+
   return { configured, gaps };
+}
+
+function hasSecret(db: Database, ref: string): boolean {
+  try {
+    return !!db.query("SELECT 1 FROM secrets WHERE ref = ?").get(ref);
+  } catch {
+    return false;
+  }
 }
 
 /** Context-block lines nudging the agent to OFFER the missing baseline as one plan (PLAN.md magic

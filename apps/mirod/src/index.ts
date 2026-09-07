@@ -44,7 +44,10 @@ import { createCodexAuth, importCodexCredentialFromCli, loginCodex } from "./age
 import { run } from "./inventory/exec";
 import { configureNotifications, notify, replayUndelivered, applyNoticeFeedback } from "./notifications";
 import { runBackup, pushBackup, type BackupDeps } from "./backup";
-import { blessOrRevertUpdate } from "./self-update";
+import { blessOrRevertUpdate, isQuiescent, currentVersion, stageUpdate, availableVersions } from "./self-update";
+import { checkForUpdate, fetchAndStage, type FetchDeps } from "./self-update/fetch";
+import { makeVerifyManifest } from "./self-update/verify";
+import { getRepo, getChannel, GITHUB_TOKEN_SECRET } from "./self-update/config";
 import { computeSeverity } from "./operations/severity";
 import { redactSecretsInText } from "./operations/classify";
 import { maybeRunSecretCli } from "./secret-intake/cli";
@@ -428,6 +431,9 @@ setInterval(discover, REPROBE_INTERVAL_MS);
 // pushBackup directly.
 const backupDeps: BackupDeps = { db, getSetting, setSetting, getSecret: (ref) => secretStore.getSecret(db, ref) };
 let backupTimer: ReturnType<typeof setTimeout> | null = null;
+// Count of chat/learn turns in flight across all connections - the quiescence signal for the
+// opt-in autonomous auto-install (self-update slice 3), which must not restart mid-interaction.
+let activeTurnCount = 0;
 function scheduleBackup(reason: string): void {
   if (backupTimer) clearTimeout(backupTimer);
   backupTimer = setTimeout(() => {
@@ -517,6 +523,34 @@ async function powerMonitorTick(): Promise<void> {
   }
 }
 setInterval(() => powerMonitorTick().catch((err) => console.error("[mirod] power monitor", err)), POWER_POLL_MS);
+
+// Self-update slice 3 (PLAN.md §self-update-3): a daily check of the release channel. When a newer
+// signed version is available, notify the owner (they run install_update to confirm). If they opted
+// into update.auto_install AND strict mode is off AND the box is quiescent, install it autonomously -
+// the health auto-revert (§5.32) is the safety net. No token configured -> no check.
+function updateFetchDeps(): FetchDeps {
+  return { repo: getRepo(getSetting), token: secretStore.getSecret(db, GITHUB_TOKEN_SECRET), channel: getChannel(getSetting), currentVersion: currentVersion(), verify: makeVerifyManifest(getSetting) };
+}
+function updateCheckTick(): void {
+  const deps = updateFetchDeps();
+  if (!deps.token) return;
+  checkForUpdate(deps)
+    .then(async (up) => {
+      if (!up) return;
+      notify({ tier: "worth_knowing", title: `Update available: ${currentVersion() ?? "?"} → ${up.version}`, body: up.summary ?? "", source: "update", at: Date.now() });
+      if (getSetting("update.auto_install") !== "true" || getSetting("mode.strict") === "true") return;
+      if (!isQuiescent(db, activeTurnCount > 0)) return; // an op or a turn is in flight - try next cycle
+      if (!availableVersions().includes(up.version)) {
+        const staged = await fetchAndStage(deps, up);
+        if (!staged.ok) return void console.error("[mirod] auto-update stage failed:", staged.reason);
+      }
+      notify({ tier: "worth_knowing", title: `Auto-installing update ${up.version}`, body: "The box is quiescent; it will auto-revert if unhealthy.", source: "update", at: Date.now() });
+      await stageUpdate({ db, computeSeverity, restart: () => run("systemctl", ["restart", "mirod"]) }, up.version);
+    })
+    .catch((err) => console.error("[mirod] update check failed", err));
+}
+updateCheckTick();
+setInterval(updateCheckTick, REPROBE_INTERVAL_MS);
 
 /** The main chat agent's model. Same standing preference as codegen: a connected Codex login means
  * gpt-5.6-luna at medium reasoning, always - it was added precisely because Ollama's cloud quota
@@ -786,6 +820,7 @@ function createConnectionState(send: (event: ServerEvent) => void): ConnState {
         send({ type: "notice", level: "warn", text: "Still working on your previous request - one at a time." });
       } else {
         state.turnActive = true;
+        activeTurnCount++;
         handleChat(msg.text, send, state)
           .catch((err) => {
             console.error("[mirod] chat error", err);
@@ -793,6 +828,7 @@ function createConnectionState(send: (event: ServerEvent) => void): ConnState {
           })
           .finally(() => {
             state.turnActive = false;
+            activeTurnCount--;
           });
       }
     }

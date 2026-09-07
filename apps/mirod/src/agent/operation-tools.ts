@@ -335,6 +335,17 @@ export function buildOperationTools(ctx: OperationToolContext) {
       },
     },
     {
+      name: "set_auto_update",
+      label: "Set auto-update",
+      description:
+        "Turn autonomous update installation on or off. Miro always checks daily and notifies when an update is available; with auto-install ON, it also installs a newer stable version on its own WHEN THE BOX IS QUIESCENT (no operation or chat/learn turn in flight), relying on the health auto-revert. OFF (default) means it only notifies and you run install_update. Strict mode forces this off.",
+      parameters: Type.Object({ enabled: Type.Boolean({ description: "true = autonomous install when quiescent; false = notify only (default)." }) }),
+      execute: async (_id: string, params: { enabled: boolean }) => {
+        ctx.setSetting?.("update.auto_install", params.enabled ? "true" : "false");
+        return textResult({ autoInstall: params.enabled });
+      },
+    },
+    {
       name: "ntfy_install",
       label: "Self-host ntfy",
       description:
