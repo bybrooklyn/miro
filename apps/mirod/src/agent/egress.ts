@@ -1,3 +1,4 @@
+import type { Context, Model } from "@miro/model-client";
 import { redactSecretsInText, isLocalOrPrivateUrl } from "../operations/classify";
 
 // Sensitivity-tiered egress (PLAN.md §2367): before any message content leaves for an LLM provider,
@@ -100,4 +101,63 @@ export function scrubText(text: string, redactInfra: boolean): Scrubbed {
 export function classifyContentTier(text: string): Tier {
   const s = scrubText(text, false);
   return s.secretFound ? "secret" : s.infra.count > 0 ? "internal" : "public";
+}
+
+export interface EgressAudit {
+  provider: string;
+  /** What the provider was cleared to receive. */
+  trust: Tier;
+  /** What the content actually carried (before redaction). */
+  contentTier: Tier;
+  secretRedacted: boolean;
+  infraRedacted: number;
+  redactedTypes: string[];
+}
+
+/** Scrub every text field in a message's content (string form, or the `text` of each TextContent in
+ * the array form); image parts and tool-call structure pass through untouched. ponytail: tool-call
+ * arguments (JSON in assistant messages) are not walked in slice 1 - they are the agent's own
+ * generated commands, already classified on the way to execution. */
+function scrubContent(content: unknown, scrub: (t: string) => string): unknown {
+  if (typeof content === "string") return scrub(content);
+  if (Array.isArray(content)) {
+    return content.map((p) =>
+      p && typeof p === "object" && (p as { type?: unknown }).type === "text" && typeof (p as { text?: unknown }).text === "string"
+        ? { ...(p as object), text: scrub((p as { text: string }).text) }
+        : p,
+    );
+  }
+  return content;
+}
+
+/** The egress gate agent-core's transformProviderContext hook calls: scrub the whole outbound context
+ * to the tier the target provider is cleared for, and report what happened for the audit. Secret-shaped
+ * strings are always removed; infra identifiers are removed only for a provider below `internal` trust. */
+export function gateEgress(context: Context, model: Model, getSetting: (k: string) => string | null): { context: Context; audit: EgressAudit } {
+  const trust = providerTrust(model.provider, model.baseUrl, getSetting);
+  const redactInfra = TIER_RANK[trust] < TIER_RANK.internal;
+  let secretFound = false;
+  let infraCount = 0;
+  const types = new Set<string>();
+  const scrub = (t: string): string => {
+    const s = scrubText(t, redactInfra);
+    if (s.secretFound) secretFound = true;
+    infraCount += s.infra.count;
+    for (const ty of s.infra.types) types.add(ty);
+    return s.text;
+  };
+  const systemPrompt = context.systemPrompt?.map(scrub);
+  const messages = context.messages.map((m) => ({ ...m, content: scrubContent((m as { content: unknown }).content, scrub) }) as typeof m);
+  const contentTier: Tier = secretFound ? "secret" : infraCount > 0 ? "internal" : "public";
+  return {
+    context: { ...context, systemPrompt, messages },
+    audit: {
+      provider: model.provider,
+      trust,
+      contentTier,
+      secretRedacted: secretFound,
+      infraRedacted: redactInfra ? infraCount : 0,
+      redactedTypes: [...(secretFound ? ["secret"] : []), ...(redactInfra ? [...types] : [])],
+    },
+  };
 }

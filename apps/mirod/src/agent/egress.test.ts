@@ -1,5 +1,16 @@
 import { test, expect } from "bun:test";
-import { providerTrust, scrubText, classifyContentTier, PROVIDER_TIERS_SETTING, type Tier } from "./egress";
+import { providerTrust, scrubText, classifyContentTier, gateEgress, PROVIDER_TIERS_SETTING, type Tier } from "./egress";
+import type { Context, Model } from "@miro/model-client";
+
+const model = (provider: string, baseUrl: string) => ({ provider, baseUrl }) as unknown as Model;
+const ctx = (): Context =>
+  ({
+    systemPrompt: ["you manage the box at 10.0.0.5"],
+    messages: [
+      { role: "user", content: "restart jellyfin, password: hunter2", timestamp: 0 },
+      { role: "assistant", content: [{ type: "text", text: "checking nas.local" }], timestamp: 0 },
+    ],
+  }) as unknown as Context;
 
 const noSetting = () => null;
 const setting = (map: Record<string, string>) => (k: string) => map[k] ?? null;
@@ -56,4 +67,23 @@ test("classifyContentTier: secret > internal > public", () => {
   expect(classifyContentTier("token=ghp_abcdefgh12345678")).toBe("secret");
   expect(classifyContentTier("the box is at 10.1.2.3")).toBe("internal");
   expect(classifyContentTier("please summarize this article about cats")).toBe("public");
+});
+
+test("gateEgress to a public provider scrubs secrets AND infra across the whole context", () => {
+  const { context, audit } = gateEgress(ctx(), model("google", "https://generativelanguage.googleapis.com"), () => null);
+  const blob = JSON.stringify(context);
+  expect(blob).not.toContain("hunter2");
+  expect(blob).not.toContain("10.0.0.5"); // systemPrompt infra redacted
+  expect(blob).not.toContain("nas.local"); // assistant TextContent infra redacted
+  expect(audit).toMatchObject({ provider: "google", trust: "public", contentTier: "secret", secretRedacted: true });
+  expect(audit.infraRedacted).toBeGreaterThanOrEqual(2);
+});
+
+test("gateEgress to an internal (no-train) provider keeps infra but still scrubs secrets", () => {
+  const { context, audit } = gateEgress(ctx(), model("openai", "https://api.openai.com/v1"), () => null);
+  const blob = JSON.stringify(context);
+  expect(blob).not.toContain("hunter2"); // secret always gone
+  expect(blob).toContain("10.0.0.5"); // infra kept for a no-train provider
+  expect(blob).toContain("nas.local");
+  expect(audit).toMatchObject({ trust: "internal", secretRedacted: true, infraRedacted: 0 });
 });
