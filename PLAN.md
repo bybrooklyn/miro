@@ -3262,3 +3262,46 @@ Gate: `just check` 13/13, `just test` 477 pass / 0 fail.
 terminal flow-control on some terminals - a trivial key-choice fix; the wire + daemon are verified);
 no implicit/behavioral inference (deliberately - the explicit tap is the reliable signal); a
 Dreaming-style "you keep quieting X, demote it?" suggestion is a natural later add on top of the offset.
+
+### 5.44 Self-update slice 3: auto-check + confirm, opt-in quiescence-gated auto-install (2026-09-07)
+
+Fourth and final slice of the setup program - finishes self-update (§5.16/§5.32/§5.36 built the core +
+the signed-release transport). Default: Miro checks daily and notifies; you confirm the install.
+Opt-in: it installs autonomously when the box is quiescent.
+
+- **`isQuiescent(db, anyTurnActive)`** (`self-update/index.ts`): true when no operation is `applying`
+  (durable, from the operations store) AND no chat/learn turn is in flight - tracked by an
+  `activeTurnCount` bumped around the per-connection chat handler in `index.ts`. Gates ONLY the
+  autonomous auto-install; a human-confirmed `install_update` never consults it.
+- **Daily update-check** in the 24h `setInterval` cluster (`index.ts` `updateCheckTick`): builds the
+  fetch deps (repo/channel/token/verifier), `checkForUpdate` (verify-before-report), and on a newer
+  signed release notifies `worth_knowing` "Update available: X → Y" (source `update`). No token -> no
+  check. With `update.auto_install` on AND `mode.strict` off AND `isQuiescent`, it `fetchAndStage`s (if
+  not local) + `stageUpdate`s autonomously - the §5.32 boot-time health auto-revert is the safety net.
+- **`set_auto_update` tool** toggles `update.auto_install` (default off). **"automatic update checks"**
+  joins the well-run baseline in `setup/status.ts` (gap = no `provider.github` token), so the magic
+  setup proposal (§5.42) now proposes it too.
+
+**Live-verified on the VM (default path):** at boot the check fetched the real release, verified its
+Sigstore signature offline, and notified "Update available: 0.0.1 → 0.0.2" - with no auto-install
+(default off), `current` unchanged at `versions/0.0.1` (dev loop intact). The opt-in auto-install
+gating is unit-tested (`isQuiescent`: an active turn or an `applying` op blocks it, else quiescent); a
+real autonomous install was deliberately NOT triggered to avoid repointing `current` off the dev
+symlink (the §5.32 gotcha). Gate: `just check` 13/13, `just test` 478 pass / 0 fail.
+
+**Not done (later):** the migration counter / `pinned_version` (still low-value at this scale); a
+dedicated interactive `update_available` TUI screen (the notice + the existing install_update confirm
+cover it); a compiled single-file binary (pending the `@miro/native` story, §5.16).
+
+---
+
+## The "secure, fast, magical setup" program - complete (2026-09-07)
+
+All four slices shipped, each live-verified and landed as its own PR: §5.41 secure secret intake +
+strict mode (PR #15), §5.42 magic setup proposal + `mirod status` (PR #16), §5.43 quiet-competence
+tiers (PR #17), §5.44 self-update slice 3 (PR #18). North star (owner): *deploy Miro and manage your
+server from anywhere; crazy-capable but amazing to use; feels like magic.* The result: a secret can no
+longer leak into the transcript (masked prompt / CLI / drop-file / config-paste parser + a warn/refuse
+guard), Miro proactively proposes the well-run baseline as one approvable plan, the owner tunes noise
+per class with one tap, and updates check daily (auto-install opt-in) - all governed by one opt-in
+`mode.strict` for those who want maximum oversight.
