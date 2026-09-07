@@ -19,13 +19,14 @@ UNIT="${1:-$DIR/../../apps/mirod/mirod.service}"
   [ -e /opt/miro/current ] || sudo ln -sfn /opt/miro/versions/0.0.1 /opt/miro/current
   sudo cp /home/miro/miro/apps/mirod/preflight.mjs /opt/miro/preflight.mjs'
 
-# The main wrapper: resolve current, export its name as MIRO_VERSION, exec bun on it.
+# The main wrapper: resolve current, export its name as MIRO_VERSION, exec bun on it. "$@" is
+# forwarded so CLI subcommands work (`mirod secret set <ref>`); the daemon start passes no args.
 "$DIR/ssh.sh" 'sudo tee /usr/local/bin/mirod >/dev/null && sudo chmod 755 /usr/local/bin/mirod' <<'EOF'
 #!/bin/sh
 cur="$(readlink /opt/miro/current)"
 export MIRO_VERSION="${cur##*/}"
 dir="$(readlink -f /opt/miro/current)"
-cd "$dir/apps/mirod" && exec /home/miro/.bun/bin/bun run src/index.ts
+cd "$dir/apps/mirod" && exec /home/miro/.bun/bin/bun run src/index.ts "$@"
 EOF
 
 # The preflight wrapper (ExecStartPre): a stable path that runs the fixed preflight.mjs under bun.
