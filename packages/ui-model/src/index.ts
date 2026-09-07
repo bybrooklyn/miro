@@ -75,7 +75,7 @@ export type Block =
       result?: { outcome: "committed" | "rolledback" | "applied_unverified"; message: string };
       at: number;
     }
-  | { kind: "notice"; id: string; level: "info" | "warn" | "credential"; text: string; at: number };
+  | { kind: "notice"; id: string; level: "info" | "warn" | "credential"; text: string; source?: string; at: number };
 
 export type QuestionKind = "plan_confirm" | "plan_change" | "op_confirm" | "lifeline_confirm" | "ask" | "other";
 
@@ -235,7 +235,7 @@ export function reduce(state: UiState, event: ServerEvent, now = Date.now()): Ui
     }
 
     case "notice": {
-      const s = push(state, { kind: "notice", id: `n${state.seq + 1}`, level: event.level, text: event.text, at: now });
+      const s = push(state, { kind: "notice", id: `n${state.seq + 1}`, level: event.level, text: event.text, source: event.source, at: now });
       return { ...s, seq: s.seq + 1 };
     }
 

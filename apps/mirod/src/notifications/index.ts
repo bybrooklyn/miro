@@ -23,9 +23,34 @@ export function reachesPhone(tier: NotifyTier): boolean {
 
 const LEVEL: Record<NotifyTier, "info" | "warn"> = { routine: "info", worth_knowing: "info", needs_attention: "warn" };
 
-/** A notification as the client-facing notice line (the existing NoticeEvent - no protocol change). */
-export function noticeFor(n: { tier: NotifyTier; title: string; body: string }): Extract<ServerEvent, { type: "notice" }> {
-  return { type: "notice", level: LEVEL[n.tier], text: n.body ? `${n.title}\n${n.body}` : n.title };
+// Quiet-competence tiers (PLAN.md §quiet-competence): the owner's "quiet this kind" feedback tiers a
+// notification CLASS down over time, "keep" resets it. Stored as a per-source demote offset; applied
+// in notify() before the phone/broadcast decision. Most→least attention:
+const TIER_ORDER: NotifyTier[] = ["needs_attention", "worth_knowing", "routine"];
+export function demoteTier(tier: NotifyTier, steps: number): NotifyTier {
+  if (steps <= 0) return tier;
+  const i = TIER_ORDER.indexOf(tier);
+  return TIER_ORDER[Math.min(TIER_ORDER.length - 1, i + steps)]!;
+}
+const MAX_DEMOTE = 2; // needs_attention -> worth_knowing -> routine
+function demoteKey(source: string): string {
+  return `notify.demote.${source}`;
+}
+
+/** A notification as the client-facing notice line. Carries `source` so the client can offer
+ * "quiet this kind" feedback (notice_feedback). */
+export function noticeFor(n: { tier: NotifyTier; title: string; body: string; source?: string }): Extract<ServerEvent, { type: "notice" }> {
+  return { type: "notice", level: LEVEL[n.tier], text: n.body ? `${n.title}\n${n.body}` : n.title, source: n.source };
+}
+
+/** Apply "quiet this kind" / "keep" feedback: quiet tiers the class down one step (capped), keep
+ * resets it to its natural tier. Returns the new offset, or null when the bus is unconfigured. */
+export function applyNoticeFeedback(source: string, action: "quiet" | "keep"): { source: string; demote: number } | null {
+  if (!configured) return null;
+  const cur = Number(configured.getSetting(demoteKey(source)) ?? 0) || 0;
+  const next = action === "quiet" ? Math.min(MAX_DEMOTE, cur + 1) : 0;
+  configured.setSetting(demoteKey(source), String(next));
+  return { source, demote: next };
 }
 
 export interface NotifyDeps {
@@ -63,12 +88,15 @@ export function resetNotifications(): void {
  * connected TUIs, and phones the needs_attention ones. */
 export function notify(input: Notification): void {
   if (!configured) return;
-  const { db, broadcast, sinks } = configured;
+  const { db, broadcast, sinks, getSetting } = configured;
   try {
+    // Learned per-class tier (§quiet-competence): the owner's "quiet this kind" feedback tiers this
+    // source down; needs_attention can become worth_knowing (no phone) or routine (log only).
+    const demote = Number(getSetting(demoteKey(input.source)) ?? 0) || 0;
     // Redaction choke point (same guarantee memory's remember() gives): a title or body must never
     // carry a secret to a phone, the TUI, or the store - a repair error, a drift message, or a
     // model-written notify could contain one. Everything downstream uses the redacted copy.
-    const n: Notification = { ...input, title: redactSecretsInText(input.title), body: redactSecretsInText(input.body) };
+    const n: Notification = { ...input, tier: demoteTier(input.tier, demote), title: redactSecretsInText(input.title), body: redactSecretsInText(input.body) };
     const id = crypto.randomUUID();
     // Decide the phone push BEFORE persisting: recentByTitle must not match the row we are about to
     // insert, or every needs_attention would dedup against itself and never reach a sink (found

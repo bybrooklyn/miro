@@ -1,7 +1,7 @@
 import { test, expect, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
 import type { ServerEvent } from "@miro/protocol";
-import { configureNotifications, notify, noticeFor, reachesPhone, replayUndelivered, resetNotifications, channelStatus } from "./index";
+import { configureNotifications, notify, noticeFor, reachesPhone, replayUndelivered, resetNotifications, channelStatus, demoteTier, applyNoticeFeedback } from "./index";
 import { listUndelivered } from "./store";
 
 afterEach(() => resetNotifications());
@@ -36,6 +36,39 @@ test("reachesPhone: only needs_attention", () => {
 test("noticeFor: tier maps to level, body joins under the title", () => {
   expect(noticeFor({ tier: "needs_attention", title: "T", body: "B" })).toEqual({ type: "notice", level: "warn", text: "T\nB" });
   expect(noticeFor({ tier: "worth_knowing", title: "T", body: "" })).toEqual({ type: "notice", level: "info", text: "T" });
+});
+
+test("demoteTier: steps down the tier ladder, capped at routine", () => {
+  expect(demoteTier("needs_attention", 0)).toBe("needs_attention");
+  expect(demoteTier("needs_attention", 1)).toBe("worth_knowing");
+  expect(demoteTier("needs_attention", 2)).toBe("routine");
+  expect(demoteTier("needs_attention", 5)).toBe("routine");
+  expect(demoteTier("worth_knowing", 1)).toBe("routine");
+});
+
+test("quiet-competence: quieting a class tiers its notifications down; keep resets; other classes unaffected", () => {
+  const { db, sent } = harness(1);
+  const lastTier = () => (db.query("SELECT tier FROM notifications ORDER BY rowid DESC LIMIT 1").get() as { tier: string }).tier;
+  notify({ tier: "needs_attention", title: "ups a", body: "", source: "ups", at: Date.now() });
+  expect(lastTier()).toBe("needs_attention");
+
+  applyNoticeFeedback("ups", "quiet"); // -> worth_knowing
+  notify({ tier: "needs_attention", title: "ups b", body: "", source: "ups", at: Date.now() });
+  expect(lastTier()).toBe("worth_knowing");
+
+  applyNoticeFeedback("ups", "quiet"); // -> routine
+  const before = sent.length;
+  notify({ tier: "needs_attention", title: "ups c", body: "", source: "ups", at: Date.now() });
+  expect(lastTier()).toBe("routine");
+  expect(sent.length).toBe(before); // routine never broadcasts
+
+  // a different class is untouched by ups's demotion
+  notify({ tier: "needs_attention", title: "reboot x", body: "", source: "reboot", at: Date.now() });
+  expect(lastTier()).toBe("needs_attention");
+
+  applyNoticeFeedback("ups", "keep"); // reset ups
+  notify({ tier: "needs_attention", title: "ups d", body: "", source: "ups", at: Date.now() });
+  expect(lastTier()).toBe("needs_attention");
 });
 
 test("notify persists and broadcasts; with a client connected the row is marked delivered", () => {

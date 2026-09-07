@@ -42,7 +42,7 @@ import { maybeTriggerRepair, reprobeExtensions, type RepairTrigger } from "./ext
 import { requiresArguments } from "./extensions/validate";
 import { createCodexAuth, importCodexCredentialFromCli, loginCodex } from "./agent/codex-auth";
 import { run } from "./inventory/exec";
-import { configureNotifications, notify, replayUndelivered } from "./notifications";
+import { configureNotifications, notify, replayUndelivered, applyNoticeFeedback } from "./notifications";
 import { runBackup, pushBackup, type BackupDeps } from "./backup";
 import { blessOrRevertUpdate } from "./self-update";
 import { computeSeverity } from "./operations/severity";
@@ -772,6 +772,12 @@ function createConnectionState(send: (event: ServerEvent) => void): ConnState {
     } else if (msg.type === "memory_forget") {
       const changed = forget(db, msg.id);
       send({ type: "reply", text: changed > 0 ? "Forgotten." : "Nothing matched that id." });
+    } else if (msg.type === "notice_feedback") {
+      // Quiet-competence (§quiet-competence): "quiet this kind" tiers a notification class down over
+      // time; "keep" resets it. A one-line confirmation, no model turn.
+      const r = applyNoticeFeedback(msg.source, msg.action);
+      const label = msg.action === "quiet" ? (r && r.demote >= 2 ? `${msg.source} notifications are now log-only` : `${msg.source} notifications tiered down`) : `${msg.source} notifications reset to normal`;
+      send({ type: "notice", level: "info", text: label });
     } else if (msg.type === "chat") {
       // Serialize turns per connection: handleChat is fire-and-forget, so two back-to-back chats
       // would run overlapping turns racing on this mutable ConnState (state.agent, pendingAnswers,

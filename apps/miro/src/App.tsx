@@ -32,6 +32,17 @@ export function App() {
     else if (key.name === "pagedown") box.scrollTop += page;
     else if (!choosing && key.name === "up") box.scrollTop -= SCROLL_STEP;
     else if (!choosing && key.name === "down") box.scrollTop += SCROLL_STEP;
+    // Quiet-competence (§quiet-competence): ctrl+q tiers down the most recent notification's class,
+    // ctrl+k resets it. Miro learns which classes to quiet from this feedback.
+    else if (key.ctrl && (key.name === "q" || key.name === "k")) {
+      for (let i = state.blocks.length - 1; i >= 0; i--) {
+        const b = state.blocks[i];
+        if (b && b.kind === "notice" && b.source) {
+          send({ type: "notice_feedback", source: b.source, action: key.name === "q" ? "quiet" : "keep" });
+          break;
+        }
+      }
+    }
   });
 
   // A local line in the transcript, for things the client itself has to say (no daemon involved).

@@ -85,6 +85,10 @@ export interface NoticeEvent {
   type: "notice";
   level: "info" | "warn" | "credential";
   text: string;
+  /** The notification's class (ups/reboot/operation/repair/update/agent/...) - lets the client offer
+   * "quiet this kind" feedback (notice_feedback) so Miro learns which classes to tier down (§quiet-
+   * competence). Absent on notices with no class (e.g. a credential). */
+  source?: string;
 }
 
 /** Phase progress of a running operation, attached to its operation_plan by id. */
@@ -212,13 +216,23 @@ export interface MemoryForgetMessage {
 // decides to do on its own mid-request (the app_learn tool), never a command the user has to know
 // about. A /learn slash command existed briefly in Stage C slice 2 and was removed in Stage D.
 
+/** "quiet this kind" / "keep" feedback on a notification class (§quiet-competence): Miro learns to
+ * tier a class down when the owner keeps quieting it, or resets it on "keep". `source` is the class
+ * from the NoticeEvent it acts on. */
+export interface NoticeFeedbackMessage {
+  type: "notice_feedback";
+  source: string;
+  action: "quiet" | "keep";
+}
+
 export type ClientMessage =
   | ChatMessage
   | AnswerMessage
   | ProviderSetupMessage
   | PairRequestMessage
   | MemoryListMessage
-  | MemoryForgetMessage;
+  | MemoryForgetMessage
+  | NoticeFeedbackMessage;
 
 /** ALPN identifying the miro wire protocol to Iroh - bump the suffix on any breaking wire change. */
 export const IROH_ALPN = "miro/mirod/1";
