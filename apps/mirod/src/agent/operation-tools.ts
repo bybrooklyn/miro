@@ -8,6 +8,7 @@ import { rebootKind } from "../operations/kinds/reboot";
 import { searxngInstallKind, searxngBaseUrl, DEFAULT_SEARXNG_PORT, SEARXNG_SETTING } from "../operations/kinds/searxng-install";
 import { ntfyInstallKind, resolveNtfyBaseUrl, generateTopic, ntfyLocalUrl, DEFAULT_NTFY_PORT, NTFY_URL_SETTING, NTFY_TOPIC_SETTING } from "../operations/kinds/ntfy-install";
 import { stageUpdate, availableVersions, currentVersion } from "../self-update";
+import { UPDATE_CHANNEL_SETTING } from "../self-update/config";
 import { computeSeverity } from "../operations/severity";
 import { runPrivileged } from "../inventory/exec";
 import { shellCommandKind, takeOutput as takeShellOutput, type ShellCommandParams } from "../operations/kinds/shell-command";
@@ -54,6 +55,10 @@ const searxngInstallParams = Type.Object({
 const installUpdateParams = Type.Object({
   toVersion: Type.String({ description: "The staged version to update to (a directory under the versions root, e.g. 0.0.2)." }),
   reason: Type.String({ description: "Why, in one line - shown to the owner as the goal." }),
+});
+
+const setUpdateChannelParams = Type.Object({
+  channel: Type.Enum(["stable", "beta"], { description: "stable = released versions only; beta = also prereleases. Takes effect on the next update check." }),
 });
 
 const ntfyInstallParams = Type.Object({
@@ -193,6 +198,17 @@ export function buildOperationTools(ctx: OperationToolContext) {
         // notification on the client's reconnect (self-update/blessOrRevertUpdate at the next boot).
         const result = await stageUpdate({ db: ctx.db, computeSeverity, restart: () => runPrivileged(["systemctl", "restart", "mirod"]) }, params.toVersion);
         return textResult(result.ok ? { installing: true, toVersion: params.toVersion } : { installed: false, reason: result.reason });
+      },
+    },
+    {
+      name: "set_update_channel",
+      label: "Set update channel",
+      description:
+        "Choose which self-update channel Miro follows: stable (released versions only) or beta (also prereleases). Takes effect on the next update check.",
+      parameters: setUpdateChannelParams,
+      execute: async (_id: string, params: { channel: "stable" | "beta" }) => {
+        ctx.setSetting?.(UPDATE_CHANNEL_SETTING, params.channel);
+        return textResult({ channel: params.channel });
       },
     },
     {
