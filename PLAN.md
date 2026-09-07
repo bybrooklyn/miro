@@ -2918,3 +2918,28 @@ filtering); a hard block (slice 1 redacts to fit, never refuses); per-key free-v
 walking tool-call ARGUMENT JSON (only text content + system prompt are scrubbed today); logging EVERY
 egress rather than only the sensitivity-bearing ones. Gate after: `just check` 13/13, `just test`
 427 pass / 0 fail.
+
+### 5.34 llm7 - the keyless $0 last-resort floor (2026-09-06)
+
+Miro's agent loop now runs with zero setup and no account when nothing else is connected, via llm7.io
+(anonymous, OpenAI-compatible). Branch `free-provider-llm7`, live-verified. This is the §2378 shape
+(NOT the old §2252 "llm7 as default"): a last resort behind Codex, a paid key, and Ollama.
+
+`apps/mirod/src/agent/llm7.ts` clones `ollama.ts` - `registerLlm7IfReachable` probes `GET /v1/models`
+and registers only llm7's **free, tool-capable** models (`gpt-oss` 131k, `minimax-m2.7` 180k; the agent
+needs tool calling), keyless via a placeholder bearer llm7 ignores. `apps/mirod/src/index.ts`: registered
+at boot ONLY when nothing else is connected (no external probe on a configured daemon); the terminal
+fallback inside `pickModelOrProbeOllama` (after the Ollama re-probe); added to `hasProvider` so health
+reads healthy when it is the only provider.
+
+**The load-bearing rule:** llm7 is NEVER a `pickDefaultModel` candidate. A `cost:0` model would beat
+every paid provider under the default `cheapest` policy (the "$0 even when you paid" bug §2378 warns of),
+so it is selected directly, out of band. Unit-tested (a registered cost:0 llm7 is never picked; a paid
+provider still wins) + a network-guarded real-endpoint registration test. Egress needed no change - a new
+provider id with a public baseUrl already fail-closes to `public` (§5.33), redacting infra before it,
+and that was already asserted.
+
+**Live-verified** on the VM with an isolated no-provider daemon (fresh `MIRO_DIR`, no Codex/key/Ollama):
+boot logged "llm7 registered as the keyless last-resort provider"; a real chat turn selected `gpt-oss`,
+streamed a reply through llm7's real API, and reported `status healthy model=gpt-oss` - the whole
+zero-config path. Gate: `just check` 13/13, `just test` 445 pass / 0 fail.
