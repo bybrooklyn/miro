@@ -52,9 +52,14 @@ jobs:
           echo "CHANNEL=$CHANNEL" >> "$GITHUB_ENV"
 
       - name: Sign manifest.json -> manifest.json.sigstore
+        # Install sigstore in an isolated dir - the repo root's package.json uses Bun `workspace:*`
+        # deps that npm cannot parse. ESM resolves `sigstore` from the script's own dir node_modules.
         run: |
-          npm install --no-save sigstore@5.0.0
-          node scripts/sign-manifest.mjs
+          S="$RUNNER_TEMP/signer"
+          mkdir -p "$S"
+          (cd "$S" && npm init -y >/dev/null 2>&1 && npm install sigstore@5.0.0 >/dev/null 2>&1)
+          cp scripts/sign-manifest.mjs "$S/sign.mjs"
+          MANIFEST="$PWD/dist/manifest.json" BUNDLE="$PWD/dist/manifest.json.sigstore" node "$S/sign.mjs"
 
       - name: Create Release and upload assets
         env:
