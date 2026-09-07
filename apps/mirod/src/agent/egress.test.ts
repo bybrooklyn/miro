@@ -20,15 +20,17 @@ test("providerTrust: on-box is secret, no-train APIs internal, everything else p
   expect(providerTrust("anthropic", "https://api.anthropic.com", noSetting)).toBe("internal");
   expect(providerTrust("openai", "https://api.openai.com/v1", noSetting)).toBe("internal");
   expect(providerTrust("groq", "https://api.groq.com", noSetting)).toBe("internal");
+  expect(providerTrust("openai-codex", "https://chatgpt.com/backend-api", noSetting)).toBe("internal"); // the chosen primary brain (§5.33)
   expect(providerTrust("google", "https://generativelanguage.googleapis.com", noSetting)).toBe("public"); // free tier may train
   expect(providerTrust("some-random-free-endpoint", "https://llm7.io", noSetting)).toBe("public");
 });
 
 test("a private baseUrl is secret whatever the provider id; a setting can override a public default", () => {
   expect(providerTrust("openai", "http://192.168.1.5:8000/v1", noSetting)).toBe("secret"); // pointed on-box
-  const s = setting({ [PROVIDER_TIERS_SETTING]: JSON.stringify({ openrouter: "internal", google: "public" }) });
+  const s = setting({ [PROVIDER_TIERS_SETTING]: JSON.stringify({ openrouter: "internal", google: "public", "openai-codex": "public" }) });
   expect(providerTrust("openrouter", "https://openrouter.ai/api", s)).toBe("internal");
   expect(providerTrust("google", "https://generativelanguage.googleapis.com", s)).toBe("public");
+  expect(providerTrust("openai-codex", "https://chatgpt.com/backend-api", s)).toBe("public"); // owner can tighten it back
 });
 
 test("scrubText redacts private topology for a public provider, keeps public addresses", () => {

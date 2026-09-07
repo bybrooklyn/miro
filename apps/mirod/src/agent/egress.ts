@@ -22,6 +22,11 @@ const DEFAULT_PROVIDER_TRUST: Record<string, Tier> = {
   ollama: "secret", // fully on-box
   anthropic: "internal", // API inputs are not trained on (PLAN.md §2368)
   openai: "internal",
+  // The Codex/ChatGPT-OAuth login - Miro's usual primary model. Trusted as the brain the owner
+  // deliberately chose: a sysadmin agent cannot reason about the box with its topology redacted, and
+  // the moat's real job is secondary/untrusted endpoints, not the primary model (owner decision,
+  // §5.33 live-verify). Tighten to public via egress.provider_tiers if ChatGPT training is a concern.
+  "openai-codex": "internal",
   groq: "internal", // verified no-train, the only cleared free option (PLAN.md §2369)
 };
 
