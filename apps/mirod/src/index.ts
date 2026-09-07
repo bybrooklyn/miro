@@ -17,6 +17,7 @@ import { getBundledModel } from "@miro/model-catalog";
 import { createMiroAgent, pickDefaultModel, runTurn, PROVIDER_CATALOG, ROUTING_POLICIES, type RoutingPolicy } from "./agent";
 import { createModelRegistry } from "./agent/models";
 import { registerOllamaIfReachable } from "./agent/ollama";
+import { registerLlm7IfReachable, LLM7_PROVIDER } from "./agent/llm7";
 import { ensureTimelineTable, recordEvent } from "./timeline";
 import { createSecretStore } from "./secrets";
 import { generateIrohSecretKey, startIrohEndpoint, ticketFor, nodeIdOf, acceptLoop } from "./iroh";
@@ -163,6 +164,12 @@ const models = createModelRegistry(getStoredKey, codexAuth.apiKey);
 if (await registerOllamaIfReachable(models)) {
   console.log("[mirod] Ollama detected - its models are available with no key needed");
 }
+// llm7 (§2378): the keyless $0 floor. Registered at boot ONLY when nothing else is connected, so a
+// configured daemon never probes an external endpoint at start, and health reads healthy when llm7 is
+// the only provider. It is never a pickDefaultModel candidate (a cost:0 model would win `cheapest`).
+if (!codexAuth.isConnected() && !pickDefaultModel(models, getStoredKey, routingPolicy()) && (await registerLlm7IfReachable(models))) {
+  console.log("[mirod] llm7 registered as the keyless last-resort provider (no key, rate-limited)");
+}
 
 /** Ollama is registered at boot only if it answered then. When nothing at all is connected, one
  * more 1.5s probe before giving up makes an Ollama started after the daemon usable without a
@@ -170,7 +177,13 @@ if (await registerOllamaIfReachable(models)) {
 async function pickModelOrProbeOllama(policy: RoutingPolicy): Promise<Model<any> | null> {
   const picked = pickDefaultModel(models, getStoredKey, policy);
   if (picked) return picked;
-  return (await registerOllamaIfReachable(models)) ? pickDefaultModel(models, getStoredKey, policy) : null;
+  const afterOllama = (await registerOllamaIfReachable(models)) ? pickDefaultModel(models, getStoredKey, policy) : null;
+  if (afterOllama) return afterOllama;
+  // Terminal $0 floor (§2378): llm7, keyless. Selected DIRECTLY, never through pickDefaultModel - its
+  // cost:0 would otherwise beat every paid provider under `cheapest`. Re-probe once if not yet registered.
+  const llm7 = models.getModels(LLM7_PROVIDER);
+  if (llm7.length) return llm7[0]!;
+  return (await registerLlm7IfReachable(models)) ? (models.getModels(LLM7_PROVIDER)[0] ?? null) : null;
 }
 
 // The capability layer (PLAN.md §5.14): web.search routed over an Ollama cloud key, a self-hosted
@@ -399,7 +412,7 @@ async function resolveReflectionModel(): Promise<Model<any> | null> {
 /** "degraded" is the one health signal the daemon can honestly produce today: no AI provider is
  * connected, so it can only do the fixed things. The client already renders it (audit #26). */
 function hasProvider(): boolean {
-  return codexAuth.isConnected() || pickDefaultModel(models, getStoredKey, routingPolicy()) !== null;
+  return codexAuth.isConnected() || pickDefaultModel(models, getStoredKey, routingPolicy()) !== null || models.getModels(LLM7_PROVIDER).length > 0;
 }
 
 function statusEvent(state: ConnState): ServerEvent {
