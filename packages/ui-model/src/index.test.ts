@@ -1,6 +1,7 @@
 import { test, expect } from "bun:test";
 import type { ServerEvent } from "@miro/protocol";
-import { initialState, reduce, userSent, answered, keyToAnswer, footerHints, secondsLeft, isQuiet, slashCommand, SLASH_COMMANDS, countSteps, type Block } from "./index";
+import { initialState, reduce, userSent, answered, keyToAnswer, footerHints, secondsLeft, isQuiet, slashCommand, SLASH_COMMANDS, countSteps, operationDetails, type Block } from "./index";
+import type { OperationPlanEvent } from "@miro/protocol";
 
 // Drives the reducer with the event sequence a real "set up jellyfin" turn produces (shape taken
 // from the live acceptance run on the dev VM), asserting the transcript a renderer would draw.
@@ -131,6 +132,22 @@ test("operation card: plan → confirm → progress → result", () => {
     s,
   );
   expect(s.blocks[0]).toMatchObject({ kind: "operation", phase: undefined, result: { outcome: "committed" } });
+});
+
+test("operationDetails decodes the untyped bag, incl. the audit #11 fields, with safe defaults", () => {
+  const base = { type: "operation_plan", id: "o1", goal: "g", summary: "s", autoApprove: false } as const;
+  const full = operationDetails({
+    ...base,
+    details: { class: "mutate", writes: ["/opt", "/etc"], network: true, irreversible: true, dryRunFidelity: "none", scopeEvidence: "unit says so" },
+  } as OperationPlanEvent);
+  expect(full).toMatchObject({ class: "mutate", writes: ["/opt", "/etc"], network: true, irreversible: true, effectUnknown: true, scopeEvidence: "unit says so" });
+
+  // No details bag: writes null (not []), booleans false, no throw.
+  const empty = operationDetails(base as OperationPlanEvent);
+  expect(empty.writes).toBeNull();
+  expect(empty.irreversible).toBe(false);
+  expect(empty.effectUnknown).toBe(false);
+  expect(empty.scopeEvidence).toBeUndefined();
 });
 
 test("lifeline question carries a countdown and k/r keys", () => {

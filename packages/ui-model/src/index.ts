@@ -19,6 +19,48 @@ export interface ActivityNode {
 
 export type Phase = OperationProgressEvent["phase"];
 
+/** The human label for each operation phase, shown while an operation runs. */
+export const PHASE_LABEL: Record<Phase, string> = {
+  capturing: "capturing state",
+  applying: "applying",
+  verifying: "verifying",
+  awaiting_reachability: "awaiting reachability",
+};
+
+/** An `OperationPlanEvent`'s untyped `details` bag, decoded into the typed fields a renderer draws.
+ * Keep this the single decode site: the wire shape lives here, not in a component. */
+export interface OperationDetails {
+  class?: string;
+  writes: string[] | null;
+  network?: boolean;
+  warning?: string;
+  command?: string;
+  diff?: string;
+  proposed?: string;
+  irreversible: boolean;
+  /** The engine's dry run proved nothing about the effect (audit #11: say so where it is approved). */
+  effectUnknown: boolean;
+  /** The plan's own justification for its write scope, the owner's to read (audit #11). */
+  scopeEvidence?: string;
+}
+
+export function operationDetails(plan: OperationPlanEvent): OperationDetails {
+  const d = (plan.details ?? {}) as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+  return {
+    class: str(d.class),
+    writes: Array.isArray(d.writes) ? d.writes.map(String) : null,
+    network: typeof d.network === "boolean" ? d.network : undefined,
+    warning: str(d.warning),
+    command: str(d.command),
+    diff: str(d.diff),
+    proposed: str(d.proposed),
+    irreversible: d.irreversible === true,
+    effectUnknown: d.dryRunFidelity === "none",
+    scopeEvidence: str(d.scopeEvidence),
+  };
+}
+
 export type Block =
   | { kind: "user"; id: string; text: string; at: number }
   | { kind: "assistant"; id: string; text: string; streaming: boolean; at: number }
