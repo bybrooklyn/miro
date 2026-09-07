@@ -15,6 +15,7 @@ import { getByKey, buildSummary } from "../memory/store";
 import { getExtension } from "../extensions/store";
 import { PROVIDER_CATALOG, resolveApiKey, runTurn } from "./model-utils";
 import { createTurnGuard, limitsFor, modelTier } from "./turn-guard";
+import { egressGate } from "./egress-store";
 
 // Re-exported so no existing import site (apps/mirod/src/index.ts, agent/worker.ts) needs to
 // change - see model-utils.ts's own comment for why these moved out of this file.
@@ -202,6 +203,7 @@ export function createMiroAgent(
     streamFn: (m, context, options) => streamSimple(m, context, reasoning ? { ...options, reasoning } : options),
     getApiKey: (m) => models.getApiKey(m),
     beforeToolCall: guard.beforeToolCall,
+    transformProviderContext: egressGate(operationCtx),
   });
   guard.attach(agent);
   return agent;

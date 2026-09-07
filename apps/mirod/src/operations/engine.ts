@@ -118,6 +118,8 @@ export interface OperationToolContext {
   /** The daemon's settings table, for an operation whose commit configures Miro itself (a
    * self-hosted SearXNG's base URL). */
   setSetting?: (key: string, value: string) => void;
+  /** Reading side of the settings table - e.g. the egress provider-tier overrides. */
+  getSetting?: (key: string) => string | null;
 }
 
 export async function runOperation<P, S>(
