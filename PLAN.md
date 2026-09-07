@@ -2972,3 +2972,32 @@ Unit-tested: reversible round-trip, the block throw, the `:free` cap with its pa
 
 **Not done (slice 3):** buffered restore in the live streaming-delta path (placeholders flash raw until
 finalization); walking tool-call ARGUMENT JSON; a true per-credential (not per-model-id) split.
+
+### 5.36 Self-update slice 2 - the signed GitHub-fetch, live-verified end to end (2026-09-07)
+
+The §5.16 slice-2 transport (built + unit-tested on the parked `self-update-fetch` branch, §5.33-era)
+is now LANDED on master and proven against a REAL signed release. The owner reversed the earlier "no
+release yet" - the public-Rekor build-provenance entry was accepted.
+
+- **Merged** `self-update-fetch` to master (one trivial conflict: both it and the egress work added
+  `getSetting` to `OperationToolContext`). Bumped `apps/mirod/package.json` to `0.0.2`.
+- **First release cut.** Tagged `v0.0.2`; `.github/workflows/release.yml` built the source tarball,
+  wrote `manifest.json`, keyless-signed it with Sigstore (ambient GHA OIDC), and published the release
+  with the three assets. **Found + fixed live:** the sign step's `npm install sigstore` failed in the
+  repo root - npm cannot parse Bun's `workspace:*` deps - so it now installs sigstore under
+  `RUNNER_TEMP` and runs the signer from there (ESM resolves it from the script's own node_modules);
+  paths passed by env. The re-run published `manifest.json` (758B), `manifest.json.sigstore` (9.4KB),
+  `miro-v0.0.2.tar.gz` (2.9MB). This is Miro's first entry in the public Rekor transparency log.
+- **Live-verified on the VM** (running `0.0.1`, token seeded as the secret `provider.github`):
+  `check_for_update` fetched the release, verified its Sigstore signature against the repo's
+  release-workflow identity offline, and reported `available 0.0.2, signature verified successfully`.
+  `install_update` then fetched the 2.9MB tarball, matched its sha256 to the signed manifest, unpacked +
+  `bun install`ed it into `/opt/miro/versions/0.0.2`, swapped `current`, restarted, and blessed at boot -
+  independently confirmed: `current -> versions/0.0.2`, the marker deleted, and a `worth_knowing`
+  notification "Updated to 0.0.2 - Healthy (severity 0 vs 0)". The whole fetch -> verify -> digest ->
+  stage -> swap -> bless loop, on a real signed release. (`current` repointed back to `0.0.1` after, to
+  keep the sync-and-restart dev loop working - the §5.32 gotcha.) Gate: `just check` 13/13,
+  `just test` 462 pass / 0 fail.
+
+**Not done (later):** stable/beta channel switching UI, the migration counter, quiescence-gated
+auto-install, the diagnostic buffer, a compiled binary.
