@@ -40,6 +40,7 @@ import { requiresArguments } from "./extensions/validate";
 import { createCodexAuth, importCodexCredentialFromCli, loginCodex } from "./agent/codex-auth";
 import { run } from "./inventory/exec";
 import { configureNotifications, notify, replayUndelivered } from "./notifications";
+import { runBackup, pushBackup, type BackupDeps } from "./backup";
 import { blessOrRevertUpdate } from "./self-update";
 import { computeSeverity } from "./operations/severity";
 
@@ -392,6 +393,35 @@ function discover(): void {
 discover();
 setInterval(discover, REPROBE_INTERVAL_MS);
 
+// Config backup (PLAN.md config-backup slice). A snapshot-commit rides every committed operation
+// (debounced so a burst is one commit); an after-failure push captures the state around a rollback;
+// a daily snapshot+push catches out-of-band drift and retries a push that was offline. All no-op
+// unless the owner enabled backup (backup.enabled). The shutdown kind's pre-shutdown flush reuses
+// pushBackup directly.
+const backupDeps: BackupDeps = { db, getSetting, setSetting, getSecret: (ref) => secretStore.getSecret(db, ref) };
+let backupTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleBackup(reason: string): void {
+  if (backupTimer) clearTimeout(backupTimer);
+  backupTimer = setTimeout(() => {
+    backupTimer = null;
+    runBackup(backupDeps, reason).catch((err) => console.error("[mirod] backup failed", err));
+  }, 5_000);
+}
+function afterOperation(info: { outcome: string; kind: string; goal: string }): void {
+  if (info.outcome === "committed") scheduleBackup(`after ${info.kind}: ${info.goal}`);
+  else if (info.outcome === "rolledback")
+    runBackup(backupDeps, `after failed ${info.kind}`)
+      .then(() => pushBackup(backupDeps))
+      .catch((err) => console.error("[mirod] backup (after failure) failed", err));
+}
+function dailyBackup(): void {
+  runBackup(backupDeps, "daily snapshot")
+    .then(() => pushBackup(backupDeps))
+    .catch((err) => console.error("[mirod] backup (daily) failed", err));
+}
+dailyBackup();
+setInterval(dailyBackup, REPROBE_INTERVAL_MS);
+
 /** The main chat agent's model. Same standing preference as codegen: a connected Codex login means
  * gpt-5.6-luna at medium reasoning, always - it was added precisely because Ollama's cloud quota
  * was too volatile to rely on, so it is never left as codegen-only while chat has nothing. With no
@@ -466,7 +496,7 @@ async function handleChat(text: string, send: (event: ServerEvent) => void, stat
     state.lastExtensionVersion !== extensionVersions ||
     state.lastContextBlock !== contextBlock
   ) {
-    const operationCtx: OperationToolContext = { db, send, waitForAnswer: (id) => waitForAnswer(state, id), cancelAnswer: (id) => state.pendingAnswers.delete(id), reflect, getSecret: (ref) => secretStore.getSecret(db, ref), setSecret: (ref, value) => secretStore.setSecret(db, ref, value), setSetting, getSetting };
+    const operationCtx: OperationToolContext = { db, send, waitForAnswer: (id) => waitForAnswer(state, id), cancelAnswer: (id) => state.pendingAnswers.delete(id), reflect, afterOperation, getSecret: (ref) => secretStore.getSecret(db, ref), setSecret: (ref, value) => secretStore.setSecret(db, ref, value), setSetting, getSetting };
     state.agent = createMiroAgent(models, defaultModel, getStoredKey, personality(), operationCtx, {
       hostMgr,
       setSecret: (ref, value) => secretStore.setSecret(db, ref, value),

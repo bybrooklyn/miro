@@ -111,6 +111,10 @@ export interface OperationToolContext {
   /** Optional: triggers a budgeted LLM reflection pass (plan §36-37). Fire-and-forget - never
    * awaited by the caller, never blocks the user-facing operation_result. */
   reflect?: (trigger: ReflectionTrigger) => void;
+  /** Optional: called on every terminal outcome (committed or rolledback) so the config-backup
+   * layer can snapshot after a change and push after a failure (PLAN.md config-backup slice).
+   * Fire-and-forget, wrapped so it can never throw into the operation result. */
+  afterOperation?: (info: { outcome: OperationOutcome; kind: string; goal: string }) => void;
   /** The agent's undo-then-retry ledger (operations/retry-ledger.ts, reset per turn by
    * agent/turn-guard.ts): a plan that already rolled back this turn is refused before anything is
    * planned, and past the cap every plan is, with the trajectory to report. */
@@ -154,6 +158,11 @@ export async function runOperation<P, S>(
       if (repeatFailureCount >= REPEAT_FAILURE_THRESHOLD) {
         reflect?.({ kind: kind.kind, goal, outcome, message, repeatFailureCount });
       }
+    }
+    try {
+      ctx.afterOperation?.({ outcome, kind: kind.kind, goal });
+    } catch {
+      // A backup hook must never break the operation result it rides on.
     }
   }
 

@@ -23,6 +23,8 @@ import { fileDeleteKind, type FileDeleteParams } from "../operations/kinds/file-
 import { httpMutationKind, takeOutput as takeHttpOutput, type HttpMutationParams } from "../operations/kinds/http-mutation";
 import { classifyCommand, redactSecretsInText } from "../operations/classify";
 import { runSandboxed } from "../operations/sandbox";
+import { runBackup, pushBackup, type BackupDeps, BACKUP_ENABLED, BACKUP_REPO, BACKUP_AUTH, BACKUP_AGE_RECIPIENT, BACKUP_EXTRA_PATHS } from "../backup";
+import { restoreFromBackup } from "../backup/restore";
 
 const serviceRestartParams = Type.Object({
   unit: Type.String({ description: "systemd unit name, e.g. jellyfin.service" }),
@@ -125,11 +127,35 @@ const httpMutationParams = Type.Object({
   ),
 });
 
+const backupConfigureParams = Type.Object({
+  enable: Type.Boolean({ description: "Turn config backup on or off." }),
+  repo: Type.Optional(Type.String({ description: "owner/name of the private GitHub repo to push to. Omit to let Miro create <hostname>-miro-backup under the token's account." })),
+  auth: Type.Optional(Type.Enum(["auto", "deploy_key", "token", "gh"], { description: "How to authenticate the push. auto (default) prefers a per-repo deploy key, then the provider.github token, then gh." })),
+  ageRecipient: Type.Optional(Type.String({ description: "An age PUBLIC key (age1...). When set, an encrypt-only secrets bundle is added so a restore can fully recover secrets - the box can never decrypt it, only your off-box private key can." })),
+  extraPaths: Type.Optional(Type.String({ description: "Extra absolute config paths to back up, newline- or comma-separated, added to the built-in allowlist." })),
+});
+
+const backupNowParams = Type.Object({
+  reason: Type.String({ description: "Why, in one line - used as the commit message." }),
+  push: Type.Optional(Type.Boolean({ description: "Also push to GitHub after committing (default true)." })),
+});
+
+const restoreParams = Type.Object({
+  source: Type.Optional(Type.String({ description: "A git URL (private repo, cloned with the provider.github token) or a local path to a checked-out backup tree. Omit to use this box's local backup repo." })),
+  ageKeyRef: Type.Optional(Type.String({ description: "Secret ref holding your age PRIVATE key, to decrypt secrets.age. Omit to re-establish secrets instead of restoring them." })),
+});
+
 /** Mutating tools go through the operation engine (plan §38, §54 Stage B; PLAN.md §5.4 B) -
  * tracked, confirmed, sandboxed, verified, rolled back on failure. Kept separate from
  * agent/tools.ts's read-only AGENT_TOOLS so subagents spawned via worker.ts never see these. */
 export function buildOperationTools(ctx: OperationToolContext) {
   const httpKind = httpMutationKind(ctx.getSecret ?? (() => null), ctx.setSecret);
+  const backupDeps: BackupDeps = {
+    db: ctx.db,
+    getSetting: ctx.getSetting ?? (() => null),
+    setSetting: ctx.setSetting ?? (() => {}),
+    getSecret: ctx.getSecret ?? (() => null),
+  };
   // The self-update fetch dependencies: repo/channel from settings, the token from its secret ref,
   // and the Sigstore verifier bound to this repo's release-workflow identity. Never surfaces the token.
   const buildFetchDeps = (): FetchDeps => {
@@ -278,6 +304,63 @@ export function buildOperationTools(ctx: OperationToolContext) {
           return textResult({ ...result, subscribeUrl: `${resolved.baseUrl}/${topic}`, topic, reachableFromPhone: resolved.reachable, setup: resolved.reachable ? "Open the ntfy app and subscribe to this URL." : "No LAN/tailnet address was detected - the server is on loopback only; give a reachable baseUrl or set up tailscale for the phone to reach it." });
         }
         return textResult(result);
+      },
+    },
+    {
+      name: "backup_configure",
+      label: "Configure backup",
+      description:
+        "Turn on (or off) config backup: a local git repo of the server's declarative configs + Miro's own non-secret state, pushed to a private GitHub repo Miro creates for itself. Never commits plaintext secrets. Optionally enable an age-encrypted secrets bundle (give an age PUBLIC key) so a restore can fully recover secrets. Use backup_now afterward for the first snapshot; restore_from_backup rebuilds a fresh box.",
+      parameters: backupConfigureParams,
+      execute: async (_id: string, p: { enable: boolean; repo?: string; auth?: string; ageRecipient?: string; extraPaths?: string }) => {
+        ctx.setSetting?.(BACKUP_ENABLED, p.enable ? "true" : "false");
+        if (p.repo !== undefined) ctx.setSetting?.(BACKUP_REPO, p.repo);
+        if (p.auth !== undefined) ctx.setSetting?.(BACKUP_AUTH, p.auth);
+        if (p.ageRecipient !== undefined) ctx.setSetting?.(BACKUP_AGE_RECIPIENT, p.ageRecipient);
+        if (p.extraPaths !== undefined) ctx.setSetting?.(BACKUP_EXTRA_PATHS, p.extraPaths);
+        const hasToken = !!ctx.getSecret?.(GITHUB_TOKEN_SECRET);
+        return textResult({
+          enabled: p.enable,
+          repo: ctx.getSetting?.(BACKUP_REPO) ?? "(auto)",
+          auth: ctx.getSetting?.(BACKUP_AUTH) ?? "auto",
+          secretsBundle: ctx.getSetting?.(BACKUP_AGE_RECIPIENT) ? "enabled" : "disabled",
+          note: hasToken
+            ? "Run backup_now to take the first snapshot and push."
+            : `No ${GITHUB_TOKEN_SECRET} token on file - set one so Miro can create the repo and push (or set backup.auth=gh with gh already authenticated).`,
+        });
+      },
+    },
+    {
+      name: "backup_now",
+      label: "Back up now",
+      description:
+        "Take a config-backup snapshot right now (commit the configs + Miro state), and push it to GitHub unless push:false. This is how the first backup is taken after backup_configure, and how to force one on demand. No-op if backup is disabled.",
+      parameters: backupNowParams,
+      execute: async (_id: string, p: { reason: string; push?: boolean }) => {
+        const result = await runBackup(backupDeps, p.reason);
+        if ("skipped" in result) return textResult({ skipped: result.skipped, hint: "Enable backup first: backup_configure(enable: true)." });
+        const push = p.push === false ? { pushed: false, reason: "push not requested" } : await pushBackup(backupDeps);
+        return textResult({ committed: result.committed, snapshot: result.snapshot, push });
+      },
+    },
+    {
+      name: "restore_from_backup",
+      label: "Restore from backup",
+      description:
+        "Reconstruct this box from a backup. Imports Miro's own state (settings, memories, extensions) directly, re-establishes secrets (decrypting the age bundle if you give ageKeyRef, else re-minting/re-prompting per app), and returns the server's backed-up config files so you can rebuild them through the operation engine (file_write each to its absolute path, then bring services up). Use on a freshly deployed mirod pointed at the backup repo or a local tree.",
+      parameters: restoreParams,
+      execute: async (_id: string, p: { source?: string; ageKeyRef?: string }) => {
+        const token = ctx.getSecret?.(GITHUB_TOKEN_SECRET) ?? undefined;
+        const ageIdentity = p.ageKeyRef ? ctx.getSecret?.(p.ageKeyRef) ?? undefined : undefined;
+        try {
+          const r = await restoreFromBackup({ db: ctx.db, setSecret: (ref, v) => ctx.setSecret?.(ref, v) }, { source: p.source, token, ageIdentity });
+          return textResult({
+            ...r,
+            next: "Reconstruct each configFile with file_write to that absolute path, then bring services up (docker compose up -d / service_control enable). Any secret not restored is re-minted or re-prompted as its app is reconstructed.",
+          });
+        } catch (e) {
+          return textResult({ refused: true, reason: (e as Error).message });
+        }
       },
     },
     {
