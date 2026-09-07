@@ -1384,7 +1384,7 @@ function forbiddenReason(name: string, argv: string[]): string {
     case "rm": case "rmdir": case "unlink": case "shred": return `${name} is banned - deletion only exists as the file_delete operation (moves to trash, recoverable)`;
     case "mkfs": case "wipefs": case "fdisk": case "sfdisk": case "cfdisk": case "parted": case "gdisk": return `${name} destroys a filesystem/partition table`;
     case "dd": return "dd writes directly to a block device";
-    case "reboot": case "shutdown": case "halt": case "poweroff": case "init": case "telinit": case "kexec": return `${name} takes the server down - a reboot is the system_reboot operation, never a shell command; Miro never powers off`;
+    case "reboot": case "shutdown": case "halt": case "poweroff": case "init": case "telinit": case "kexec": return `${name} takes the server down - a reboot is the system_reboot operation and a power-off is the system_shutdown operation, never a shell command`;
     case "systemctl": return "systemctl cannot reach systemd from the sandbox's PID namespace - unit changes are operations";
     case "crontab": return "crontab -r wipes every scheduled job";
     case "truncate": return "truncate to zero destroys the file's contents";
@@ -1404,7 +1404,7 @@ function alternativeFor(name: string): string {
     case "rm": case "rmdir": case "unlink": case "shred": case "find": case "rsync": case "tar": case "truncate": case "cp": case "mv":
       return "Use the file_delete operation - it moves the path to Miro's trash (recoverable for 30 days) and can be rolled back.";
     case "reboot": case "shutdown": case "halt": case "poweroff": case "init": case "telinit":
-      return "A reboot is the system_reboot operation (confirmed by the owner; Miro reports at its next boot what came back). There is no power-off operation - tell the owner a shutdown is needed and why.";
+      return "A reboot is the system_reboot operation and a power-off is the system_shutdown operation (both confirmed by the owner; Miro reports at its next boot what came back). Use those, never a raw shell command.";
     case "systemctl":
       return "systemctl cannot change anything from inside the command sandbox (it cannot reach systemd from the sandbox's PID namespace). Restart a unit with the service_restart operation; start, stop, enable, disable or daemon-reload with service_control. Reboot with system_reboot.";
     case "mkfs": case "wipefs": case "fdisk": case "sfdisk": case "cfdisk": case "parted": case "gdisk": case "dd":

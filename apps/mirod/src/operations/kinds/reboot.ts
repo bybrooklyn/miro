@@ -62,7 +62,7 @@ export interface Captured extends Snapshot {
 
 const BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id";
 
-function readBootId(): string {
+export function readBootId(): string {
   try {
     return readFileSync(BOOT_ID_PATH, "utf-8").trim();
   } catch {
@@ -70,7 +70,7 @@ function readBootId(): string {
   }
 }
 
-async function snapshot(): Promise<Snapshot & { running: ContainerSummary[] }> {
+export async function snapshot(): Promise<Snapshot & { running: ContainerSummary[] }> {
   const [services, docker, mounts] = await Promise.all([
     listServices().then((r) => r.services).catch(() => [] as ServiceInfo[]),
     listContainers().catch(() => ({ available: false, containers: [] as ContainerSummary[] })),
@@ -100,7 +100,7 @@ export function composeRestartKey(yamlText: string, service: string): string | u
   }
 }
 
-async function containerNotes(running: ContainerSummary[]): Promise<ContainerNote[]> {
+export async function containerNotes(running: ContainerSummary[]): Promise<ContainerNote[]> {
   const notes: ContainerNote[] = [];
   for (const c of running) {
     const from = (await inspectContainer(c.id).catch(() => null))?.restartPolicy ?? "no";
@@ -131,7 +131,7 @@ async function containerNotes(running: ContainerSummary[]): Promise<ContainerNot
   return notes;
 }
 
-async function restorePolicies(captured: Captured): Promise<void> {
+export async function restorePolicies(captured: Captured): Promise<void> {
   for (const n of captured.notes) {
     if (n.update) await runPrivileged(["docker", "update", "--restart", n.from, n.name]).catch(() => {});
   }
@@ -145,7 +145,7 @@ function missingFrom(before: string[], after: string[]): string[] {
 /** Pure: the post-boot verdict from the pre-reboot capture and the post-boot snapshot. Keys on the
  * containers (the explicit restart-policy target) and the severity number (which counts failed
  * units); a clean-inactive on-demand unit is not a reboot failure, so it is never a "miss". */
-export function rebootOutcome(goal: string, captured: Captured, post: Snapshot): { outcome: OperationOutcome; message: string } {
+export function rebootOutcome(goal: string, captured: Captured, post: Snapshot, verb = "Rebooted"): { outcome: OperationOutcome; message: string } {
   const missingContainers = post.dockerAvailable ? missingFrom(captured.containers, post.containers) : captured.containers;
   const severity = `severity ${captured.severity}->${post.severity}`;
   const composeReminders = captured.notes
@@ -156,7 +156,7 @@ export function rebootOutcome(goal: string, captured: Captured, post: Snapshot):
     const reminder = composeReminders.length ? ` ${composeReminders.join("; ")}.` : "";
     return {
       outcome: "committed",
-      message: `Rebooted - ${goal}, verified: ${captured.containers.length} containers back and no failed units, ${severity}.${reminder}`,
+      message: `${verb} - ${goal}, verified: ${captured.containers.length} containers back and no failed units, ${severity}.${reminder}`,
     };
   }
 
@@ -172,7 +172,7 @@ export function rebootOutcome(goal: string, captured: Captured, post: Snapshot):
     }
   }
   if (missing.length === 0) missing.push(`severity got worse (${captured.severity}->${post.severity}) - run a health check`);
-  return { outcome: "applied_unverified", message: `Rebooted - ${goal}, but not everything came back (${severity}). Missing: ${missing.join("; ")}.` };
+  return { outcome: "applied_unverified", message: `${verb} - ${goal}, but not everything came back (${severity}). Missing: ${missing.join("; ")}.` };
 }
 
 /** captureState's result for apply(), keyed by the params object runOperation passes to both

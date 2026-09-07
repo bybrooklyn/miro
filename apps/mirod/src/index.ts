@@ -23,7 +23,10 @@ import { createSecretStore } from "./secrets";
 import { generateIrohSecretKey, startIrohEndpoint, ticketFor, nodeIdOf, acceptLoop } from "./iroh";
 import { ensureUsageTable } from "./capabilities/usage";
 import { ensureEgressTable } from "./agent/egress-store";
-import { reconcileOperations, type OperationToolContext, type ReflectionTrigger } from "./operations/engine";
+import { reconcileOperations, runOperation, type OperationToolContext, type ReflectionTrigger } from "./operations/engine";
+import { readUps } from "./inventory/power";
+import { shutdownKind } from "./operations/kinds/shutdown";
+import { NUT_UPS_SETTING } from "./operations/kinds/nut-install";
 import { reverifyCommitted } from "./operations/prodtest";
 import { configureCapabilities, refreshWebSearchPool } from "./capabilities";
 import { allOperationKinds } from "./agent/operation-tools";
@@ -421,6 +424,56 @@ function dailyBackup(): void {
 }
 dailyBackup();
 setInterval(dailyBackup, REPROBE_INTERVAL_MS);
+
+// Power/UPS monitor (PLAN.md Power/UPS slice). Polls the NUT UPS named in power.ups and notifies on
+// each status transition; on low battery it flushes a backup and runs a graceful system.shutdown -
+// autonomously, since there is no one to confirm while the box is losing power (the one place a
+// lifeline op auto-approves). No-op until nut_install sets power.ups. The op runs through the engine
+// so the boot-time reconcile still delivers the "powered off and came back" verdict.
+const POWER_POLL_MS = 30_000;
+const lastUpsStatus: Record<string, string> = {};
+let upsShutdownTriggered = false;
+// An autonomous op context: broadcasts events to any watching TUI, and auto-approves (the emergency
+// path - the box is going down regardless; the notify below is how the owner hears about it).
+const powerOpCtx: OperationToolContext = {
+  db,
+  send: (event) => {
+    for (const s of connections) s(event);
+  },
+  waitForAnswer: async () => "approve",
+  reflect,
+  afterOperation,
+  computeSeverity,
+  getSecret: (ref) => secretStore.getSecret(db, ref),
+  setSecret: (ref, value) => secretStore.setSecret(db, ref, value),
+  setSetting,
+  getSetting,
+};
+async function powerMonitorTick(): Promise<void> {
+  const name = getSetting(NUT_UPS_SETTING);
+  if (!name) return;
+  const ups = await readUps(name);
+  if (!ups.status) return; // upsd unreachable - not a transition, just no reading
+  const prev = lastUpsStatus[name];
+  lastUpsStatus[name] = ups.status;
+  if (ups.status === prev) return;
+  const detail = `status ${ups.status}, charge ${ups.charge ?? "?"}%, runtime ${ups.runtimeSec ?? "?"}s`;
+  if (ups.lowBattery && !upsShutdownTriggered) {
+    upsShutdownTriggered = true;
+    notify({ tier: "needs_attention", title: `UPS ${name} low battery - powering off`, body: detail, source: "ups", at: Date.now() });
+    await pushBackup(backupDeps).catch((err) => console.error("[mirod] pre-shutdown backup push failed", err));
+    await runOperation(powerOpCtx, shutdownKind, `UPS ${name} on low battery`, { reason: `UPS ${name} low battery (charge ${ups.charge ?? "?"}%)` }).catch((err) =>
+      console.error("[mirod] UPS-triggered shutdown failed", err),
+    );
+  } else if (ups.onBattery) {
+    notify({ tier: "worth_knowing", title: `UPS ${name} on battery`, body: detail, source: "ups", at: Date.now() });
+  } else if (prev) {
+    // back on line power after having been on battery
+    upsShutdownTriggered = false;
+    notify({ tier: "worth_knowing", title: `UPS ${name} back on line power`, body: detail, source: "ups", at: Date.now() });
+  }
+}
+setInterval(() => powerMonitorTick().catch((err) => console.error("[mirod] power monitor", err)), POWER_POLL_MS);
 
 /** The main chat agent's model. Same standing preference as codegen: a connected Codex login means
  * gpt-5.6-luna at medium reasoning, always - it was added precisely because Ollama's cloud quota

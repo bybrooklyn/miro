@@ -5,6 +5,8 @@ import { runOperation } from "../operations/engine";
 import { systemdRestartKind } from "../operations/kinds/systemd-restart";
 import { systemdUnitKind, UNIT_ACTIONS, type SystemdUnitParams } from "../operations/kinds/systemd-unit";
 import { rebootKind } from "../operations/kinds/reboot";
+import { shutdownKind } from "../operations/kinds/shutdown";
+import { nutInstallKind, NUT_UPS_SETTING } from "../operations/kinds/nut-install";
 import { searxngInstallKind, searxngBaseUrl, DEFAULT_SEARXNG_PORT, SEARXNG_SETTING } from "../operations/kinds/searxng-install";
 import { ntfyInstallKind, resolveNtfyBaseUrl, generateTopic, ntfyLocalUrl, DEFAULT_NTFY_PORT, NTFY_URL_SETTING, NTFY_TOPIC_SETTING } from "../operations/kinds/ntfy-install";
 import { stageUpdate, availableVersions, currentVersion } from "../self-update";
@@ -38,6 +40,17 @@ const serviceControlParams = Type.Object({
 
 const rebootParams = Type.Object({
   reason: Type.String({ description: "Why the server must reboot now, in one line - shown to the owner as the goal." }),
+});
+
+const shutdownParams = Type.Object({
+  reason: Type.String({ description: "Why the server must power off now, in one line - shown to the owner as the goal." }),
+});
+
+const nutInstallParams = Type.Object({
+  reason: Type.String({ description: "Why, in one line - shown to the owner as the goal." }),
+  driver: Type.Optional(Type.String({ description: "NUT driver. Default dummy-ups (a file-driven simulator, for testing). Real hardware: e.g. usbhid-ups." })),
+  port: Type.Optional(Type.String({ description: "Driver port. dummy-ups: a state file (default dummy.dev, under /etc/nut). USB hardware: auto." })),
+  name: Type.Optional(Type.String({ description: "UPS name in ups.conf; upsc addresses <name>@localhost. Default ups." })),
 });
 
 const shellCommandParams = Type.Object({
@@ -198,6 +211,18 @@ export function buildOperationTools(ctx: OperationToolContext) {
       execute: async (_id: string, params: { reason: string }) => textResult(await runOperation(ctx, rebootKind, params.reason, params)),
     },
     {
+      name: "system_shutdown",
+      label: "Power off server",
+      description:
+        "Power the server OFF as a confirmed, tracked operation - it stays off until power is restored. Like system_reboot, running containers with no restart policy first get restart=unless-stopped so they come back when the box powers on again, and a config backup is flushed to GitHub before the poweroff. Miro verifies at its next boot (when power returns) that everything came back. This call does not return. Only for a genuine power-off need (a UPS on low battery, an owner request); raw poweroff/shutdown commands are refused.",
+      parameters: shutdownParams,
+      execute: async (_id: string, params: { reason: string }) => {
+        // Pre-shutdown flush: get the latest state off-box before the lights go out (best-effort).
+        await pushBackup(backupDeps).catch(() => {});
+        return textResult(await runOperation(ctx, shutdownKind, params.reason, params));
+      },
+    },
+    {
       name: "searxng_install",
       label: "Self-host SearXNG",
       description:
@@ -303,6 +328,19 @@ export function buildOperationTools(ctx: OperationToolContext) {
           ctx.setSetting?.(NTFY_TOPIC_SETTING, topic);
           return textResult({ ...result, subscribeUrl: `${resolved.baseUrl}/${topic}`, topic, reachableFromPhone: resolved.reachable, setup: resolved.reachable ? "Open the ntfy app and subscribe to this URL." : "No LAN/tailnet address was detected - the server is on loopback only; give a reachable baseUrl or set up tailscale for the phone to reach it." });
         }
+        return textResult(result);
+      },
+    },
+    {
+      name: "nut_install",
+      label: "Set up UPS monitoring",
+      description:
+        "Set up UPS monitoring via NUT as a confirmed operation: installs the nut package if needed, configures upsd + the driver (defaults to a dummy-ups simulator for testing the power-loss flow; pass driver/port for real hardware like usbhid-ups), and verifies upsc reports a status. On success Miro's power monitor watches it and runs a graceful system_shutdown on low battery. Reads are loopback + unauthenticated; upsmon is not used - Miro owns the shutdown.",
+      parameters: nutInstallParams,
+      execute: async (_id: string, params: { reason: string; driver?: string; port?: string; name?: string }) => {
+        const { reason, ...p } = params;
+        const result = await runOperation(ctx, nutInstallKind, reason, p);
+        if (result.outcome === "committed") ctx.setSetting?.(NUT_UPS_SETTING, `${p.name ?? "ups"}@localhost`);
         return textResult(result);
       },
     },
@@ -454,6 +492,8 @@ export function allOperationKinds(getSecret: (ref: string) => string | null, set
     [systemdRestartKind.kind]: systemdRestartKind,
     [systemdUnitKind.kind]: systemdUnitKind,
     [rebootKind.kind]: rebootKind,
+    [shutdownKind.kind]: shutdownKind,
+    [nutInstallKind.kind]: nutInstallKind,
     [searxngInstallKind.kind]: searxngInstallKind,
     [ntfyInstallKind.kind]: ntfyInstallKind,
     [shellCommandKind.kind]: shellCommandKind,

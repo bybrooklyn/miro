@@ -62,7 +62,7 @@ export async function takeSnapshot(force = false): Promise<ServerSnapshot> {
 
 const REFUSALS = `What is refused, and what to do instead:
 - rm, rmdir, unlink, shred, find -delete, rsync --delete → file_delete (moves to trash, recoverable).
-- reboot → the system_reboot operation (always confirmed; Miro reports what came back at its next boot). shutdown/poweroff → refused; tell the owner. mkfs/dd-to-device/wipefs → never; ask the owner.
+- reboot → the system_reboot operation (always confirmed; Miro reports what came back at its next boot). shutdown/poweroff → the system_shutdown operation (confirmed; the UPS monitor uses it autonomously on low battery). A raw shutdown/poweroff shell command is still refused. mkfs/dd-to-device/wipefs → never; ask the owner.
 - Interactive shells, sudo -i, docker exec -it … bash → run the specific command instead.
 - Writing under ~/.miro, /var/lib/miro, .ssh private keys, /etc/shadow → never.
 - Reading secret material (keys, Miro's DB, .env, credential files) → refused; use secrets by reference.

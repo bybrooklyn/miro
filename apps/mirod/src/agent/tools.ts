@@ -9,6 +9,7 @@ import { fetchWeb, searchWeb } from "../capabilities";
 import { indexRootOnDisk, queryByClassOnDisk } from "../inventory/filesystem";
 import { listInstalledPackages } from "../inventory/packages";
 import { detectGpus } from "../inventory/gpu";
+import { readAllUps } from "../inventory/power";
 import { listTrash } from "../operations/trash";
 
 // Schemas are named so `execute` can reference `Static<typeof schema>` explicitly - TS can't
@@ -100,6 +101,14 @@ export const AGENT_TOOLS = [
       "List GPU/accelerator devices (via lspci) and whether NVIDIA tooling or render nodes (/dev/dri) are present. For diagnosing hardware transcode / GPU passthrough issues.",
     parameters: Type.Object({}),
     execute: async () => textResult(await detectGpus()),
+  },
+  {
+    name: "power_ups",
+    label: "UPS status",
+    description:
+      "Read the status of any UPS monitored via NUT: on-line vs on-battery, low-battery, charge %, and runtime remaining. Reports unavailable if NUT is not set up (use nut_install to set it up). Miro's power monitor watches this and powers off gracefully on low battery.",
+    parameters: Type.Object({}),
+    execute: async () => textResult(await readAllUps()),
   },
   {
     name: "network_info",
