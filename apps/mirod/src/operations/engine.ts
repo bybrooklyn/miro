@@ -181,7 +181,10 @@ export async function runOperation<P, S>(
   // auto-approvable operation is downgraded to "a human must approve" - never refused.
   const gate = unattendedGate(db);
   const downgraded = effectiveAutoApprove(plan) && gate !== null;
-  const autoApprove = effectiveAutoApprove(plan) && gate === null;
+  // Strict mode (PLAN.md secure-intake slice): the owner opted into maximum oversight, so EVERY
+  // operation is confirmed by a human - even a safe, reversible one that would normally auto-approve.
+  const strict = ctx.getSetting?.("mode.strict") === "true";
+  const autoApprove = effectiveAutoApprove(plan) && gate === null && !strict;
   store.setPlan(db, id, JSON.stringify(plan), autoApprove);
   // Scope and class ride in `details` so the client-facing protocol is unchanged.
   const details: Record<string, unknown> = { ...(plan.details ?? {}) };

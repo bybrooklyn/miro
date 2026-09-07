@@ -6,6 +6,7 @@ import { containerLogs } from "../inventory/containers";
 import { serviceLogs } from "../inventory/systemd";
 import { isSensitivePath, redactSecretsInText } from "../operations/classify";
 import { notify as busNotify, testAndConfigure } from "../notifications";
+import { parseConfig } from "../secret-intake/parse-config";
 
 // The two tools that make the outcome loop conversational without ending the turn (PLAN.md
 // §5.4 A): ask_user for the intent Miro genuinely cannot infer, and system_plan for the one
@@ -45,6 +46,16 @@ const systemPlanParams = Type.Object({
   steps: Type.Array(Type.String(), { description: "Ordered steps you will take." }),
   verification: Type.Array(Type.String(), { description: "How you will prove the whole system works - architecture checks, not 'the container started'." }),
   notes: Type.Optional(Type.Array(Type.String(), { description: "Irreversible parts, credentials you will create, tradeoffs the user should know." })),
+});
+
+const requestSecretParams = Type.Object({
+  ref: Type.String({ description: "Secret-store reference to save the value under, e.g. provider.github or extension.gluetun.wg_private_key." }),
+  prompt: Type.String({ description: "What to ask the owner for, one line - shown above a masked input." }),
+});
+
+const pasteConfigParams = Type.Object({
+  app: Type.String({ description: "The app/namespace the secrets belong under, e.g. gluetun - used to name the refs (extension.<app>.<name>)." }),
+  prompt: Type.Optional(Type.String({ description: "What to ask the owner to paste, one line. Defaults to 'Paste the <app> config'." })),
 });
 
 const notifyParams = Type.Object({
@@ -255,6 +266,37 @@ export function buildInteractionTools(ctx: InteractionContext) {
           return textResult({ planId: id, approved: false, requestedChange: change });
         }
         return textResult({ planId: id, approved: answer === "approve", cancelled: answer === "cancel" });
+      },
+    },
+    {
+      name: "request_secret",
+      label: "Request a secret",
+      description:
+        "Ask the owner for a single credential (a token, password, or key) and store it by reference. The owner types it into a MASKED field; the value goes straight to the secret store and NEVER reaches you - you get back only the ref. Use this (or paste_config for a whole config) instead of a plain question whenever you need a human-held secret; never ask for a secret in ordinary chat.",
+      parameters: requestSecretParams,
+      execute: async (_id: string, p: Static<typeof requestSecretParams>) => {
+        const id = `ask:${crypto.randomUUID()}`;
+        ctx.send({ type: "secret_prompt", id, prompt: p.prompt });
+        const value = (await ctx.waitForAnswer(id)).trim();
+        if (!value || value === NO_USER_ANSWER) return textResult({ stored: false, reason: value === NO_USER_ANSWER ? "no user available" : "no value given" });
+        ctx.setSecret(p.ref, value);
+        return textResult({ stored: true, ref: p.ref });
+      },
+    },
+    {
+      name: "paste_config",
+      label: "Paste a config",
+      description:
+        "Ask the owner to paste a whole credential/config blob (a WireGuard .conf, a .env, a provider block) into a MASKED field. Miro parses it locally: secret values are stored by reference, the non-secret parts (endpoints, addresses, public keys) are returned to you as config. The raw paste and the secret values NEVER reach you. Use this for multi-value credentials instead of asking the owner to paste into chat.",
+      parameters: pasteConfigParams,
+      execute: async (_id: string, p: Static<typeof pasteConfigParams>) => {
+        const id = `ask:${crypto.randomUUID()}`;
+        ctx.send({ type: "secret_prompt", id, prompt: p.prompt ?? `Paste the ${p.app} config` });
+        const raw = (await ctx.waitForAnswer(id)).trim();
+        if (!raw || raw === NO_USER_ANSWER) return textResult({ stored: false, reason: raw === NO_USER_ANSWER ? "no user available" : "no value given" });
+        const parsed = parseConfig(raw, p.app);
+        for (const s of parsed.secrets) ctx.setSecret(s.ref, s.value);
+        return textResult({ format: parsed.format, storedRefs: parsed.secrets.map((s) => s.ref), config: parsed.settings, summary: parsed.summary });
       },
     },
   ];

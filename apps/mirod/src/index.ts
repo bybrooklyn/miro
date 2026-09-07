@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync, unlinkSync, existsSync, readFileSync, chownSync, chmodSync } from "node:fs";
+import { mkdirSync, unlinkSync, existsSync, readFileSync, chownSync, chmodSync, watch } from "node:fs";
 import { join, dirname } from "node:path";
 import {
   MIRO_DIR,
@@ -46,6 +46,13 @@ import { configureNotifications, notify, replayUndelivered } from "./notificatio
 import { runBackup, pushBackup, type BackupDeps } from "./backup";
 import { blessOrRevertUpdate } from "./self-update";
 import { computeSeverity } from "./operations/severity";
+import { redactSecretsInText } from "./operations/classify";
+import { maybeRunSecretCli } from "./secret-intake/cli";
+import { importSecretDropFiles } from "./secret-intake/drop-file";
+
+// `mirod secret set <ref>` (and future CLI subcommands) run and exit BEFORE the daemon boots, so a
+// credential can be stored out-of-band without ever reaching the agent/model/transcript.
+if (await maybeRunSecretCli()) process.exit(0);
 
 const OPERATION_KINDS = allOperationKinds((ref) => secretStore.getSecret(db, ref), (ref, value) => secretStore.setSecret(db, ref, value));
 
@@ -85,6 +92,21 @@ for (const ext of listEnabled(db)) {
 const secretStore = createSecretStore(join(MIRO_DIR, "secret.key"));
 secretStore.ensureTable(db);
 const getStoredKey = (provider: string) => secretStore.getSecret(db, `provider.${provider}`);
+
+// Drop-file secret intake (PLAN.md secure-intake): a file in <MIRO_DIR>/secrets.d/ named after its
+// ref is imported to the store and shredded - out-of-band, never through the agent. Swept at boot
+// and on any change to the dir.
+const SECRETS_DROP_DIR = join(MIRO_DIR, "secrets.d");
+mkdirSync(SECRETS_DROP_DIR, { recursive: true });
+{
+  const n = importSecretDropFiles(db, secretStore, SECRETS_DROP_DIR);
+  if (n) console.log(`[mirod] imported ${n} secret(s) from secrets.d`);
+  try {
+    watch(SECRETS_DROP_DIR, () => importSecretDropFiles(db, secretStore, SECRETS_DROP_DIR));
+  } catch (err) {
+    console.warn("[mirod] secrets.d watch unavailable (boot-time import only):", err instanceof Error ? err.message : err);
+  }
+}
 
 function getSetting(key: string): string | null {
   const row = db.query("SELECT value FROM settings WHERE key = ?").get(key) as
@@ -466,7 +488,13 @@ async function powerMonitorTick(): Promise<void> {
   if (ups.status === prev) return;
   const detail = `status ${ups.status}, charge ${ups.charge ?? "?"}%, runtime ${ups.runtimeSec ?? "?"}s`;
   if (ups.lowBattery) {
-    if (upsArmed && !upsShutdownTriggered) {
+    if (getSetting("mode.strict") === "true") {
+      // Strict mode: no autonomous power-off. Notify and wait for the owner to run system_shutdown.
+      if (!upsShutdownTriggered) {
+        upsShutdownTriggered = true;
+        notify({ tier: "needs_attention", title: `UPS ${name} low battery - shutdown needed`, body: `${detail}. Strict mode: Miro will NOT power off on its own - run system_shutdown, or turn strict mode off.`, source: "ups", at: Date.now() });
+      }
+    } else if (upsArmed && !upsShutdownTriggered) {
       upsShutdownTriggered = true;
       notify({ tier: "needs_attention", title: `UPS ${name} low battery - powering off`, body: detail, source: "ups", at: Date.now() });
       await pushBackup(backupDeps).catch((err) => console.error("[mirod] pre-shutdown backup push failed", err));
@@ -522,6 +550,29 @@ function statusEvent(state: ConnState): ServerEvent {
 }
 
 async function handleChat(text: string, send: (event: ServerEvent) => void, state: ConnState): Promise<void> {
+  // Leak guard (PLAN.md secure-intake): a secret-shaped value in a chat message would enter the
+  // model context (and the transcript). redactSecretsInText's shapes catch a key/token/config block.
+  // Default: warn + confirm. Strict mode (mode.strict): refuse and redirect to a secure surface.
+  if (redactSecretsInText(text) !== text) {
+    if (getSetting("mode.strict") === "true") {
+      send({ type: "reply", text: "That looks like it contains a secret (a key, token, or config), and strict mode is on - I won't send it to the model. Store it securely instead: `mirod secret set <ref>`, drop it in secrets.d/, or ask me to set up the credential (I'll pop a masked field)." });
+      return;
+    }
+    const id = `leakguard:${crypto.randomUUID()}`;
+    send({
+      type: "question",
+      id,
+      prompt: "⚠️ That looks like it contains a secret (a key or token). Sending it puts it in the model's context and the transcript. Send anyway, or cancel and store it securely?",
+      options: [
+        { label: "Cancel & store securely", value: "cancel" },
+        { label: "Send anyway", value: "send" },
+      ],
+    });
+    if ((await waitForAnswer(state, id)) !== "send") {
+      send({ type: "reply", text: "Held it back - nothing was sent to the model. Ask me to store it by reference (masked field), paste a whole config with the secure paste, or run `mirod secret set <ref>`." });
+      return;
+    }
+  }
   const chat = await resolveChatSelection();
   if (chat && chat.model.id !== state.lastChatModelId) {
     state.lastChatModelId = chat.model.id;

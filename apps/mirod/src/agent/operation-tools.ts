@@ -79,6 +79,11 @@ const setUpdateChannelParams = Type.Object({
   channel: Type.Enum(["stable", "beta"], { description: "stable = released versions only; beta = also prereleases. Takes effect on the next update check." }),
 });
 
+const STRICT_MODE_SETTING = "mode.strict";
+const setStrictModeParams = Type.Object({
+  enabled: Type.Boolean({ description: "true = strict mode (max oversight, minimum autonomy); false = the default easy/magic posture." }),
+});
+
 const ntfyInstallParams = Type.Object({
   port: Type.Optional(Type.Integer({ description: `Host port for the ntfy node (default ${DEFAULT_NTFY_PORT}).` })),
   baseUrl: Type.Optional(Type.String({ description: "The address the owner's phone will use to reach ntfy, e.g. http://192.168.1.10:8090 or a tailscale/hostname URL. Omit to auto-detect (tailnet IP, else LAN IP)." })),
@@ -305,6 +310,17 @@ export function buildOperationTools(ctx: OperationToolContext) {
         // notification on the client's reconnect (self-update/blessOrRevertUpdate at the next boot).
         const result = await stageUpdate({ db: ctx.db, computeSeverity, restart: () => runPrivileged(["systemctl", "restart", "mirod"]) }, params.toVersion);
         return textResult(result.ok ? { installing: true, toVersion: params.toVersion } : { installed: false, reason: result.reason });
+      },
+    },
+    {
+      name: "set_strict_mode",
+      label: "Set strict mode",
+      description:
+        "Turn strict mode on or off. Default (off) is the easy/magic posture: Miro proposes and, for safe reversible things, acts; a secret-shaped chat paste is warned-on, not blocked. Strict mode (on) is the locked-down inverse: a secret-shaped paste is refused outright, EVERY operation needs explicit confirmation (even safe ones), and no autonomous action runs without a human (auto-update install, UPS auto-shutdown). Miro still suggests in strict mode; it just never acts unasked.",
+      parameters: setStrictModeParams,
+      execute: async (_id: string, params: { enabled: boolean }) => {
+        ctx.setSetting?.(STRICT_MODE_SETTING, params.enabled ? "true" : "false");
+        return textResult({ strict: params.enabled });
       },
     },
     {
