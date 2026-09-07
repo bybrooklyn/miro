@@ -2943,3 +2943,32 @@ and that was already asserted.
 boot logged "llm7 registered as the keyless last-resort provider"; a real chat turn selected `gpt-oss`,
 streamed a reply through llm7's real API, and reported `status healthy model=gpt-oss` - the whole
 zero-config path. Gate: `just check` 13/13, `just test` 445 pass / 0 fail.
+
+### 5.35 Sensitivity-tiered egress - slice 2 (2026-09-06)
+
+Three additions on top of §5.33, branch `egress-tiers-2`, live-verified. No agent-core fork - a
+response-side hook (`transformAssistantMessage`, agent-core `types.ts:517`, fired on the finalized reply
+before it reaches context/UI/tools) already mirrors `transformProviderContext`.
+
+- **Reversible round-trip.** Infra identifiers now redact to REVERSIBLE tokens (`[ip-1]`, `[host-1]`;
+  `makeTokenMap` in `egress.ts`), tracked in a per-Agent identifier->token map held in the `createAgent`
+  closure, populated by the outbound gate and consumed by the new response hook that restores them - so a
+  public-tier turn's answer names the real box again. `egressGate` became `egressHooks` returning both
+  hooks and sharing the map (replaced each outbound; the per-Agent loop is sequential, so a side-request
+  sharing only the outbound hook is cleaned up by the next replacement). Wired at all three Agent sites.
+- **Hard block.** With `egress.block_over_trust` set, `gateEgress` THROWS when the content out-ranks the
+  provider's clearance instead of redacting; the throw aborts the turn cleanly and surfaces the reason as
+  the reply (nothing sent, nothing billed - the throw precedes the provider call).
+- **Per-key free/paid tiering.** A `model.id` ending `:free` caps trust at `public` (free tiers train,
+  PLAN §2370) even on a no-train provider; the paid twin is unaffected. One guard in `providerTrust`.
+
+**Live-verified on the VM** with the real Codex provider forced to `public` (via `egress.provider_tiers`):
+a turn naming `10.0.0.5` came back as `10.0.0.5` while the audit showed `openai-codex trust=public,
+infra_redacted=2` - Codex only ever saw a token, echoed it, and the daemon restored it (the full
+round-trip through a real model). With `egress.block_over_trust` on, a turn was refused with
+"egress refused: secret-sensitive content to a public-cleared provider (openai-codex)" as the reply.
+Unit-tested: reversible round-trip, the block throw, the `:free` cap with its paid twin unaffected. Gate:
+`just check` 13/13, `just test` 448 pass / 0 fail.
+
+**Not done (slice 3):** buffered restore in the live streaming-delta path (placeholders flash raw until
+finalization); walking tool-call ARGUMENT JSON; a true per-credential (not per-model-id) split.
