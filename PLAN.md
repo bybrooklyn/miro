@@ -3199,3 +3199,37 @@ find. Gate: `just check` 13/13, `just test` 472 pass / 0 fail.
 a bare unlabeled base64 key in chat isn't caught by the guard (only labeled/prefixed shapes are - the
 common leak); a `paste_config` multi-line paste depends on the client's masked-field paste handling
 (the CLI/drop-file cover big multi-line configs).
+
+### 5.42 Magic setup: proactive baseline proposal + `mirod status` (2026-09-07)
+
+Second slice of the "secure, fast, magical setup" program. Miro now shows up, assesses the box, and
+PROPOSES - the "sysadmin who arrives and drafts a plan", not one that waits to be told each step.
+
+- **`setup/status.ts`** - `computeSetupStatus(db)` compares the settings the setup tools write on
+  commit against the well-run-server baseline (config backup / phone notifications / UPS monitoring),
+  returning `configured` + `gaps` (each gap names the tool that closes it). `get()` is defensive (a
+  missing settings table -> "nothing configured", never throws - buildContextBlock rides on it).
+  `setupGapLines(db)` turns the gaps into a context-block nudge telling the agent to OFFER them as one
+  approve/pick/skip plan, once, no nagging.
+- **Context + prompt**: `buildContextBlock` (`agent/context.ts`) appends the gap nudge; the system
+  prompt (`agent/index.ts`) gains "PROPOSE THE BASELINE" and routes human-held secrets to
+  request_secret/paste_config (never a plain question or chat - the slice-1 discipline in the prompt).
+- **`config_status` read tool** (`agent/tools.ts` `buildStatusTool`, added alongside
+  buildCapabilitiesTool) - configured / gaps / live health severity for the agent.
+- **`mirod status` CLI** (`setup/status-cli.ts`) - the from-anywhere glance over SSH; runs and exits
+  before the daemon boots.
+- **Discovery enrichment** (`discovery.ts`): a durable `server.address` fact (tailnet IP if present,
+  else LAN) - the "manage from anywhere" address.
+
+**Live-verified on the VM.** `mirod status` on the real (fully-configured) box printed the three
+baseline items configured + health severity 1 + "all set". To exercise the proposal, one gap was
+induced (backup off) and a neutral chat sent ("how's my server looking?"): Miro drafted a **system_plan**
+- "Protect the server configuration and make UPS monitoring fully healthy" (components: off-box config
+backup, NUT monitor, cleaning up an exited container) - and raised the approval question, entirely on
+its own. It assessed and proposed, not just filled the one gap. Setting restored after. Gate: `just
+check` 13/13, `just test` 475 pass / 0 fail.
+
+**Not done (this slice):** a rich TUI `status` screen (the CLI + the agent's config_status cover the
+data; the screen is polish); update-checking isn't in the baseline gap set yet (it arrives with
+self-update slice 3); the proposal's per-item approve/pick/skip is the agent's system_plan + the
+existing operation confirms, not a bespoke multi-select UI.
