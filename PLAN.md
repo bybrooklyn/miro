@@ -3001,3 +3001,23 @@ release yet" - the public-Rekor build-provenance entry was accepted.
 
 **Not done (later):** stable/beta channel switching UI, the migration counter, quiescence-gated
 auto-install, the diagnostic buffer, a compiled binary.
+
+### 5.37 Immich - the self-extension flagship: ready, deferred as environment-blocked (2026-09-07)
+
+"Do Immich" was attempted and found to need **no Miro code** - the install-then-learn machinery is
+ready and precedented (Stage D §5.29 already learned Jellyfin/Sonarr/Radarr/Prowlarr/qBittorrent the
+same way; `app_learn` refuses an app that is not already running, `learn.ts:79`, so the flow is: the
+agent installs Immich via `file.write` (compose) + `shell.command` (`docker compose up`) in its system
+plan, then calls `app_learn("immich")` - discovery finds the containers, the learn agent probes the
+live API, captures the admin JWT/API-key, generates + validates + promotes one declarative
+`extension.ts`). Immich's API-key/JWT auth is already expressible (`auth.prefix` + `storeResponseField`,
+the §5.29 Jellyfin fix); its UI-only first-admin bootstrap may be the first real use of the `browser_*`
+rung.
+
+**Deferred (owner decision) - the blocker is the environment, not Miro.** A live install-then-learn on
+the dev VM is not feasible in-session: (1) Immich's server + postgres/pgvecto.rs + redis + ML images are
+multi-GB and SLIRP is ~1.2 Mbit/s (hours to pull); (2) the cargo-drive pre-stage needs Docker on the
+Mac, and the Mac's daemon is down; (3) the VM has ~1.8 GiB free RAM with the 7-container media stack
+running - the Immich ML container alone would exceed it. Ready to drive on a box with real RAM + network
+(or by starting Docker Desktop to pre-stage arm64 images to a cargo drive and pausing the media stack
+for RAM, installing Immich without the ML container to fit). No code owed.
