@@ -2,7 +2,7 @@ import { Agent, type AgentTool } from "@miro/agent-core";
 import type { Model } from "@miro/model-client";
 import { AGENT_TOOLS } from "./tools";
 import { limitTurns, runTurn } from "./model-utils";
-import { egressGate } from "./egress-store";
+import { egressHooks } from "./egress-store";
 import type { ModelRegistry } from "./models";
 
 const WORKER_SYSTEM_PROMPT = `You are a narrow investigation worker spawned by Miro (plan §21).
@@ -46,12 +46,14 @@ export async function spawnWorker(
   const tools = AGENT_TOOLS.filter((t) => allowedToolNames.includes(t.name));
   const toolCalls: WorkerToolCall[] = [];
 
+  // Investigation reads carry infra topology; scrub before egress. No db here, so default tiers,
+  // no audit - a fail-safe scrub, not the configured/logged path the chat agent gets.
+  const egress = egressHooks(undefined);
   const agent = new Agent({
     initialState: { systemPrompt: [WORKER_SYSTEM_PROMPT], model, tools: tools as AgentTool<any>[] },
     getApiKey: (m) => models.getApiKey(m),
-    // Investigation reads carry infra topology; scrub before egress. No db here, so default tiers,
-    // no audit - a fail-safe scrub, not the configured/logged path the chat agent gets.
-    transformProviderContext: egressGate(undefined),
+    transformProviderContext: egress.transformProviderContext,
+    transformAssistantMessage: egress.transformAssistantMessage,
   });
   limitTurns(agent, maxTurns);
 

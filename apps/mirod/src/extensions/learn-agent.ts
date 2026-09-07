@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Agent, type AgentTool } from "@miro/agent-core";
 import { textResult } from "../agent/tool-result";
-import { egressGate } from "../agent/egress-store";
+import { egressHooks } from "../agent/egress-store";
 import { streamSimple, type Effort, type Model } from "@miro/model-client";
 import { Type, type Static } from "@miro/schema-engine/typebox";
 import type { ModelRegistry } from "../agent/models";
@@ -445,13 +445,15 @@ export async function spawnLearningAgent(o: LearnAgentOptions): Promise<LearnAge
   const maxTurns = o.maxTurns ?? DEFAULT_MAX_TURNS;
   const refs = listSecretRefs(o.db, "extension.");
   const systemPrompt = `${LEARN_SYSTEM_PROMPT}\n\nCredentials on file (references only - values are never shown): ${refs.length > 0 ? refs.join(", ") : "none yet"}.`;
+  const learnEgress = egressHooks({ db: o.db, getSetting: o.operationCtx?.getSetting });
   const agent = new Agent({
     // Heterogeneous per-tool parameter schemas can't unify into one array type without erasure -
     // same cast agent/index.ts's own createMiroAgent uses for the exact same reason.
     initialState: { systemPrompt: [systemPrompt], model: o.model, tools: tools as AgentTool<any>[] },
     streamFn: (m, context, options) => streamSimple(m, context, o.reasoning ? { ...options, reasoning: o.reasoning } : options),
     getApiKey: (m) => o.models.getApiKey(m),
-    transformProviderContext: egressGate({ db: o.db, getSetting: o.operationCtx?.getSetting }),
+    transformProviderContext: learnEgress.transformProviderContext,
+    transformAssistantMessage: learnEgress.transformAssistantMessage,
   });
   limitTurns(agent, maxTurns);
 

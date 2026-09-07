@@ -15,7 +15,7 @@ import { getByKey, buildSummary } from "../memory/store";
 import { getExtension } from "../extensions/store";
 import { PROVIDER_CATALOG, resolveApiKey, runTurn } from "./model-utils";
 import { createTurnGuard, limitsFor, modelTier } from "./turn-guard";
-import { egressGate } from "./egress-store";
+import { egressHooks } from "./egress-store";
 
 // Re-exported so no existing import site (apps/mirod/src/index.ts, agent/worker.ts) needs to
 // change - see model-utils.ts's own comment for why these moved out of this file.
@@ -196,6 +196,7 @@ export function createMiroAgent(
   // (same context, same task) count toward the same turn.
   const guard = createTurnGuard(limitsFor(modelTier(model)));
   if (operationCtx) operationCtx.retries = guard.retries;
+  const egress = egressHooks(operationCtx);
   agent = new Agent({
     // Heterogeneous per-tool parameter schemas can't unify into one array type without erasure -
     // this is how agent-core's own AgentState.tools is typed.
@@ -203,7 +204,8 @@ export function createMiroAgent(
     streamFn: (m, context, options) => streamSimple(m, context, reasoning ? { ...options, reasoning } : options),
     getApiKey: (m) => models.getApiKey(m),
     beforeToolCall: guard.beforeToolCall,
-    transformProviderContext: egressGate(operationCtx),
+    transformProviderContext: egress.transformProviderContext,
+    transformAssistantMessage: egress.transformAssistantMessage,
   });
   guard.attach(agent);
   return agent;

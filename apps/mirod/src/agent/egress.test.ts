@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { providerTrust, scrubText, classifyContentTier, gateEgress, PROVIDER_TIERS_SETTING, type Tier } from "./egress";
+import { providerTrust, scrubText, classifyContentTier, gateEgress, restoreText, PROVIDER_TIERS_SETTING, BLOCK_SETTING, type Tier } from "./egress";
 import type { Context, Model } from "@miro/model-client";
 
 const model = (provider: string, baseUrl: string) => ({ provider, baseUrl }) as unknown as Model;
@@ -88,4 +88,35 @@ test("gateEgress to an internal (no-train) provider keeps infra but still scrubs
   expect(blob).toContain("10.0.0.5"); // infra kept for a no-train provider
   expect(blob).toContain("nas.local");
   expect(audit).toMatchObject({ trust: "internal", secretRedacted: true, infraRedacted: 0 });
+});
+
+// --- slice 2 ---
+
+test("a :free model variant caps trust at public, even on a no-train provider; its paid twin does not", () => {
+  expect(providerTrust("openai", "https://api.openai.com/v1", () => null, "gpt-4o:free")).toBe("public");
+  expect(providerTrust("openai", "https://api.openai.com/v1", () => null, "gpt-4o")).toBe("internal");
+  expect(providerTrust("openrouter", "https://openrouter.ai/api", () => null, "meta/llama-3.1:free")).toBe("public");
+});
+
+test("round-trip: infra is redacted to reversible tokens outbound and restored on the reply", () => {
+  const { context, restore } = gateEgress(ctx(), model("google", "https://generativelanguage.googleapis.com"), () => null, { roundTrip: true });
+  expect(restore).toBeDefined();
+  const blob = JSON.stringify(context);
+  expect(blob).not.toContain("10.0.0.5");
+  expect(blob).not.toContain("nas.local");
+  const ipToken = [...restore!.entries()].find(([, v]) => v === "10.0.0.5")?.[0];
+  expect(ipToken).toBeDefined();
+  expect(blob).toContain(ipToken!); // the token, not the raw IP, went out
+  // the model's reply echoing the token is de-anonymised back to the real identifier
+  expect(restoreText(`checked ${ipToken} and it is healthy`, restore!)).toContain("10.0.0.5");
+});
+
+test("strict block mode refuses when content out-ranks the provider, but clears content within its tier", () => {
+  const block = (k: string) => (k === BLOCK_SETTING ? "true" : null);
+  // ctx() carries a secret -> content tier `secret`; google is `public` -> secret > public -> refuse.
+  expect(() => gateEgress(ctx(), model("google", "https://generativelanguage.googleapis.com"), block)).toThrow(/egress refused/);
+  // an on-box (secret-cleared) provider clears secret content -> no throw.
+  expect(() => gateEgress(ctx(), model("ollama", "http://localhost:11434/v1"), block)).not.toThrow();
+  // block off -> redact-to-fit, never throw.
+  expect(() => gateEgress(ctx(), model("google", "https://generativelanguage.googleapis.com"), () => null)).not.toThrow();
 });

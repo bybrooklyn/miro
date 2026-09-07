@@ -31,9 +31,12 @@ const DEFAULT_PROVIDER_TRUST: Record<string, Tier> = {
 };
 
 /** The sensitivity tier a provider is cleared to receive. A local/private baseUrl is on-box -> secret
- * whatever the provider id; otherwise the setting override, then the default, then public (fail closed). */
-export function providerTrust(provider: string, baseUrl: string | undefined, getSetting: (k: string) => string | null): Tier {
+ * whatever the provider id; a `:free` model variant is capped at public (free tiers train on inputs -
+ * PLAN.md §2370); otherwise the setting override, then the default, then public (fail closed). */
+export function providerTrust(provider: string, baseUrl: string | undefined, getSetting: (k: string) => string | null, modelId?: string): Tier {
   if (baseUrl && isLocalOrPrivateUrl(baseUrl)) return "secret";
+  // A per-key free/paid split: the same OpenRouter credential trains on `:free` models, not paid ones.
+  if (modelId?.endsWith(":free")) return "public";
   const override = parseTrustOverride(getSetting)[provider];
   if (override) return override;
   return DEFAULT_PROVIDER_TRUST[provider] ?? "public";
@@ -74,20 +77,53 @@ export interface Scrubbed {
   infra: { count: number; types: string[] };
 }
 
+/** A stable identifier->token map for REVERSIBLE egress redaction (slice 2 round-trip): the same
+ * identifier always gets the same token within one outbound context, and `restore` maps each token
+ * back so the response can be de-anonymised. Without one, scrubText uses flat, non-reversible tokens. */
+export interface TokenMap {
+  token(kind: "ip" | "host", original: string): string;
+  restore: Map<string, string>;
+}
+export function makeTokenMap(): TokenMap {
+  const byId = new Map<string, string>();
+  const restore = new Map<string, string>();
+  return {
+    token(kind, original) {
+      let t = byId.get(original);
+      if (!t) {
+        t = `[${kind}-${byId.size + 1}]`;
+        byId.set(original, t);
+        restore.set(t, original);
+      }
+      return t;
+    },
+    restore,
+  };
+}
+
+/** Replace reversible tokens with their original identifiers in a response (the round-trip's return leg). */
+export function restoreText(text: string, restore: Map<string, string>): string {
+  let out = text;
+  for (const [token, original] of restore) out = out.split(token).join(original);
+  return out;
+}
+
 /** Scrub one text field for egress. Always removes secret-shaped strings (reusing the project's one
  * redactor, which protects {{secret:ref}} placeholders); when `redactInfra`, also replaces private
- * IPs and internal hostnames with typed placeholders. Reports what it did, for the audit + tier. */
-export function scrubText(text: string, redactInfra: boolean): Scrubbed {
+ * IPs and internal hostnames - with reversible tokens when a TokenMap is given, else flat placeholders.
+ * Reports what it did, for the audit + tier. */
+export function scrubText(text: string, redactInfra: boolean, tokens?: TokenMap): Scrubbed {
   const afterSecrets = redactSecretsInText(text);
   const secretFound = afterSecrets !== text;
   const types = new Set<string>();
   let count = 0;
   let out = afterSecrets;
+  const place = (kind: "ip" | "host", m: string) => (tokens ? tokens.token(kind, m) : kind === "ip" ? "[redacted-ip]" : "[redacted-host]");
   if (redactInfra) {
     out = out
-      .replace(IPV4, (m) => (isPrivateIpv4(m) ? (types.add("private-ip"), count++, "[redacted-ip]") : m))
-      .replace(IPV6_PRIVATE, () => (types.add("private-ip"), count++, "[redacted-ip]"))
-      .replace(INTERNAL_HOST, () => (types.add("internal-host"), count++, "[redacted-host]"));
+      .replace(IPV4, (m) => (isPrivateIpv4(m) ? (types.add("private-ip"), count++, place("ip", m)) : m))
+      .replace(IPV6_PRIVATE, (m) => (types.add("private-ip"), count++, place("ip", m)))
+      .replace(INTERNAL_HOST, (m) => (types.add("internal-host"), count++, place("host", m)));
   } else {
     // Not redacting infra (a cleared provider), but still measure it for the tier + audit.
     for (const re of [IPV4, IPV6_PRIVATE, INTERNAL_HOST]) {
@@ -135,17 +171,29 @@ function scrubContent(content: unknown, scrub: (t: string) => string): unknown {
   return content;
 }
 
+/** When set to "true", egress refuses (throws) rather than redacts whenever content is more sensitive
+ * than the target provider is cleared for - the strict mode (slice 2). */
+export const BLOCK_SETTING = "egress.block_over_trust";
+
 /** The egress gate agent-core's transformProviderContext hook calls: scrub the whole outbound context
  * to the tier the target provider is cleared for, and report what happened for the audit. Secret-shaped
- * strings are always removed; infra identifiers are removed only for a provider below `internal` trust. */
-export function gateEgress(context: Context, model: Model, getSetting: (k: string) => string | null): { context: Context; audit: EgressAudit } {
-  const trust = providerTrust(model.provider, model.baseUrl, getSetting);
+ * strings are always removed; infra identifiers are removed only for a provider below `internal` trust
+ * (with reversible tokens when `opts.roundTrip`, so the response can be de-anonymised - `restore` is the
+ * token->identifier map). Throws when the strict block mode is on and the content out-ranks the provider. */
+export function gateEgress(
+  context: Context,
+  model: Model,
+  getSetting: (k: string) => string | null,
+  opts?: { roundTrip?: boolean },
+): { context: Context; audit: EgressAudit; restore?: Map<string, string> } {
+  const trust = providerTrust(model.provider, model.baseUrl, getSetting, model.id);
   const redactInfra = TIER_RANK[trust] < TIER_RANK.internal;
+  const tokens = opts?.roundTrip && redactInfra ? makeTokenMap() : undefined;
   let secretFound = false;
   let infraCount = 0;
   const types = new Set<string>();
   const scrub = (t: string): string => {
-    const s = scrubText(t, redactInfra);
+    const s = scrubText(t, redactInfra, tokens);
     if (s.secretFound) secretFound = true;
     infraCount += s.infra.count;
     for (const ty of s.infra.types) types.add(ty);
@@ -154,6 +202,11 @@ export function gateEgress(context: Context, model: Model, getSetting: (k: strin
   const systemPrompt = context.systemPrompt?.map(scrub);
   const messages = context.messages.map((m) => ({ ...m, content: scrubContent((m as { content: unknown }).content, scrub) }) as typeof m);
   const contentTier: Tier = secretFound ? "secret" : infraCount > 0 ? "internal" : "public";
+  // Strict block mode: refuse rather than redact when the content out-ranks the provider's clearance.
+  // The throw aborts the turn cleanly (agent-core surfaces the reason as the reply); nothing is sent.
+  if (getSetting(BLOCK_SETTING) === "true" && TIER_RANK[contentTier] > TIER_RANK[trust]) {
+    throw new Error(`egress refused: ${contentTier}-sensitive content to a ${trust}-cleared provider (${model.provider}); egress.block_over_trust is on`);
+  }
   return {
     context: { ...context, systemPrompt, messages },
     audit: {
@@ -164,5 +217,6 @@ export function gateEgress(context: Context, model: Model, getSetting: (k: strin
       infraRedacted: redactInfra ? infraCount : 0,
       redactedTypes: [...(secretFound ? ["secret"] : []), ...(redactInfra ? [...types] : [])],
     },
+    restore: tokens?.restore,
   };
 }
