@@ -3076,3 +3076,45 @@ check` 13/13, `just test` 454 pass / 0 fail.
 `docker run`-managed container (no compose file) contributes only its learned extension, not a
 re-runnable run-spec; restore replays configs but re-enabling systemd units and bringing compose up is
 the agent's job, not yet a single mechanical step.
+
+### 5.39 Power/UPS monitoring + graceful shutdown (2026-09-07)
+
+Second of the three owner-unblocked capstone items. Miro now watches a UPS via NUT and powers the box
+off gracefully on low battery. Live-verified against NUT's `dummy-ups` simulator on the dev VM (the
+owner has real hardware and will validate there later - a drop-in driver change).
+
+- **`inventory/power.ts`** - `readUps`/`readAllUps` run `upsc` (NUT's unauthenticated loopback read),
+  parse `ups.status`/`battery.*`, and derive `onBattery` (OB flag) / `lowBattery` (LB flag). Pure
+  parser + guarded I/O, never throws (the gpu.ts pattern). Exposed as the read tool `power_ups`.
+- **`operations/kinds/nut-install.ts`** (`nut.install`) - installs the `nut` package if absent and
+  configures upsd + the driver (default `dummy-ups` in `dummy-loop` mode, so editing the state file
+  changes `upsc` live; real hardware via a `driver`/`port` param), verifying `upsc` answers.
+  Monitor-only: **no upsmon** - Miro owns the shutdown decision, not upsmon's SHUTDOWNCMD. The recipe
+  was proven by hand on the VM before it was encoded.
+- **`operations/kinds/shutdown.ts`** (`system.shutdown`) - the graceful power-off, the ONLY sanctioned
+  way the box goes down for power. Reuses reboot.ts's take-down machinery (now-exported
+  `snapshot`/`containerNotes`/`restorePolicies`/`readBootId`, and a `verb` param on `rebootOutcome`)
+  and its boot-time `reconcile`: a power-off is verified at the NEXT boot (when power returns) by a new
+  boot id + the containers/severity coming back. Raw `poweroff`/`shutdown` stay **forbidden** by the
+  classifier; the refusal + the system prompt now point at `system_shutdown`.
+- **The power monitor** (`index.ts`) polls the configured UPS every 30s, notifies on each transition
+  (`worth_knowing` on battery, `needs_attention` on low battery -> phone), and on low battery flushes a
+  backup and runs `system.shutdown` autonomously - the one place a lifeline op auto-approves (there is
+  no one to confirm while the box is losing power). The `system_shutdown` agent tool does the same
+  pre-shutdown backup flush for a manual power-off.
+
+**Live-verified on the VM, checked independently.** `nut.install` set NUT up and `upsc ups@localhost`
+returned `OL`. Flipping the sim to on-battery produced a `worth_knowing` "on battery" notification with
+the box staying up; flipping to low battery fired the `needs_attention` "powering off" alert, flushed a
+backup, and ran the graceful shutdown - the VM really powered off, then on `up.sh` the boot-time
+reconcile recorded **committed**: "Powered off and came back ... 7 containers back and no failed units,
+severity 0->0" (all 7 media containers survived the power cycle via their restart policies). **A real
+bug found live:** after the auto-shutdown the sim was still LB, so the next boot shut the box down
+again - a boot loop. Fixed by arming the trigger only after the UPS is seen NOT on low battery; a box
+that boots into low battery now warns (`needs_attention` "still on low battery") and waits for line
+power instead of looping - verified (booted into LB, two polls, box stayed up, no new shutdown op).
+Gate: `just check` 13/13, `just test` 459 pass / 0 fail.
+
+**Not done (later):** if a box boots into low battery and power never returns, the armed guard means it
+warns rather than auto-shutting-down (relies on the UPS itself cutting out) - a max-on-battery timer
+would close that; real-hardware validation (a `usbhid-ups` driver) is the owner's, on the real server.
