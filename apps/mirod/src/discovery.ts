@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { listContainers, type ContainerSummary } from "./inventory/containers";
 import { listServices, type ServiceInfo } from "./inventory/systemd";
+import { getNetworkInterfaces, getTailscaleStatus } from "./inventory/network";
 import { remember } from "./memory/store";
 import { NOISE_UNIT } from "./agent/context";
 
@@ -108,5 +109,15 @@ export async function runDiscovery(db: Database): Promise<{ facts: number }> {
   ]);
   const facts = factsFrom(containers, services);
   for (const f of facts) remember(db, "server_fact", f.key, f.value, "discovery");
-  return { facts: facts.length };
+  // Enrichment (PLAN.md magic-setup): a durable "reachable at" fact - the tailnet IP if there is one
+  // (from anywhere), else the LAN IP. Powers "manage from anywhere" awareness and ntfy base-URL hints.
+  let extra = 0;
+  const ts = await getTailscaleStatus().catch(() => null);
+  const lan = getNetworkInterfaces().find((i) => i.family === "IPv4" && !i.internal);
+  const addr = ts?.connected && ts.ip ? `tailnet ${ts.ip}` : lan ? `LAN ${lan.address}` : null;
+  if (addr) {
+    remember(db, "server_fact", "server.address", `Reachable at ${addr}`, "discovery");
+    extra++;
+  }
+  return { facts: facts.length + extra };
 }

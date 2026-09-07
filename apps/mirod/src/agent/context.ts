@@ -12,6 +12,7 @@ import type { ExtensionManifest } from "../extensions/manifest";
 import { query as queryMemory } from "../memory/store";
 import { capabilityContextLines, capabilityStatus } from "../capabilities";
 import { notificationChannelLines } from "../notifications";
+import { setupGapLines } from "../setup/status";
 
 // Self-assembling context (PLAN.md §5.9 client decisions: "assembled block + on-demand tool").
 // The agent is handed a map of itself every turn - what is on this server right now, which
@@ -125,6 +126,11 @@ export function buildContextBlock(db: Database, snapshot: ServerSnapshot): strin
   // so the agent knows before it relies on one, and can offer to set a channel up if none is configured.
   const channels = notificationChannelLines();
   if (channels.length > 0) parts.push(channels.join("\n"));
+  // Proactive setup (PLAN.md magic-setup slice): surface the well-run-server baseline gaps so the
+  // agent can OFFER to close them as one approvable plan - the "magic" of a sysadmin that shows up,
+  // assesses, and proposes. Empty (silent) once the baseline is set up.
+  const gaps = setupGapLines(db);
+  if (gaps.length > 0) parts.push(gaps.join("\n"));
   parts.push(REFUSALS);
   return parts.join("\n\n");
 }

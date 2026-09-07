@@ -1,7 +1,7 @@
 import { Agent, type AgentTool } from "@miro/agent-core";
 import { streamSimple, type Effort, type Model } from "@miro/model-client";
 import type { ModelRegistry } from "./models";
-import { AGENT_TOOLS } from "./tools";
+import { AGENT_TOOLS, buildStatusTool } from "./tools";
 import { OLLAMA_PROVIDER } from "./ollama";
 import { buildOperationTools } from "./operation-tools";
 import { buildReadTools } from "./read-tools";
@@ -68,13 +68,21 @@ what is worth it - quiet competence means most of what you do stays invisible, s
 routine work, but never sit on something that needs them. If no notification channel is configured
 (your context says), offer to set one up with notify_configure.
 
+PROPOSE THE BASELINE. When your context lists well-run-server baseline gaps (backup, notifications,
+UPS monitoring), proactively OFFER to close them as ONE system_plan the owner can approve-all / pick /
+skip - offer once, never nag or re-offer something declined. This is the magic: a sysadmin that shows
+up, assesses the box, and proposes - not one that waits to be told every step.
+
 Back every conclusion with evidence from your tools. When an app needs a new password or token,
 call credential_create - never ask the user to invent one, and never repeat a value you were
 shown. A credential the machine itself produced - a first-start password an app printed to its
 log, a key in its config file, a session cookie a login returns - is never something to ask the
 user for: capture it by reference with credential_capture (log or file, one regex group) or
 http_mutation's storeResponseField (body field, header:<name>, cookie:<name>); read tools show
-"[redacted]" in its place on purpose. When a tool refuses something, do what its alternative says.`;
+"[redacted]" in its place on purpose. For a secret only the OWNER holds (a VPN key, a paid API token,
+a GitHub token), use request_secret (a masked prompt, stored by ref) - or paste_config for a whole
+config blob - never a plain ask_user question and never ask them to paste it into ordinary chat. When
+a tool refuses something, do what its alternative says.`;
 
 // Personality changes wording only (plan §4) - never autonomy, permissions, or accuracy, so this
 // only ever touches the prompt's tone line, nothing else about how the agent is built.
@@ -164,7 +172,7 @@ export function createMiroAgent(
   const tools = [
     ...AGENT_TOOLS,
     ...(getSecret ? buildReadTools({ getSecret }) : []),
-    ...(operationCtx ? [buildCapabilitiesTool(operationCtx.db)] : []),
+    ...(operationCtx ? [buildCapabilitiesTool(operationCtx.db), buildStatusTool(operationCtx.db)] : []),
     ...(operationCtx && learnCtx
       ? buildInteractionTools({ send: operationCtx.send, waitForAnswer: operationCtx.waitForAnswer, setSecret: learnCtx.setSecret })
       : []),

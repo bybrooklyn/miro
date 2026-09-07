@@ -49,10 +49,13 @@ import { computeSeverity } from "./operations/severity";
 import { redactSecretsInText } from "./operations/classify";
 import { maybeRunSecretCli } from "./secret-intake/cli";
 import { importSecretDropFiles } from "./secret-intake/drop-file";
+import { maybeRunStatusCli } from "./setup/status-cli";
 
-// `mirod secret set <ref>` (and future CLI subcommands) run and exit BEFORE the daemon boots, so a
-// credential can be stored out-of-band without ever reaching the agent/model/transcript.
+// CLI subcommands (`mirod secret set <ref>`, `mirod status`) run and exit BEFORE the daemon boots -
+// a credential stored out-of-band never reaches the agent/model/transcript; status is a from-anywhere
+// glance over SSH.
 if (await maybeRunSecretCli()) process.exit(0);
+if (await maybeRunStatusCli()) process.exit(0);
 
 const OPERATION_KINDS = allOperationKinds((ref) => secretStore.getSecret(db, ref), (ref, value) => secretStore.setSecret(db, ref, value));
 

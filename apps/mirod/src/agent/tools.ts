@@ -10,6 +10,9 @@ import { indexRootOnDisk, queryByClassOnDisk } from "../inventory/filesystem";
 import { listInstalledPackages } from "../inventory/packages";
 import { detectGpus } from "../inventory/gpu";
 import { readAllUps } from "../inventory/power";
+import type { Database } from "bun:sqlite";
+import { computeSetupStatus } from "../setup/status";
+import { computeSeverity } from "../operations/severity";
 import { listTrash } from "../operations/trash";
 
 // Schemas are named so `execute` can reference `Static<typeof schema>` explicitly - TS can't
@@ -167,3 +170,16 @@ export const AGENT_TOOLS = [
     execute: async () => textResult(listTrash().map((e) => ({ originalPath: e.originalPath, trashedPath: e.trashedPath, trashedAt: new Date(e.trashedAt).toISOString() }))),
   },
 ];
+
+/** Db-bound read tool: the setup/health status (configured, gaps vs the well-run baseline, severity).
+ * Added alongside buildCapabilitiesTool at the agent's assembly point since it needs the DB. */
+export function buildStatusTool(db: Database) {
+  return {
+    name: "config_status",
+    label: "Setup status",
+    description:
+      "Show how this box is set up: what's configured (backup, notifications, UPS monitoring), the current health severity, and what's still missing from the well-run-server baseline. Use it to answer 'how is my server set up / what's left' and to decide what to proactively offer.",
+    parameters: Type.Object({}),
+    execute: async () => textResult({ ...computeSetupStatus(db), health: await computeSeverity(db) }),
+  };
+}
