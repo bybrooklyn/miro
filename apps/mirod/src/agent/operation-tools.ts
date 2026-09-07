@@ -23,6 +23,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { isSensitivePath } from "../operations/classify";
 import { fileDeleteKind, type FileDeleteParams } from "../operations/kinds/file-delete";
 import { httpMutationKind, takeOutput as takeHttpOutput, type HttpMutationParams } from "../operations/kinds/http-mutation";
+import { secretFileKind, type SecretFileParams } from "../operations/kinds/secret-file";
 import { classifyCommand, redactSecretsInText } from "../operations/classify";
 import { runSandboxed } from "../operations/sandbox";
 import { runBackup, pushBackup, type BackupDeps, BACKUP_ENABLED, BACKUP_REPO, BACKUP_AUTH, BACKUP_AGE_RECIPIENT, BACKUP_EXTRA_PATHS } from "../backup";
@@ -111,6 +112,12 @@ const fileDeleteParams = Type.Object({
   reason: Type.String({ description: "Why, in one line - shown to the user as the goal." }),
 });
 
+const secretFileParams = Type.Object({
+  path: Type.String({ description: "Absolute path to write, e.g. /var/lib/miro/vpn/gluetun.env - not a path Miro manages as its own secret material." }),
+  template: Type.String({ description: "File content with {{secret:<ref>}} placeholders, e.g. WIREGUARD_PRIVATE_KEY={{secret:extension.gluetun.wg_key}}. Resolved at apply time - you never see the value and it never lands in a committed/backed-up file. Must contain at least one placeholder." }),
+  reason: Type.String({ description: "Why, in one line - shown to the user as the goal." }),
+});
+
 const httpMutationParams = Type.Object({
   method: Type.Enum(["POST", "PUT", "PATCH", "DELETE"]),
   url: Type.String({ description: "Local or private-network URL only." }),
@@ -163,6 +170,7 @@ const restoreParams = Type.Object({
  * agent/tools.ts's read-only AGENT_TOOLS so subagents spawned via worker.ts never see these. */
 export function buildOperationTools(ctx: OperationToolContext) {
   const httpKind = httpMutationKind(ctx.getSecret ?? (() => null), ctx.setSecret);
+  const secretFile = secretFileKind(ctx.getSecret ?? (() => null));
   const backupDeps: BackupDeps = {
     db: ctx.db,
     getSetting: ctx.getSetting ?? (() => null),
@@ -467,6 +475,17 @@ export function buildOperationTools(ctx: OperationToolContext) {
       },
     },
     {
+      name: "write_secret_file",
+      label: "Write secret file",
+      description:
+        "Write a file that must contain a real credential (a container env_file, a config with a password) from a template with {{secret:<ref>}} placeholders. The daemon resolves them at apply time and writes 0600 - the value never appears in the plan, in what you see, or in a backed-up file. Use this instead of file_write whenever a secret must land in a file on disk, e.g. a VPN key in gluetun's env_file.",
+      parameters: secretFileParams,
+      execute: async (_id: string, params: SecretFileParams & { reason: string }) => {
+        const { reason, ...p } = params;
+        return textResult(await runOperation(ctx, secretFile, reason, p));
+      },
+    },
+    {
       name: "http_mutation",
       label: "HTTP write",
       description:
@@ -488,6 +507,7 @@ export function buildOperationTools(ctx: OperationToolContext) {
 /** Every kind the engine must know at boot for crash reconciliation (index.ts's OPERATION_KINDS). */
 export function allOperationKinds(getSecret: (ref: string) => string | null, setSecret?: (ref: string, value: string) => void) {
   const http = httpMutationKind(getSecret, setSecret);
+  const secretFile = secretFileKind(getSecret);
   return {
     [systemdRestartKind.kind]: systemdRestartKind,
     [systemdUnitKind.kind]: systemdUnitKind,
@@ -501,5 +521,6 @@ export function allOperationKinds(getSecret: (ref: string) => string | null, set
     [fileEditKind.kind]: fileEditKind,
     [fileDeleteKind.kind]: fileDeleteKind,
     [http.kind]: http,
+    [secretFile.kind]: secretFile,
   };
 }
