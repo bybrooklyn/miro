@@ -13,6 +13,33 @@ export async function startIrohEndpoint(secretKeyBytes: number[]): Promise<Endpo
   return EndpointClass.bind({ secretKey: secretKeyBytes, alpns: [ALPN] });
 }
 
+/** Wait until the endpoint has a home relay, bounded. A ticket minted before then can lack a relay
+ * URL, and a relay-only peer - anything in a browser, and any client that cannot hole-punch - then has
+ * no way in at all. Bounded because the daemon must not hang on a slow or unreachable relay: a ticket
+ * without one still works for a direct/hole-punched dial. */
+export async function awaitRelay(endpoint: Endpoint, timeoutMs = 8_000): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<false>((resolve) => {
+    timer = setTimeout(() => resolve(false), timeoutMs);
+  });
+  try {
+    return await Promise.race([endpoint.online().then(() => true), timeout]);
+  } catch {
+    return false;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/** Whether the ticket this endpoint would mint carries a relay URL. */
+export function hasRelay(endpoint: Endpoint): boolean {
+  try {
+    return endpoint.addr().relayUrl() !== null;
+  } catch {
+    return false;
+  }
+}
+
 export function ticketFor(endpoint: Endpoint): string {
   return EndpointTicket.fromAddr(endpoint.addr()).toString();
 }

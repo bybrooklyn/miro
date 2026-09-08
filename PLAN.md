@@ -3497,3 +3497,49 @@ Still owed before the one-liner is real for a stranger: flip the repo public (hi
 clean of high-signal secret shapes across all 155 commits; `tools/dev-vm/state/` was never committed)
 and cut a release that contains `verify-manifest`, so the in-path signature gate runs on a real
 signed artifact. Next: PR 2, device pairing.
+
+### 5.50 Deploy-anywhere, PR 2: device pairing (2026-09-08)
+
+Until now, `/pair` printed a ticket and said the quiet part out loud: *"anyone with this string gets
+full daemon access"* - permanent, unrevocable, whole-daemon. That was the last thing standing between
+"reachable from anywhere" and "safe to actually use from anywhere".
+
+- **`devices/store.ts`** - `devices` and `pairing_codes` in the usual `ensure*Table`/`fromRow` shape.
+  A device row holds a **sha256 of its token**, never the token, so a stolen database cannot be
+  replayed. Revoking writes a tombstone rather than deleting: the owner can still see a device existed
+  and when it was cut off.
+- **`/pair` mints an invite, not a credential**: a 9-digit single-use code with a 10 minute expiry,
+  wrapped with the ticket into one base64url blob so the person pasting it does not have to know which
+  kind of string they were handed. The remote device redeems it once for its own durable token.
+- **The transport gate** lives in the Iroh accept path: nothing is served, and crucially the connection
+  is **not registered in the broadcast set**, until a device presents a token or redeems a code. An
+  unauthenticated peer is dropped after a 20s grace. The **unix socket is deliberately untouched** -
+  `/run/miro` is 0750 root:miro and the socket 0660, so opening it already proves you are on the box
+  and in the group; a token there would be a weaker second copy of a check the kernel already made.
+- **Client-side, below the UI** (`apps/miro/src/iroh-connect.ts`): `MIRO_TICKET` accepts an invite or a
+  bare ticket, the handshake happens in the transport, and a redeemed token is stored 0600 in
+  `MIRO_DIR/devices.json` keyed by NodeId - so `@miro/ui-model` and every renderer stay unaware that
+  authentication exists. A refusal is terminal, not a reconnect loop: a revoked token stays revoked.
+- **`mirod devices`** lists and revokes; a new pairing raises a `worth_knowing` notification.
+- **`awaitRelay`**: `Endpoint.bind()` returns before a home relay is necessarily known, and the ticket
+  is built from whatever the endpoint can report at that instant - so a ticket could be minted with no
+  relay URL, which a relay-only peer (anything in a browser, per the web ladder) has no way around. The
+  daemon now waits, bounded, and says which it got.
+
+**Live-verified between the dev VM and this Mac, over real Iroh** (a headless driver running the real
+client transport): redeem an invite -> paired, token stored, a real `status` event arrives; reconnect
+with the stored token -> authenticated; the **same invite from a second device -> refused ("already
+used")**; a **bare ticket with no token -> refused**, and the daemon logged dropping the connection that
+never authenticated; `mirod devices` listed it with a live last-seen; **revoke -> the next connection is
+refused even though the device still holds the token**; the local socket still needed nothing; and the
+startup line now reads "relay reachable". Expiry is unit-tested (a ten minute wait is not a live test).
+
+**Found live: the TUI crashed on quit, and on every reconnect.** `ep.close()` panics the iroh addon
+("iroh-js/src/endpoint.rs:853: failed to delete napi ref" -> abort), and `bi.send.finish()` races a
+process that exits right after it, which is exactly what quitting does. The client now keeps **one
+endpoint per process** and never closes it, and `end()` drops the stream rather than finishing it - the
+daemon's read loop runs the same teardown it runs for any lost client. Pre-existing, not introduced
+here; it only surfaced because pairing put a real remote client through a full connect/quit cycle.
+
+Gate: `just check` 13/13, `just test` 536 pass / 0 fail. VM left clean (test devices and codes removed).
+Next: PR 3a, the web spine.

@@ -6,7 +6,7 @@ import {
   type ClientMessage,
   type ServerEvent,
 } from "@miro/protocol";
-import { dialIrohTicket } from "./iroh-connect";
+import { dialIrohTicket, MiroAuthError } from "./iroh-connect";
 
 /** Only `.write()`/`.end()` are ever called on the connection - satisfied by both Bun.connect's
  * unix-socket result and dialIrohTicket's remote Iroh result. */
@@ -87,6 +87,13 @@ export function useMiroConnection(onEvent: (event: ServerEvent) => void) {
         })
         .catch((err) => {
           if (cancelled) return;
+          // A refused device is terminal: a revoked token stays revoked and a spent code stays spent,
+          // so reconnecting in a loop would just spin. Say why, once, and stop.
+          if (err instanceof MiroAuthError) {
+            emit({ type: "notice", level: "warn", text: `Not paired: ${err.message}` });
+            emit({ type: "status", server: lastServerRef.current, health: "degraded" });
+            return;
+          }
           console.error("[miro]", err.message);
           onClose(); // exhausted retries - flag disconnected and try the whole cycle again
         });

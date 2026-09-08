@@ -20,7 +20,8 @@ import { registerOllamaIfReachable } from "./agent/ollama";
 import { registerLlm7IfReachable, LLM7_PROVIDER } from "./agent/llm7";
 import { ensureTimelineTable, recordEvent } from "./timeline";
 import { createSecretStore } from "./secrets";
-import { generateIrohSecretKey, startIrohEndpoint, ticketFor, nodeIdOf, acceptLoop } from "./iroh";
+import { generateIrohSecretKey, startIrohEndpoint, ticketFor, nodeIdOf, acceptLoop, awaitRelay, hasRelay } from "./iroh";
+import { ensureDevicesTable, mintPairingCode, redeemPairingCode, authenticateDevice, CODE_TTL_MS } from "./devices/store";
 import { ensureUsageTable } from "./capabilities/usage";
 import { ensureEgressTable } from "./agent/egress-store";
 import { reconcileOperations, runOperation, type OperationToolContext, type ReflectionTrigger } from "./operations/engine";
@@ -57,6 +58,7 @@ import { maybeRunStatusCli } from "./setup/status-cli";
 import { maybeRunEgressCli } from "./setup/egress-cli";
 import { maybeRunVerifyManifestCli } from "./self-update/verify-cli";
 import { isSocketLive } from "./socket-guard";
+import { maybeRunDevicesCli } from "./devices/cli";
 
 // CLI subcommands (`mirod secret set <ref>`, `mirod status`) run and exit BEFORE the daemon boots -
 // a credential stored out-of-band never reaches the agent/model/transcript; status is a from-anywhere
@@ -65,6 +67,7 @@ if (await maybeRunSecretCli()) process.exit(0);
 if (await maybeRunStatusCli()) process.exit(0);
 if (await maybeRunEgressCli()) process.exit(0);
 if (await maybeRunVerifyManifestCli()) process.exit(0);
+if (await maybeRunDevicesCli()) process.exit(0);
 
 
 mkdirSync(MIRO_DIR, { recursive: true });
@@ -116,6 +119,7 @@ for (const ext of listEnabled(db)) {
 const secretStore = createSecretStore(join(MIRO_DIR, "secret.key"));
 secretStore.ensureTable(db);
 ensureStacksTable(db);
+ensureDevicesTable(db);
 // The operation-kind registry for crash reconciliation. Defined here (not at the top) so it can pass
 // the real db to the stack kinds' registry; its closures over secretStore/db are otherwise lazy.
 const OPERATION_KINDS = allOperationKinds((ref) => secretStore.getSecret(db, ref), (ref, value) => secretStore.setSecret(db, ref, value), db);
@@ -837,9 +841,17 @@ function createConnectionState(send: (event: ServerEvent) => void): ConnState {
     } else if (msg.type === "provider_setup") {
       startProviderSetup(send);
     } else if (msg.type === "pair_request") {
+      // An invite, not a bearer credential: the ticket says where this box is, the code is what grants
+      // access - once, within ten minutes. The remote client redeems it for its own revocable token,
+      // so a code left in a scrollback is worthless soon after and a lost laptop is one revoke away.
+      const code = mintPairingCode(db);
+      const invite = Buffer.from(JSON.stringify({ v: 1, ticket: irohTicket, code })).toString("base64url");
       send({
         type: "reply",
-        text: `Pairing ticket (anyone with this string gets full daemon access):\n${irohTicket}\n\nOn the remote machine:\n  MIRO_TICKET=${irohTicket} miro`,
+        text:
+          `Pairing invite (single use, expires in ${Math.round(CODE_TTL_MS / 60000)} minutes):\n\n  MIRO_TICKET=${invite} miro\n\n` +
+          `Run that on the other machine. It exchanges the code for its own token, which you can list and\n` +
+          `revoke any time with \`mirod devices\`. The code alone is: ${code.slice(0, 3)} ${code.slice(3, 6)} ${code.slice(6)}`,
       });
     } else if (msg.type === "memory_list") {
       send({ type: "reply", text: formatForDisplay(listAll(db, 50)) });
@@ -964,27 +976,85 @@ function loadOrCreateIrohSecretKey(): number[] {
 }
 
 const irohEndpoint = await startIrohEndpoint(loadOrCreateIrohSecretKey());
+// Bind returns before a home relay is necessarily known, and the ticket is built from whatever the
+// endpoint can report at that instant - so mint it only after the relay is up, or a remote client that
+// cannot hole-punch has nothing to dial. Bounded: a slow relay must not hold the daemon.
+if (!(await awaitRelay(irohEndpoint))) console.warn("[mirod] no Iroh home relay yet - the pairing invite may only work for a directly reachable client");
 const irohTicket = ticketFor(irohEndpoint);
 // The NodeId only: the ticket grants full daemon access and stdout is a durable, shipped log file
 // in production (audit S3). /pair hands the ticket to the owner on request.
-console.log(`mirod also reachable via Iroh - node ${nodeIdOf(irohEndpoint)}; /pair shows the pairing ticket`);
+console.log(`mirod also reachable via Iroh - node ${nodeIdOf(irohEndpoint)} (${hasRelay(irohEndpoint) ? "relay reachable" : "direct only - no home relay"}); /pair mints a pairing invite`);
+
+/** How long a remote connection may sit unauthenticated before it is dropped. */
+const AUTH_GRACE_MS = 20_000;
 
 acceptLoop(irohEndpoint, (conn) => {
   (async () => {
     const bi = await conn.acceptBi();
-    const state = createConnectionState((event) => {
+    const send = (event: ServerEvent) => {
       bi.send.writeAll(utf8Bytes(encodeLine(event))).catch((err) => {
         console.error("[mirod] iroh send failed", err);
       });
+    };
+    // Remote connections authenticate BEFORE a ConnState exists (deploy-anywhere PR 2). Until then
+    // nothing is served and, crucially, the connection is not registered in the broadcast set - an
+    // unauthenticated peer must not receive notifications meant for the owner. The local unix socket
+    // has no such phase: its filesystem permissions already are the credential.
+    const session: { state: ConnState | null } = { state: null };
+    const preAuth = createLineBuffer((line) => {
+      let msg: ClientMessage;
+      try {
+        msg = JSON.parse(line) as ClientMessage;
+      } catch {
+        send({ type: "pair_result", ok: false, error: "malformed message" });
+        return;
+      }
+      if (msg.type === "auth") {
+        const device = authenticateDevice(db, msg.token);
+        if (!device) {
+          send({ type: "pair_result", ok: false, error: "unknown or revoked device token - pair again with /pair on the server" });
+          return;
+        }
+        send({ type: "pair_result", ok: true, deviceId: device.id, deviceName: device.name });
+        session.state = createConnectionState(send);
+        console.log(`[mirod] remote client authenticated: ${device.name} (${device.id})`);
+      } else if (msg.type === "pair_redeem") {
+        const res = redeemPairingCode(db, msg.code, msg.deviceName ?? "remote client", "iroh");
+        if ("error" in res) {
+          const why = { unknown: "no such pairing code", expired: "that pairing code has expired", used: "that pairing code was already used" }[res.error];
+          send({ type: "pair_result", ok: false, error: why });
+          return;
+        }
+        send({ type: "pair_result", ok: true, token: res.token, deviceId: res.device.id, deviceName: res.device.name });
+        session.state = createConnectionState(send);
+        notify({
+          tier: "worth_knowing",
+          source: "pair",
+          title: "New device paired",
+          body: `${res.device.name} (${res.device.id}) can now reach Miro remotely. Revoke it with \`mirod devices revoke ${res.device.id}\`.`,
+          at: Date.now(),
+        });
+        console.log(`[mirod] paired a new device: ${res.device.name} (${res.device.id})`);
+      } else {
+        send({ type: "pair_result", ok: false, error: "authenticate first: send auth or pair_redeem" });
+      }
     });
+    const graceTimer = setTimeout(() => {
+      if (!session.state) {
+        console.warn("[mirod] dropping an iroh connection that never authenticated");
+        conn.close(0n, [...utf8Bytes("unauthenticated")]);
+      }
+    }, AUTH_GRACE_MS);
     try {
       for (;;) {
         const chunk = await bi.recv.read(65536);
         if (!chunk || chunk.length === 0) break;
-        state.feed(Buffer.from(chunk));
+        if (session.state) session.state.feed(Buffer.from(chunk));
+        else preAuth(Buffer.from(chunk));
       }
     } finally {
-      disconnect(state); // settle questions + deregister from broadcast (audit D2)
+      clearTimeout(graceTimer);
+      if (session.state) disconnect(session.state); // settle questions + deregister from broadcast (audit D2)
     }
   })().catch((err) => console.error("[mirod] iroh session error", err));
 }).catch((err) => console.error("[mirod] iroh accept loop stopped", err));

@@ -167,6 +167,20 @@ export interface SystemPlanEvent {
   notes?: string[];
 }
 
+/** The outcome of a remote client's authentication handshake (deploy-anywhere PR 2). Sent only on a
+ * transport that requires one - never on the local unix socket, where filesystem permissions are the
+ * credential. On success the token is shown exactly once, for the client to store. */
+export interface PairResultEvent {
+  type: "pair_result";
+  ok: boolean;
+  /** A durable per-device token, present only when a pairing code was just redeemed. */
+  token?: string;
+  deviceId?: string;
+  deviceName?: string;
+  /** Why it failed, in words meant for a human: unknown/expired/used code, or an invalid token. */
+  error?: string;
+}
+
 export type ServerEvent =
   | StatusEvent
   | QuestionEvent
@@ -178,7 +192,8 @@ export type ServerEvent =
   | OperationPlanEvent
   | OperationProgressEvent
   | OperationResultEvent
-  | SystemPlanEvent;
+  | SystemPlanEvent
+  | PairResultEvent;
 
 export interface ChatMessage {
   type: "chat";
@@ -225,6 +240,22 @@ export interface NoticeFeedbackMessage {
   action: "quiet" | "keep";
 }
 
+/** First message on a transport that requires authentication: a device presenting the token it holds
+ * from an earlier pairing. */
+export interface AuthMessage {
+  type: "auth";
+  token: string;
+}
+
+/** First message from a device that has no token yet: redeem a short-lived, single-use pairing code
+ * (from `/pair` on the box) for one. */
+export interface PairRedeemMessage {
+  type: "pair_redeem";
+  code: string;
+  /** How this device should be listed in `mirod devices` - a hostname, usually. */
+  deviceName?: string;
+}
+
 export type ClientMessage =
   | ChatMessage
   | AnswerMessage
@@ -232,7 +263,9 @@ export type ClientMessage =
   | PairRequestMessage
   | MemoryListMessage
   | MemoryForgetMessage
-  | NoticeFeedbackMessage;
+  | NoticeFeedbackMessage
+  | AuthMessage
+  | PairRedeemMessage;
 
 /** ALPN identifying the miro wire protocol to Iroh - bump the suffix on any breaking wire change. */
 export const IROH_ALPN = "miro/mirod/1";
