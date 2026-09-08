@@ -18,10 +18,19 @@ export interface SecretStore {
   ensureTable(db: Database): void;
   setSecret(db: Database, ref: SecretRef, value: string): void;
   getSecret(db: Database, ref: SecretRef): string | null;
+  /** Remove a secret so that its ciphertext does not stay readable in the database file. */
+  deleteSecret(db: Database, ref: SecretRef): boolean;
 }
 
 export function ensureSecretsTable(db: Database): void {
   db.run("CREATE TABLE IF NOT EXISTS secrets (ref TEXT PRIMARY KEY, ciphertext TEXT NOT NULL)");
+  // SQLite leaves a deleted or overwritten cell's bytes in the page until it is reused, so a rotated
+  // or removed credential stays recoverable from the file - next to secret.key, in the same directory,
+  // and in any copy of it. Found live: a secret deleted from a busy database was still readable in
+  // miro.db afterwards, with no live row referencing it. secure_delete makes SQLite zero freed content
+  // instead. Set per connection, so it is set here rather than only at boot: every process that opens
+  // this database (the daemon, `mirod secret set`, the status CLI) gets it.
+  db.exec("PRAGMA secure_delete = ON");
 }
 
 /** Refs only, never values - what an agent is told it already holds ("credentials on file").
@@ -81,6 +90,16 @@ export function createSecretStore(keyPath: string): SecretStore {
         | { ciphertext: string }
         | null;
       return row ? decrypt(row.ciphertext) : null;
+    },
+    deleteSecret(db, ref) {
+      const row = db.query("SELECT ciphertext FROM secrets WHERE ref = ?").get(ref) as { ciphertext: string } | null;
+      if (!row) return false;
+      // Overwrite in place before deleting, and with the same length so the update rewrites the cell
+      // rather than relocating the row. Belt and braces on top of secure_delete: this holds even on a
+      // database some other process opened without the pragma.
+      db.run("UPDATE secrets SET ciphertext = ? WHERE ref = ?", ["0".repeat(row.ciphertext.length), ref]);
+      db.run("DELETE FROM secrets WHERE ref = ?", [ref]);
+      return true;
     },
   };
 }
