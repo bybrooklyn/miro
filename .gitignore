@@ -11,3 +11,8 @@ tools/dev-vm/state/
 .claude/*.lock
 # A provider CLI login drops its credential here relative to the cwd - a real secret, never tracked.
 auth.json
+# Environment files hold real credentials (a stack's env_file, a provider key). Never tracked; an
+# .env.example (placeholders only) is allowed so a layout can still be documented.
+.env
+.env.*
+!.env.example
