@@ -16,3 +16,6 @@ auth.json
 .env
 .env.*
 !.env.example
+
+# Playwright MCP scratch output (page snapshots, console logs) from live browser testing.
+.playwright-mcp/
