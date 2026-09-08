@@ -3340,3 +3340,30 @@ which drove the v1/v2 `resolveCompose` support. Gate: `just check` 13/13, `just 
 `capability` recipe, reuse-before-generate, wire the helpful/harmful outcome loop); slice 3 = update
 (pull+recreate+rollback) + edit-and-reapply. Then pillar 2 (private-by-default / local models) and
 pillar 3 (deploy-anywhere).
+
+### 5.46 The compose-killer, slice 2: self-learning install recipes (2026-09-07)
+
+The "gets smarter every time" half of the wedge, and the answer to "where composes come from" -
+**self-learning, not a catalog** (§5.13 machine-earned knowledge; a huge catalog is a non-goal). Built
+on the EXISTING `capability` memory substrate, which already carries occurrence_count + helpful/harmful
++ provenance (`memory/store.ts`), so this is mostly wiring the loop §5.15 B designed but left unwired.
+
+- **`stacks/recipes.ts`** - `recordRecipe` stores/reinforces the app's proven compose as a `capability`
+  memory keyed `stack:<app>` (via `remember`); `getRecipe` reads it back with its outcome record and a
+  **`reliable`** flag (`harmful <= helpful`); `recipeWorked`/`recipeFailed` are `bumpHelpful`/
+  `bumpHarmful`. Local now; the schema is already sharing-ready.
+- **`deploy_stack`** (operation-tools.ts) now, on a **verified** deploy, records/reinforces the recipe;
+  a `fromRecipe:true` deploy that verifies is credited, one that rolls back demotes the recipe.
+- **`stack_recipe(app)` read tool** + the system prompt: the agent checks for a proven, reliable recipe
+  BEFORE writing a compose and reuses/adapts it (fromRecipe:true), regenerating only when there's none
+  or it's gone unreliable. This turns "generate every time" into "learn once, reuse, improve."
+
+**Live-verified on the VM (real Docker + the real memory DB):** a fresh `traefik/whoami` deploy stored
+the exact working compose as a recipe (timesSeen 1, reliable, composeMatches true); a reuse-success
+credited it (helpful 1, still reliable); two failures demoted it (harmful 2 -> **reliable flipped
+false**, steering the agent to regenerate); cleanup removed the stack + forgot the recipe. Gate: `just
+check` 13/13, `just test` 491 pass / 0 fail.
+
+**Next:** slice 3 = update (pull+recreate+rollback) + edit-and-reapply, then pillar 2 (private-by-default)
+and pillar 3 (deploy-anywhere). A future opt-in community recipe EXCHANGE (with an anti-poisoning story,
+§5.17's Misevolve finding) is the payoff of "sharing-ready".
