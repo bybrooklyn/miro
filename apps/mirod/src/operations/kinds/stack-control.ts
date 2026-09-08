@@ -3,9 +3,14 @@ import { join } from "node:path";
 import { runPrivileged } from "../../inventory/exec";
 import { moveToTrash, trashDestination } from "../trash";
 import { getStack, setStackStatus, removeStack } from "../../stacks/store";
-import { STACKS_ROOT } from "./stack-deploy";
+import { STACKS_ROOT, resolveCompose } from "./stack-deploy";
 import type { Database } from "bun:sqlite";
 import type { OperationKind } from "../engine";
+
+async function projectRunning(app: string): Promise<number> {
+  const out = await runPrivileged(["docker", "ps", "--filter", `label=com.docker.compose.project=${app}`, "--filter", "status=running", "-q"], { timeoutMs: 15_000 }).catch(() => "");
+  return out.split("\n").filter((l) => l.trim()).length;
+}
 
 // Lifecycle control of an already-managed stack (PLAN.md compose-killer slice 1): stop / start /
 // down / remove, through the engine. `remove` moves the compose dir to trash (recoverable) and drops
@@ -23,7 +28,10 @@ export interface StackControlParams {
 export function stackControlKind(db: Database): OperationKind<StackControlParams, { priorStatus: string | null }> {
   const dirFor = (app: string) => join(STACKS_ROOT, app);
   const composeFor = (app: string) => join(dirFor(app), "compose.yaml");
-  const compose = (app: string, ...args: string[]) => runPrivileged(["docker", "compose", "-p", app, "-f", composeFor(app), ...args], { timeoutMs: 5 * 60_000 });
+  const compose = async (app: string, ...args: string[]) => {
+    const cc = (await resolveCompose()) ?? ["docker", "compose"];
+    return runPrivileged([...cc, "-p", app, "-f", composeFor(app), ...args], { timeoutMs: 5 * 60_000 });
+  };
 
   return {
     kind: "stack.control",
@@ -75,8 +83,8 @@ export function stackControlKind(db: Database): OperationKind<StackControlParams
 
     async verify(p) {
       if (p.action === "remove") return getStack(db, p.app) === null && !existsSync(dirFor(p.app));
-      const ids = (await compose(p.app, "ps", "-q").catch(() => "")).trim();
-      return p.action === "start" ? ids.length > 0 : ids.length === 0;
+      const running = await projectRunning(p.app);
+      return p.action === "start" ? running > 0 : running === 0;
     },
 
     async rollback(p, captured) {

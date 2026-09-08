@@ -28,18 +28,28 @@ interface Captured {
   priorCompose: string | null;
 }
 
-/** Parse the compose and refuse the unambiguously dangerous shapes; collect binds/caps for the plan
- * (the operation is confirmed, so a human sees the rest). ponytail: catastrophic-only scan + human
- * confirm; tighten to a full policy if model-generated composes ever slip something subtle past. */
-export function scanCompose(yamlText: string): { refuse: string | null; binds: string[]; privileged: string[] } {
+/** The compose CLI on this box, either the v2 plugin (`docker compose`) or the v1 standalone
+ * (`docker-compose`, what Debian's docker.io ships) - both accept `-p`/`-f`/up/down/stop/start.
+ * Null when neither is present. Resolving both is what lets Miro run "for everyone", not just on
+ * Docker-CE boxes. */
+export async function resolveCompose(): Promise<string[] | null> {
+  if (await runPrivileged(["docker", "compose", "version"], { timeoutMs: 10_000 }).then(() => true).catch(() => false)) return ["docker", "compose"];
+  if (await commandExists("docker-compose")) return ["docker-compose"];
+  return null;
+}
+
+/** Services declared in a compose doc + the catastrophic-shape refusal (privileged/host-mount).
+ * The operation is confirmed, so the plan shows the rest for a human. */
+export function scanCompose(yamlText: string): { refuse: string | null; binds: string[]; serviceCount: number } {
   let doc: any;
   try {
     doc = Bun.YAML.parse(yamlText);
   } catch (e) {
-    return { refuse: `compose is not valid YAML: ${e instanceof Error ? e.message : e}`, binds: [], privileged: [] };
+    return { refuse: `compose is not valid YAML: ${e instanceof Error ? e.message : e}`, binds: [], serviceCount: 0 };
   }
   const services = doc?.services;
-  if (!services || typeof services !== "object") return { refuse: "compose has no services", binds: [], privileged: [] };
+  if (!services || typeof services !== "object") return { refuse: "compose has no services", binds: [], serviceCount: 0 };
+  const names = Object.keys(services);
   const binds: string[] = [];
   const privileged: string[] = [];
   for (const [name, svc] of Object.entries<any>(services)) {
@@ -50,28 +60,19 @@ export function scanCompose(yamlText: string): { refuse: string | null; binds: s
       const src = typeof v === "string" ? v.split(":")[0] : v?.source;
       if (typeof src !== "string" || !src.startsWith("/")) continue; // named volume or relative - fine
       binds.push(src);
-      if (src === "/" || /docker\.sock$/.test(src)) return { refuse: `service "${name}" bind-mounts ${src} - refused (full host / docker control)`, binds, privileged };
-      if (/^\/(root|proc)(\/|$)/.test(src) || src === "/var/lib/miro" || src.startsWith("/var/lib/miro/")) return { refuse: `service "${name}" bind-mounts ${src} - refused (Miro state / secret material)`, binds, privileged };
+      if (src === "/" || /docker\.sock$/.test(src)) return { refuse: `service "${name}" bind-mounts ${src} - refused (full host / docker control)`, binds, serviceCount: names.length };
+      if (/^\/(root|proc)(\/|$)/.test(src) || src === "/var/lib/miro" || src.startsWith("/var/lib/miro/")) return { refuse: `service "${name}" bind-mounts ${src} - refused (Miro state / secret material)`, binds, serviceCount: names.length };
     }
   }
-  if (privileged.length) return { refuse: `privileged/SYS_ADMIN service(s): ${privileged.join(", ")} - refused; a self-hosted app almost never needs this`, binds, privileged };
-  return { refuse: null, binds, privileged };
+  if (privileged.length) return { refuse: `privileged/SYS_ADMIN service(s): ${privileged.join(", ")} - refused; a self-hosted app almost never needs this`, binds, serviceCount: names.length };
+  return { refuse: null, binds, serviceCount: names.length };
 }
 
-async function composePs(app: string, composePath: string): Promise<{ ok: boolean; detail: string }> {
-  try {
-    const out = await runPrivileged(["docker", "compose", "-p", app, "-f", composePath, "ps", "--format", "json"], { timeoutMs: 15_000 });
-    const rows = out
-      .split("\n")
-      .map((l) => l.trim())
-      .filter(Boolean)
-      .map((l) => JSON.parse(l) as { Service?: string; State?: string });
-    if (rows.length === 0) return { ok: false, detail: "no services running" };
-    const bad = rows.filter((r) => !/^(running|healthy)$/i.test(r.State ?? ""));
-    return bad.length === 0 ? { ok: true, detail: `${rows.length} service(s) running` } : { ok: false, detail: `not healthy: ${bad.map((b) => `${b.Service}=${b.State}`).join(", ")}` };
-  } catch (e) {
-    return { ok: false, detail: e instanceof Error ? e.message : "compose ps failed" };
-  }
+/** Running containers of a compose project, by label - works for v1 AND v2 (both stamp
+ * com.docker.compose.project), so verify doesn't depend on the compose CLI's ps output format. */
+async function projectRunning(app: string): Promise<number> {
+  const out = await runPrivileged(["docker", "ps", "--filter", `label=com.docker.compose.project=${app}`, "--filter", "status=running", "-q"], { timeoutMs: 15_000 }).catch(() => "");
+  return out.split("\n").filter((l) => l.trim()).length;
 }
 
 export function stackDeployKind(db: Database): OperationKind<StackDeployParams, Captured> {
@@ -84,19 +85,20 @@ export function stackDeployKind(db: Database): OperationKind<StackDeployParams, 
     async describe(p) {
       if (!APP_RE.test(p.app)) throw new Error(`refused: "${p.app}" is not a valid app name (lowercase letters, digits, _ - only)`);
       if (!(await commandExists("docker"))) throw new Error("refused: docker is required to run a stack - install Docker first");
+      if (!(await resolveCompose())) throw new Error("refused: a docker compose CLI is required (the v2 plugin `docker compose`, or the v1 `docker-compose`)");
       const scan = scanCompose(p.compose);
       if (scan.refuse) throw new Error(`refused: ${scan.refuse}`);
       const existed = getStack(db, p.app) !== null || existsSync(composeFor(p.app));
       return {
-        summary: `${existed ? "Redeploy" : "Deploy"} the "${p.app}" stack (${Buffer.byteLength(p.compose)} bytes of compose) under ${dirFor(p.app)}`,
+        summary: `${existed ? "Redeploy" : "Deploy"} the "${p.app}" stack (${scan.serviceCount} service(s), ${Buffer.byteLength(p.compose)} bytes of compose) under ${dirFor(p.app)}`,
         autoApprove: false,
         class: "mutate",
         writes: [dirFor(p.app), "/var/run/docker.sock"],
         network: true,
         warning: scan.binds.length ? `host paths this stack bind-mounts: ${scan.binds.join(", ")}` : undefined,
-        details: { app: p.app, dir: dirFor(p.app), binds: scan.binds, compose: p.compose },
-        expects: `the "${p.app}" compose project's services are up and healthy`,
-        rollbackWhen: "the services do not come up healthy within the window - the stack is brought down (and removed if newly created)",
+        details: { app: p.app, dir: dirFor(p.app), services: scan.serviceCount, binds: scan.binds, compose: p.compose },
+        expects: `the "${p.app}" compose project's ${scan.serviceCount} service(s) are running`,
+        rollbackWhen: "the services do not come up within the window - the stack is brought down (and removed if newly created)",
         scopeEvidence: "the stack's own dir + docker's socket; the compose was scanned for privileged/host-mount shapes",
         dryRunFidelity: "partial",
       };
@@ -108,30 +110,29 @@ export function stackDeployKind(db: Database): OperationKind<StackDeployParams, 
     },
 
     async apply(p) {
+      const cc = (await resolveCompose())!;
       const dir = dirFor(p.app);
       mkdirSync(dir, { recursive: true });
       writeFileSync(composeFor(p.app), p.compose);
-      await runPrivileged(["docker", "compose", "-p", p.app, "-f", composeFor(p.app), "up", "-d"], { timeoutMs: 15 * 60_000 });
+      await runPrivileged([...cc, "-p", p.app, "-f", composeFor(p.app), "up", "-d"], { timeoutMs: 15 * 60_000 });
       upsertStack(db, { app: p.app, dir, composePath: composeFor(p.app), status: "running" });
     },
 
     async verify(p) {
+      const want = scanCompose(readFileSync(composeFor(p.app), "utf8").toString()).serviceCount || 1;
       const deadline = Date.now() + 60_000;
-      let last = "";
       while (Date.now() < deadline) {
-        const r = await composePs(p.app, composeFor(p.app));
-        if (r.ok) return true;
-        last = r.detail;
+        if ((await projectRunning(p.app)) >= want) return true;
         await Bun.sleep(3_000);
       }
-      console.warn(`[mirod] stack.deploy verify failed for ${p.app}: ${last}`);
+      console.warn(`[mirod] stack.deploy verify failed for ${p.app}: fewer than ${want} service(s) running`);
       return false;
     },
 
     async rollback(p, captured) {
-      await runPrivileged(["docker", "compose", "-p", p.app, "-f", composeFor(p.app), "down"], { timeoutMs: 5 * 60_000 }).catch(() => {});
+      const cc = await resolveCompose();
+      if (cc) await runPrivileged([...cc, "-p", p.app, "-f", composeFor(p.app), "down"], { timeoutMs: 5 * 60_000 }).catch(() => {});
       if (!captured.existed) {
-        // A stack this operation created: remove it entirely (dir to trash, recoverable).
         removeStack(db, p.app);
         try {
           moveToTrash(trashDestination(dirFor(p.app)));
@@ -139,7 +140,6 @@ export function stackDeployKind(db: Database): OperationKind<StackDeployParams, 
           // best effort
         }
       } else if (captured.priorCompose !== null) {
-        // A redeploy that failed: restore the prior compose on disk (the owner can re-up it).
         try {
           writeFileSync(composeFor(p.app), captured.priorCompose);
         } catch {
@@ -148,7 +148,6 @@ export function stackDeployKind(db: Database): OperationKind<StackDeployParams, 
       }
     },
 
-    // Keep confirming the stack stays up (drift -> an incident the agent sees).
     prodtest: (p) => `stack:${p.app}`,
   };
 }
