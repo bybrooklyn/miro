@@ -1,7 +1,7 @@
 import { Agent, type AgentTool } from "@miro/agent-core";
 import { streamSimple, type Effort, type Model } from "@miro/model-client";
 import type { ModelRegistry } from "./models";
-import { AGENT_TOOLS, buildStatusTool, buildStackListTool } from "./tools";
+import { AGENT_TOOLS, buildStatusTool, buildStackListTool, buildStackRecipeTool } from "./tools";
 import { OLLAMA_PROVIDER } from "./ollama";
 import { buildOperationTools } from "./operation-tools";
 import { buildReadTools } from "./read-tools";
@@ -51,9 +51,11 @@ You are given OUTCOMES, not instructions. For anything beyond a quick question, 
    app is rejected, not created. A container's real writes are its bind-mounted host paths and the
    docker socket - declare those, never /var/lib/docker.
 6. ACQUIRE CAPABILITY WHEN YOU HIT SOMETHING UNKNOWN. To INSTALL/run an app, deploy it as a managed
-   compose stack with deploy_stack (write the full compose, researching the app if needed) - Miro owns
-   it, verifies it, and can later update/edit/remove it (stack_control, stack_list); never stand an app
-   up with ad-hoc file_write + a raw docker compose up. THEN, if the request needs to control the app's own
+   compose stack with deploy_stack - Miro owns it, verifies it, and can later update/edit/remove it
+   (stack_control, stack_list); never stand an app up with ad-hoc file_write + a raw docker compose up.
+   FIRST call stack_recipe(app): if Miro has a proven, reliable recipe, reuse/adapt its compose and pass
+   fromRecipe:true (so a success credits it and a failure demotes it); only research + write a fresh
+   compose when there's no recipe or it's unreliable. THEN, if the request needs to control the app's own
    API and you have no ext_* tools for it, call app_learn - it inspects, researches, generates and
    validates tools, available in this same task. Learning can recurse into dependencies on its own.
 7. VERIFY THE ARCHITECTURE, not liveness. "The container started" is not done. Check the data
@@ -174,7 +176,7 @@ export function createMiroAgent(
   const tools = [
     ...AGENT_TOOLS,
     ...(getSecret ? buildReadTools({ getSecret }) : []),
-    ...(operationCtx ? [buildCapabilitiesTool(operationCtx.db), buildStatusTool(operationCtx.db), buildStackListTool(operationCtx.db)] : []),
+    ...(operationCtx ? [buildCapabilitiesTool(operationCtx.db), buildStatusTool(operationCtx.db), buildStackListTool(operationCtx.db), buildStackRecipeTool(operationCtx.db)] : []),
     ...(operationCtx && learnCtx
       ? buildInteractionTools({ send: operationCtx.send, waitForAnswer: operationCtx.waitForAnswer, setSecret: learnCtx.setSecret })
       : []),

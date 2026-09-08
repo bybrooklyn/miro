@@ -27,6 +27,7 @@ import { httpMutationKind, takeOutput as takeHttpOutput, type HttpMutationParams
 import { secretFileKind, type SecretFileParams } from "../operations/kinds/secret-file";
 import { stackDeployKind, type StackDeployParams } from "../operations/kinds/stack-deploy";
 import { stackControlKind, STACK_ACTIONS, type StackControlParams } from "../operations/kinds/stack-control";
+import { recordRecipe, recipeWorked, recipeFailed, getRecipe } from "../stacks/recipes";
 import { classifyCommand, redactSecretsInText } from "../operations/classify";
 import { runSandboxed } from "../operations/sandbox";
 import { runBackup, pushBackup, type BackupDeps, BACKUP_ENABLED, BACKUP_REPO, BACKUP_AUTH, BACKUP_AGE_RECIPIENT, BACKUP_EXTRA_PATHS } from "../backup";
@@ -123,6 +124,7 @@ const fileDeleteParams = Type.Object({
 const deployStackParams = Type.Object({
   app: Type.String({ description: "Short app/stack name, lowercase (letters, digits, _ -), e.g. immich. Names the compose project + the managed dir." }),
   compose: Type.String({ description: "The full docker-compose YAML for the stack. Miro owns it under /var/lib/miro/stacks/<app>/ and runs it through the engine (verify + rollback). It's scanned for privileged/host-mount shapes and refused if unsafe. Put a secret via an env_file reference, never inline." }),
+  fromRecipe: Type.Optional(Type.Boolean({ description: "true when this compose came from a stack_recipe (a proven recipe you're reusing) - lets Miro credit the recipe on success or demote it on failure. false/omit when you generated it fresh." })),
   reason: Type.String({ description: "Why, in one line - shown to the owner as the goal." }),
 });
 
@@ -402,9 +404,19 @@ export function buildOperationTools(ctx: OperationToolContext) {
       description:
         "Stand up a self-hosted app as a managed docker-compose stack - the way to install/run an app. Miro owns the compose under /var/lib/miro/stacks/<app>/, runs it through the engine (confirm -> up -> verify healthy -> rollback if not), and tracks it so it can later be updated, edited, or removed. Write the full compose yourself (research it if you don't know the app); use this instead of ad-hoc file_write + `docker compose up`. Redeploying the same app name updates it in place.",
       parameters: deployStackParams,
-      execute: async (_id: string, params: StackDeployParams & { reason: string }) => {
-        const { reason, ...p } = params;
-        return textResult(await runOperation(ctx, stackDeploy, reason, p));
+      execute: async (_id: string, params: StackDeployParams & { reason: string; fromRecipe?: boolean }) => {
+        const { reason, fromRecipe, ...p } = params;
+        const result = await runOperation(ctx, stackDeploy, reason, p);
+        // Self-learning (slice 2): a verified deploy becomes/reinforces the app's recipe; a reused
+        // recipe that verified is credited, one that rolled back is demoted (getRecipe.reliable flips).
+        if (result.outcome === "committed") {
+          const id = recordRecipe(ctx.db, p.app, p.compose, fromRecipe ? "reused" : "generated");
+          if (fromRecipe) recipeWorked(ctx.db, id);
+        } else if (result.outcome === "rolledback" && fromRecipe) {
+          const r = getRecipe(ctx.db, p.app);
+          if (r) recipeFailed(ctx.db, r.id);
+        }
+        return textResult(result);
       },
     },
     {

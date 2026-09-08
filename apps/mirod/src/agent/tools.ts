@@ -14,6 +14,7 @@ import type { Database } from "bun:sqlite";
 import { computeSetupStatus } from "../setup/status";
 import { computeSeverity } from "../operations/severity";
 import { listStacks } from "../stacks/store";
+import { getRecipe } from "../stacks/recipes";
 import { listTrash } from "../operations/trash";
 
 // Schemas are named so `execute` can reference `Static<typeof schema>` explicitly - TS can't
@@ -195,5 +196,21 @@ export function buildStackListTool(db: Database) {
       "List the docker-compose stacks Miro manages (deployed via deploy_stack): name, status, and dir. Use it to see what you're running before an update/edit/remove, and to answer 'what apps do I have'. Distinct from container_list (which shows all containers, managed or not).",
     parameters: Type.Object({}),
     execute: async () => textResult(listStacks(db)),
+  };
+}
+
+/** Db-bound read tool: the self-learned install recipe for an app (a compose that verified before),
+ * with its outcome record. The agent checks this BEFORE writing a compose - reuse over regenerate. */
+export function buildStackRecipeTool(db: Database) {
+  return {
+    name: "stack_recipe",
+    label: "Look up an install recipe",
+    description:
+      "Before writing a compose for an app, check whether Miro already has a PROVEN recipe for it (a compose that verified before). Returns the stored compose to reuse/adapt plus how it's fared (timesSeen / helpful / harmful / reliable). Reuse a reliable recipe and pass fromRecipe:true to deploy_stack; generate a fresh compose only when there's none or it's marked unreliable. This is how Miro gets better at installs over time.",
+    parameters: Type.Object({ app: Type.String({ description: "The app name, e.g. immich." }) }),
+    execute: async (_id: string, p: { app: string }) => {
+      const r = getRecipe(db, p.app);
+      return textResult(r ? { found: true, ...r } : { found: false });
+    },
   };
 }
