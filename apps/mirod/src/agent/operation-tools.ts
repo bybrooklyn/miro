@@ -27,6 +27,7 @@ import { httpMutationKind, takeOutput as takeHttpOutput, type HttpMutationParams
 import { secretFileKind, type SecretFileParams } from "../operations/kinds/secret-file";
 import { stackDeployKind, type StackDeployParams } from "../operations/kinds/stack-deploy";
 import { stackControlKind, STACK_ACTIONS, type StackControlParams } from "../operations/kinds/stack-control";
+import { stackUpdateKind, type StackUpdateParams } from "../operations/kinds/stack-update";
 import { recordRecipe, recipeWorked, recipeFailed, getRecipe } from "../stacks/recipes";
 import { classifyCommand, redactSecretsInText } from "../operations/classify";
 import { runSandboxed } from "../operations/sandbox";
@@ -134,6 +135,11 @@ const stackControlParams = Type.Object({
   reason: Type.String({ description: "Why, in one line - shown to the owner as the goal." }),
 });
 
+const stackUpdateParams = Type.Object({
+  app: Type.String({ description: "The managed stack's name (see stack_list)." }),
+  reason: Type.String({ description: "Why, in one line - shown to the owner as the goal." }),
+});
+
 const secretFileParams = Type.Object({
   path: Type.String({ description: "Absolute path to write, e.g. /var/lib/miro/vpn/gluetun.env - not a path Miro manages as its own secret material." }),
   template: Type.String({ description: "File content with {{secret:<ref>}} placeholders, e.g. WIREGUARD_PRIVATE_KEY={{secret:extension.gluetun.wg_key}}. Resolved at apply time - you never see the value and it never lands in a committed/backed-up file. Must contain at least one placeholder." }),
@@ -195,6 +201,7 @@ export function buildOperationTools(ctx: OperationToolContext) {
   const secretFile = secretFileKind(ctx.getSecret ?? (() => null));
   const stackDeploy = stackDeployKind(ctx.db);
   const stackControl = stackControlKind(ctx.db);
+  const stackUpdate = stackUpdateKind(ctx.db);
   const backupDeps: BackupDeps = {
     db: ctx.db,
     getSetting: ctx.getSetting ?? (() => null),
@@ -420,6 +427,17 @@ export function buildOperationTools(ctx: OperationToolContext) {
       },
     },
     {
+      name: "stack_update",
+      label: "Update a stack",
+      description:
+        "Update a managed stack to newer images: pull + recreate, as a tracked operation. Miro captures the exact image IDs that were running first, so if the stack does not come back healthy it re-tags those images and restores it - a bad update reverts precisely. Use this for 'update <app>' rather than a raw docker compose pull. To change the stack's CONFIG (ports, env, volumes) instead, call deploy_stack again with the modified compose - a failed edit is rolled back to the previous compose and brought back up.",
+      parameters: stackUpdateParams,
+      execute: async (_id: string, params: StackUpdateParams & { reason: string }) => {
+        const { reason, ...p } = params;
+        return textResult(await runOperation(ctx, stackUpdate, reason, p));
+      },
+    },
+    {
       name: "stack_control",
       label: "Control a stack",
       description:
@@ -606,8 +624,10 @@ export function allOperationKinds(getSecret: (ref: string) => string | null, set
   if (db) {
     const stackDeploy = stackDeployKind(db);
     const stackControl = stackControlKind(db);
+    const stackUpdate = stackUpdateKind(db);
     kinds[stackDeploy.kind] = stackDeploy;
     kinds[stackControl.kind] = stackControl;
+    kinds[stackUpdate.kind] = stackUpdate;
   }
   return kinds;
 }

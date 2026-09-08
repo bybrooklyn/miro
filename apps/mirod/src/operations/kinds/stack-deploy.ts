@@ -140,8 +140,11 @@ export function stackDeployKind(db: Database): OperationKind<StackDeployParams, 
           // best effort
         }
       } else if (captured.priorCompose !== null) {
+        // A failed REDEPLOY (an edit): restore the previous compose AND bring it back up, so a bad
+        // edit leaves the stack running what it ran before - not merely the old file on disk.
         try {
           writeFileSync(composeFor(p.app), captured.priorCompose);
+          if (cc) await runPrivileged([...cc, "-p", p.app, "-f", composeFor(p.app), "up", "-d"], { timeoutMs: 10 * 60_000 });
         } catch {
           // best effort
         }
