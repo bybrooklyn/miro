@@ -122,6 +122,9 @@ export interface OperationToolContext {
   /** The daemon's settings table, for an operation whose commit configures Miro itself (a
    * self-hosted SearXNG's base URL). */
   setSetting?: (key: string, value: string) => void;
+  /** Restart the web listener after its settings change, returning what to tell the owner. The tool
+   * that flips web.enabled needs the change to take effect now, not at the next boot. */
+  applyWebSettings?: () => string;
   /** Reading side of the settings table - the egress provider-tier overrides, the self-update
    * channel/repo for the fetch tools. */
   getSetting?: (key: string) => string | null;

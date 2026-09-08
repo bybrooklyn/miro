@@ -46,6 +46,9 @@ export function computeSetupStatus(db: Database): SetupStatus {
   if (ups) configured.push(`UPS/power monitoring → ${ups}`);
   else gaps.push({ key: "ups", label: "UPS/power monitoring", how: "nut_install" });
 
+  if (get(db, "web.enabled") === "true") configured.push(`web UI → port ${get(db, "web.port") ?? "4280"}`);
+  else gaps.push({ key: "web", label: "browser/phone access (the web UI)", how: "web_configure(enabled:true)" });
+
   // Update checks read the public releases of a public repo, so no credential is needed at all - the
   // daily check is on by default and this is a configured item, not a gap. A token is still honoured
   // (provider.github) for a private fork or to lift the unauthenticated API rate limit.

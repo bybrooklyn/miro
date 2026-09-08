@@ -1,0 +1,20 @@
+{
+  "name": "@miro/web",
+  "license": "AGPL-3.0-only",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@miro/protocol": "workspace:*",
+    "@miro/ui-model": "workspace:*",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0"
+  },
+  "scripts": {
+    "build": "bun build src/main.tsx --target browser --outdir dist --minify"
+  }
+}

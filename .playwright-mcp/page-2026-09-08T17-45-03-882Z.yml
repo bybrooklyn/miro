@@ -1,0 +1,41 @@
+- generic [ref=f2e2]:
+  - banner [ref=f2e3]:
+    - generic [ref=f2e5]: home
+    - generic [ref=f2e6]: gpt-5.6-luna · root
+  - main [ref=f2e7]:
+    - generic [ref=f2e12]: "In one sentence: how much disk space is free on this box?"
+    - generic [ref=f2e14]: 6 GB of disk space is free on the root filesystem.
+    - generic [ref=f2e15]: Write the text "web-approved" into /tmp/miro-web-test.txt
+    - generic [ref=f2e17]:
+      - generic [ref=f2e18]: operation · needs you
+      - generic [ref=f2e19]: Create the requested web approval test file.
+      - generic [ref=f2e20]: Create /tmp/miro-web-test.txt (13 bytes)
+      - generic [ref=f2e21]:
+        - generic [ref=f2e22]:
+          - term [ref=f2e23]: class
+          - definition [ref=f2e24]: mutate
+        - generic [ref=f2e25]:
+          - term [ref=f2e26]: writes
+          - definition [ref=f2e27]: /tmp
+        - generic [ref=f2e28]:
+          - term [ref=f2e29]: network
+          - definition [ref=f2e30]: "no"
+        - generic [ref=f2e31]:
+          - term [ref=f2e32]: proposed
+          - definition [ref=f2e33]: web-approved
+        - generic [ref=f2e34]:
+          - term [ref=f2e35]: scope
+          - definition [ref=f2e36]: the target's real parent directory (/tmp)
+      - generic [ref=f2e37]: "--- /tmp/miro-web-test.txt +++ /tmp/miro-web-test.txt @@ -1,0 +1,2 @@ +web-approved +"
+      - generic [ref=f2e47]: "committed: Done - Create the requested web approval test file., verified."
+    - generic [ref=f2e38]:
+      - generic [ref=f2e39]: Write file · 0 steps
+      - generic [ref=f2e41]:
+        - text: ✓ Write file
+        - generic [ref=f2e48]: "· { \"outcome\": \"committed\", \"message\": \"Done - Create the requested web approval test file., verified.\" }"
+    - generic [ref=f2e16]: working…
+  - contentinfo [ref=f2e8]:
+    - generic [ref=f2e49]:
+      - textbox "message" [ref=f2e50]:
+        - /placeholder: Ask for an outcome…
+      - button "Send" [ref=f2e51] [cursor=pointer]

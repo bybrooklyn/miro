@@ -30,6 +30,7 @@ import { stackControlKind, STACK_ACTIONS, type StackControlParams } from "../ope
 import { stackUpdateKind, type StackUpdateParams } from "../operations/kinds/stack-update";
 import { recordRecipe, recipeWorked, recipeFailed, getRecipe } from "../stacks/recipes";
 import { EGRESS_LOG_ALL_SETTING } from "./egress-store";
+import { WEB_ENABLED, WEB_PORT, WEB_HOST, WEB_CERT, WEB_KEY, DEFAULT_WEB_PORT } from "../web/serve";
 import { classifyCommand, redactSecretsInText } from "../operations/classify";
 import { runSandboxed } from "../operations/sandbox";
 import { runBackup, pushBackup, type BackupDeps, BACKUP_ENABLED, BACKUP_REPO, BACKUP_AUTH, BACKUP_AGE_RECIPIENT, BACKUP_EXTRA_PATHS } from "../backup";
@@ -363,6 +364,28 @@ export function buildOperationTools(ctx: OperationToolContext) {
         ctx.setSetting?.("privacy.mode", params.mode);
         if (params.logAll !== undefined) ctx.setSetting?.(EGRESS_LOG_ALL_SETTING, params.logAll ? "true" : "false");
         return textResult({ privacyMode: params.mode, logAll: params.logAll, note: params.mode === "local_only" ? "Only on-box models will be used. If none is available, Miro will report that instead of falling back to a cloud provider." : undefined });
+      },
+    },
+    {
+      name: "web_configure",
+      label: "Configure the web UI",
+      description:
+        `Turn Miro's browser UI on or off, and say where it listens. It serves the same chat, plans and operation approvals the terminal shows, and a browser pairs once with a code from /pair (a per-device token in an HttpOnly cookie; revoke it with \`mirod devices\`). Default port ${DEFAULT_WEB_PORT}, bound to 0.0.0.0. Plain HTTP is fine on a LAN or behind a reverse proxy; pass certPath/keyPath (e.g. from \`tailscale cert\`) to serve HTTPS, which is also what a phone needs to install it as an app. Bind 127.0.0.1 when a reverse proxy sits in front. Takes effect immediately.`,
+      parameters: Type.Object({
+        enabled: Type.Boolean({ description: "true serves the web UI; false stops it." }),
+        port: Type.Optional(Type.Integer({ description: `TCP port (default ${DEFAULT_WEB_PORT}).` })),
+        host: Type.Optional(Type.String({ description: "Bind address. 0.0.0.0 (default) for the LAN, 127.0.0.1 when a reverse proxy fronts it." })),
+        certPath: Type.Optional(Type.String({ description: "PEM certificate path for HTTPS. Both certPath and keyPath are needed." })),
+        keyPath: Type.Optional(Type.String({ description: "PEM private-key path for HTTPS." })),
+      }),
+      execute: async (_id: string, params: { enabled: boolean; port?: number; host?: string; certPath?: string; keyPath?: string }) => {
+        ctx.setSetting?.(WEB_ENABLED, params.enabled ? "true" : "false");
+        if (params.port !== undefined) ctx.setSetting?.(WEB_PORT, String(params.port));
+        if (params.host !== undefined) ctx.setSetting?.(WEB_HOST, params.host);
+        if (params.certPath !== undefined) ctx.setSetting?.(WEB_CERT, params.certPath);
+        if (params.keyPath !== undefined) ctx.setSetting?.(WEB_KEY, params.keyPath);
+        const note = ctx.applyWebSettings?.() ?? "Saved; it will apply on the next restart.";
+        return textResult({ webUi: params.enabled ? "on" : "off", note });
       },
     },
     {

@@ -59,6 +59,7 @@ import { maybeRunEgressCli } from "./setup/egress-cli";
 import { maybeRunVerifyManifestCli } from "./self-update/verify-cli";
 import { isSocketLive } from "./socket-guard";
 import { maybeRunDevicesCli } from "./devices/cli";
+import { startWebServer, webConfigFrom, type WebServerHandle } from "./web/serve";
 
 // CLI subcommands (`mirod secret set <ref>`, `mirod status`) run and exit BEFORE the daemon boots -
 // a credential stored out-of-band never reaches the agent/model/transcript; status is a from-anywhere
@@ -693,7 +694,7 @@ async function handleChat(text: string, send: (event: ServerEvent) => void, stat
     state.lastExtensionVersion !== extensionVersions ||
     state.lastContextBlock !== contextBlock
   ) {
-    const operationCtx: OperationToolContext = { db, send, waitForAnswer: (id) => waitForAnswer(state, id), cancelAnswer: (id) => state.pendingAnswers.delete(id), reflect, afterOperation, getSecret: (ref) => secretStore.getSecret(db, ref), setSecret: (ref, value) => secretStore.setSecret(db, ref, value), setSetting, getSetting };
+    const operationCtx: OperationToolContext = { db, send, waitForAnswer: (id) => waitForAnswer(state, id), cancelAnswer: (id) => state.pendingAnswers.delete(id), reflect, afterOperation, getSecret: (ref) => secretStore.getSecret(db, ref), setSecret: (ref, value) => secretStore.setSecret(db, ref, value), setSetting, getSetting, applyWebSettings };
     state.agent = createMiroAgent(models, defaultModel, getStoredKey, personality(), operationCtx, {
       hostMgr,
       setSecret: (ref, value) => secretStore.setSecret(db, ref, value),
@@ -950,6 +951,38 @@ if (typeof process.getuid === "function" && process.getuid() === 0) {
 }
 
 console.log(`mirod listening on ${SOCKET_PATH}`);
+
+// The web UI (PLAN.md deploy-anywhere PR 3a): off unless the owner turns it on. A browser is just
+// another client - same protocol, same ConnState, authed by the same device tokens - so this only owns
+// the listener. Reconfigurable live so `web_configure` takes effect without a restart.
+let webServer: WebServerHandle | null = null;
+function applyWebSettings(): string {
+  webServer?.stop();
+  webServer = null;
+  const config = webConfigFrom(getSetting);
+  if (!config) return "The web UI is off.";
+  try {
+    webServer = startWebServer(
+      {
+        db,
+        createConnection: (send) => createConnectionState(send),
+        closeConnection: (conn) => disconnect(conn as ConnState),
+        indexHtml: new URL("../../web/index.html", import.meta.url).pathname,
+        entry: new URL("../../web/src/main.tsx", import.meta.url).pathname,
+      },
+      config,
+    );
+    const scheme = webServer.tls ? "https" : "http";
+    const where = `${scheme}://${config.hostname === "0.0.0.0" ? "<this box>" : config.hostname}:${webServer.port}`;
+    console.log(`[mirod] web UI on ${where}${webServer.tls ? "" : " (plaintext - fine on a LAN or behind a proxy; set web.cert/web.key for TLS)"}`);
+    return `The web UI is at ${where}. Pair a browser with the code from /pair.`;
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err);
+    console.warn(`[mirod] web UI failed to start: ${why}`);
+    return `The web UI could not start: ${why}`;
+  }
+}
+applyWebSettings();
 
 // Under systemd (Type=notify, apps/mirod/mirod.service): READY once the socket is bound and
 // group-accessible - the owner can connect - and WATCHDOG=1 at half the unit's WatchdogSec so a

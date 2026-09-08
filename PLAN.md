@@ -3543,3 +3543,54 @@ here; it only surfaced because pairing put a real remote client through a full c
 
 Gate: `just check` 13/13, `just test` 536 pass / 0 fail. VM left clean (test devices and codes removed).
 Next: PR 3a, the web spine.
+
+### 5.51 Deploy-anywhere, PR 3a: the web spine (2026-09-08)
+
+The decision from PLAN.md:1720 - **one view-model, two thin renderers** - finally has its second
+renderer. `@miro/ui-model` was built and audited web-portable a long time ago and then sat unused; this
+is it in a browser, with no UI logic of its own.
+
+- **`apps/web`** - React DOM over the same reducer the terminal renders: transcript blocks, the activity
+  tree, system plans, operation cards (class, write scope, network, diff, scope evidence - the whole
+  safety surface, not a summary), the pending prompt as buttons, a free-text answer, and a password field
+  for a `secret_prompt`. One stylesheet, no framework, 44px tap targets and `env(safe-area-inset-bottom)`
+  because the point is a phone.
+- **mirod serves it** (`web/serve.ts`): the shell, the bundle, and a WebSocket that speaks the existing
+  protocol through the *same* `createConnectionState` the socket and Iroh paths use - so the agent side
+  cannot tell a browser from a terminal. Settings `web.enabled`/`web.port`/`web.host`/`web.cert`/`web.key`,
+  reconfigurable live through the `web_configure` tool; a `web` setup gap so Miro offers it.
+- **Auth is PR 2's device tokens.** `POST /api/pair` redeems a pairing code and sets an **HttpOnly**
+  `miro_token` cookie (`SameSite=Strict`, `Secure` when TLS), so no page script can read the token and no
+  token ever lands in a URL, a log or browser history. `/ws` refuses without it; a revoked device is
+  refused immediately.
+- **TLS when a cert exists**, plain http otherwise (fine on a LAN or behind a reverse proxy, and
+  `web.host=127.0.0.1` binds loopback for exactly that). A bad cert path warns loudly rather than
+  silently downgrading.
+- **`docs/protocol.md` + `PROTOCOL_VERSION`**: the protocol is now the documented, versioned API - both
+  transports, the auth handshake, every message and event, the compatibility rules, and a minimal client.
+  There is deliberately no REST surface to drift out of sync.
+
+**Live-verified with a real browser** (Playwright over an ssh tunnel to the VM): the pairing screen took
+a real nine-digit code -> cookie set -> chat view; a reload went straight in (cookie persisted); a real
+turn ran on the real Codex model and answered from the box ("6 GB of disk space is free"); then
+"write web-approved into /tmp/miro-web-test.txt" rendered the **full operation card** (class mutate,
+writes /tmp, network no, the diff, scope evidence) with Approve/Cancel, and **tapping Approve committed
+the operation** - checked independently on the box: the file exists, 13 bytes, with the right content, and
+the card became `committed` with the activity node ticked. `mirod devices` listed the browser as a `web`
+device with a live last-seen, and pairing raised its `worth_knowing` notification.
+
+**Three real bugs, all found by an actual browser rather than by tests:**
+1. **`process is not defined`** - the whole page died on load. `@miro/protocol` mixed the wire protocol
+   with `MIRO_DIR`/`SOCKET_PATH` resolution, so bundling the contract dragged in `node:fs`/`process`. The
+   wire now lives in `@miro/protocol/wire` (browser-safe by construction, with an `exports` map); index
+   re-exports it, so no daemon-side import site changed.
+2. **`Buffer is not defined`** in the socket handler - mine, not the package's: `createLineBuffer` already
+   accepts a string, and the client was wrapping in `Buffer`.
+3. **The bundler anchors bare-specifier resolution on the CWD**, so an in-process `Bun.build` from the
+   daemon (cwd `apps/mirod`) could not resolve `react` or `@miro/ui-model` while the identical build from
+   `apps/web` succeeded. The build runs as a subprocess with the app's own cwd, cached after the first
+   request. The root tsconfig's `jsxImportSource` (OpenTUI, for the terminal) also leaked into the web
+   build, so each web file carries an explicit `@jsxImportSource react` pragma.
+
+Gate: `just check` 14/14 (apps/web is new), `just test` 542 pass / 0 fail. VM restored to as-found (web
+off, devices and codes cleared, test file removed). Next: PR 3b, the managed-stack views.
