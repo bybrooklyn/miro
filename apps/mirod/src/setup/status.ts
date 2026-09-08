@@ -17,6 +17,11 @@ export interface SetupStatus {
   gaps: Gap[];
 }
 
+/** One setting, or null - shared so any read path (context block, status) survives a missing table. */
+export function readSetting(db: Database, key: string): string | null {
+  return get(db, key);
+}
+
 function get(db: Database, key: string): string | null {
   // Defensive: a caller (a test, an early-boot path) may not have the settings table yet - treat a
   // missing table as "nothing configured", never throw (buildContextBlock rides on this).

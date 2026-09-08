@@ -15,6 +15,7 @@ import { computeSetupStatus } from "../setup/status";
 import { computeSeverity } from "../operations/severity";
 import { listStacks } from "../stacks/store";
 import { getRecipe } from "../stacks/recipes";
+import { recentEgress } from "./egress-store";
 import { listTrash } from "../operations/trash";
 
 // Schemas are named so `execute` can reference `Static<typeof schema>` explicitly - TS can't
@@ -212,5 +213,18 @@ export function buildStackRecipeTool(db: Database) {
       const r = getRecipe(db, p.app);
       return textResult(r ? { found: true, ...r } : { found: false });
     },
+  };
+}
+
+/** Db-bound read tool: what actually left this box for an AI provider. The audit never holds content -
+ * only when, which provider, at what trust, the tier that left, and what was scrubbed. */
+export function buildEgressLogTool(db: Database) {
+  return {
+    name: "egress_log",
+    label: "What left the box",
+    description:
+      "Show the recent record of what was sent to an AI provider: when, which provider, its trust tier, the sensitivity tier of the content that left, and what was redacted (secrets, infra identifiers). Content itself is never recorded. Use it to answer 'what have you sent out?'. Only sensitivity-bearing egresses are logged unless egress.log_all is on (set_privacy_mode logAll:true).",
+    parameters: Type.Object({ limit: Type.Optional(Type.Integer({ description: "How many entries, newest first (default 20)." })) }),
+    execute: async (_id: string, p: { limit?: number }) => textResult(recentEgress(db, p.limit ?? 20)),
   };
 }

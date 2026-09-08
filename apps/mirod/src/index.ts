@@ -54,12 +54,14 @@ import { redactSecretsInText } from "./operations/classify";
 import { maybeRunSecretCli } from "./secret-intake/cli";
 import { importSecretDropFiles } from "./secret-intake/drop-file";
 import { maybeRunStatusCli } from "./setup/status-cli";
+import { maybeRunEgressCli } from "./setup/egress-cli";
 
 // CLI subcommands (`mirod secret set <ref>`, `mirod status`) run and exit BEFORE the daemon boots -
 // a credential stored out-of-band never reaches the agent/model/transcript; status is a from-anywhere
 // glance over SSH.
 if (await maybeRunSecretCli()) process.exit(0);
 if (await maybeRunStatusCli()) process.exit(0);
+if (await maybeRunEgressCli()) process.exit(0);
 
 
 mkdirSync(MIRO_DIR, { recursive: true });
@@ -123,6 +125,14 @@ function getSetting(key: string): string | null {
     | { value: string }
     | null;
   return row?.value ?? null;
+}
+
+/** Private-by-default posture (PLAN.md private-by-default pillar). `local_only` pins every model
+ * choice to genuinely on-box models: no keyed cloud provider, no Codex, no llm7 floor - if there is no
+ * local model, Miro says so instead of sending the box's data off-machine. Default (unset) = `open`. */
+const PRIVACY_MODE_SETTING = "privacy.mode";
+function localOnly(): boolean {
+  return getSetting(PRIVACY_MODE_SETTING) === "local_only";
 }
 
 function setSetting(key: string, value: string) {
@@ -203,7 +213,7 @@ if (await registerOllamaIfReachable(models)) {
 // llm7 (§2378): the keyless $0 floor. Registered at boot ONLY when nothing else is connected, so a
 // configured daemon never probes an external endpoint at start, and health reads healthy when llm7 is
 // the only provider. It is never a pickDefaultModel candidate (a cost:0 model would win `cheapest`).
-if (!codexAuth.isConnected() && !pickDefaultModel(models, getStoredKey, routingPolicy()) && (await registerLlm7IfReachable(models))) {
+if (!localOnly() && !codexAuth.isConnected() && !pickDefaultModel(models, getStoredKey, routingPolicy()) && (await registerLlm7IfReachable(models))) {
   console.log("[mirod] llm7 registered as the keyless last-resort provider (no key, rate-limited)");
 }
 
@@ -211,10 +221,14 @@ if (!codexAuth.isConnected() && !pickDefaultModel(models, getStoredKey, routingP
  * more 1.5s probe before giving up makes an Ollama started after the daemon usable without a
  * restart (audit R3) - and costs nothing on the connected path. */
 async function pickModelOrProbeOllama(policy: RoutingPolicy): Promise<Model<any> | null> {
-  const picked = pickDefaultModel(models, getStoredKey, policy);
+  const local = localOnly();
+  const picked = pickDefaultModel(models, getStoredKey, policy, { localOnly: local });
   if (picked) return picked;
-  const afterOllama = (await registerOllamaIfReachable(models)) ? pickDefaultModel(models, getStoredKey, policy) : null;
+  const afterOllama = (await registerOllamaIfReachable(models)) ? pickDefaultModel(models, getStoredKey, policy, { localOnly: local }) : null;
   if (afterOllama) return afterOllama;
+  // In local-only mode there is no fallback: llm7 is a public cloud endpoint, so the honest answer is
+  // "no local model available" rather than quietly sending the box's data off-machine.
+  if (local) return null;
   // Terminal $0 floor (§2378): llm7, keyless. Selected DIRECTLY, never through pickDefaultModel - its
   // cost:0 would otherwise beat every paid provider under `cheapest`. Re-probe once if not yet registered.
   const llm7 = models.getModels(LLM7_PROVIDER);
@@ -314,7 +328,8 @@ function disconnect(state: ConnState): void {
  * (that setting only matters as a fallback when Codex isn't connected). Shared by the interactive
  * resolver below and the autonomous one Dreaming's repair pass uses. */
 async function resolveCodegenSelection(policy: RoutingPolicy): Promise<CodegenSelection | null> {
-  if (codexAuth.isConnected()) {
+  // Codex is a cloud brain - never chosen in local-only mode, whatever the standing preference.
+  if (codexAuth.isConnected() && !localOnly()) {
     return { model: getBundledModel("openai-codex", "gpt-5.6-luna"), reasoning: Effort.Medium };
   }
   const model = await pickModelOrProbeOllama(policy);
@@ -326,7 +341,7 @@ async function resolveCodegenSelection(policy: RoutingPolicy): Promise<CodegenSe
  * via the same generic pendingAnswers round-trip an operation confirmation uses, and saves the
  * answer so it's never asked again. */
 async function resolveCodegenModel(state: ConnState, send: (event: ServerEvent) => void): Promise<CodegenSelection | null> {
-  if (codexAuth.isConnected()) return resolveCodegenSelection("best"); // policy arg unused on the Codex path
+  if (codexAuth.isConnected() && !localOnly()) return resolveCodegenSelection("best"); // policy arg unused on the Codex path
   let policy = storedCodegenPolicy();
   if (!policy) {
     send({
@@ -561,7 +576,8 @@ setInterval(updateCheckTick, REPROBE_INTERVAL_MS);
  * was too volatile to rely on, so it is never left as codegen-only while chat has nothing. With no
  * Codex login, the cost-tier routing_policy over the other connected providers applies as before. */
 async function resolveChatSelection(): Promise<CodegenSelection | null> {
-  if (codexAuth.isConnected()) {
+  // Codex is a cloud brain - never chosen in local-only mode, whatever the standing preference.
+  if (codexAuth.isConnected() && !localOnly()) {
     return { model: getBundledModel("openai-codex", "gpt-5.6-luna"), reasoning: Effort.Medium };
   }
   const model = await pickModelOrProbeOllama(routingPolicy());
@@ -570,13 +586,13 @@ async function resolveChatSelection(): Promise<CodegenSelection | null> {
 
 /** Reflection budget: the cheapest connected model, or Codex when it is the only thing connected. */
 async function resolveReflectionModel(): Promise<Model<any> | null> {
-  return pickDefaultModel(models, getStoredKey, "cheapest") ?? (await resolveChatSelection())?.model ?? null;
+  return pickDefaultModel(models, getStoredKey, "cheapest", { localOnly: localOnly() }) ?? (await resolveChatSelection())?.model ?? null;
 }
 
 /** "degraded" is the one health signal the daemon can honestly produce today: no AI provider is
  * connected, so it can only do the fixed things. The client already renders it (audit #26). */
 function hasProvider(): boolean {
-  return codexAuth.isConnected() || pickDefaultModel(models, getStoredKey, routingPolicy()) !== null || models.getModels(LLM7_PROVIDER).length > 0;
+  return (!localOnly() && codexAuth.isConnected()) || pickDefaultModel(models, getStoredKey, routingPolicy(), { localOnly: localOnly() }) !== null || (!localOnly() && models.getModels(LLM7_PROVIDER).length > 0);
 }
 
 function statusEvent(state: ConnState): ServerEvent {
@@ -620,9 +636,13 @@ async function handleChat(text: string, send: (event: ServerEvent) => void, stat
     send(statusEvent(state));
   }
   if (!chat) {
+    // In local-only mode connecting a cloud provider would NOT help - the honest answer is what is
+    // actually missing (an on-box model), not the generic /provider nudge (found live).
     send({
       type: "reply",
-      text: "I don't have an AI provider connected yet, so I can't reason about anything - I can only do the fixed stuff. Type /provider to connect one.",
+      text: localOnly()
+        ? "Privacy is set to local-only, and I have no on-box model to think with - so I can't reason about anything right now. Pull a model into Ollama on this box (an ollama.com `*-cloud` model does not count, it leaves the machine), or ask me to switch privacy back to open."
+        : "I don't have an AI provider connected yet, so I can't reason about anything - I can only do the fixed stuff. Type /provider to connect one.",
     });
     return;
   }

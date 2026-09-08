@@ -3395,3 +3395,40 @@ pass / 0 fail.
 learns the recipe, keeps it running, updates it safely, edits it safely, and tears it down - all through
 the engine, all reversible. Next: pillar 2 (private-by-default / local models - the owner's one fear)
 then pillar 3 (deploy-anywhere).
+
+### 5.48 Private-by-default, slice 1: local-only mode + a readable egress trail (2026-09-08)
+
+Pillar 2, the owner's one stated fear: *"the only thing i dont trust is what the AI providers do with
+the In/Output of everything to do with miro."* §5.35-5.36's sensitivity tiers already scrubbed what
+leaves; this slice adds the two things they did not: a posture where **nothing leaves at all**, and a
+surface that shows what **did**.
+
+- **Local models are now first-class, and honestly classified.** `agent/ollama.ts` gained
+  `listOllamaModels()` (Ollama's native `/api/tags`, discovered rather than the hardcoded list, which
+  was mostly ollama.com-proxied) and `isLocalOllamaModel(id)` - a `*-cloud` id is served from
+  ollama.com, so it is NOT local and must never satisfy a privacy promise. Registration prefers the
+  discovered tags.
+- **`privacy.mode = local_only`** (`pickDefaultModel(..., { localOnly })`, threaded through all eight
+  model-selection sites in `index.ts`): every keyed cloud provider, the Codex OAuth login and the llm7
+  free-tier floor are skipped, and only genuinely on-box models qualify. With no local model the answer
+  is **null**, and the daemon says what is actually missing rather than the generic `/provider` nudge -
+  never a silent cloud fallback. The per-turn context block states the mode so the agent plans within it.
+- **The egress trail is readable.** `egress_audit` was write-only: the owner could not answer "what did
+  you send?" without opening SQLite. Added `recentEgress()`, the `egress_log` agent tool, and
+  `mirod egress [n]`. Still never holds content - only when, which provider, at what trust, which
+  sensitivity tier left, and what was scrubbed (a `PRAGMA table_info` assertion keeps it that way).
+  `egress.log_all` records every egress, not only the sensitivity-bearing ones.
+- **`set_privacy_mode`** flips both from chat, so the posture is one sentence away.
+
+**Live-verified on the VM** against a stand-in Ollama (the VM has no GPU; a fake server answering
+`/api/tags` + an OpenAI-compat completion, so *discovery and routing* are real): `mirod egress` printed
+the real pre-existing trail (5 `openai-codex` rows) -> `local_only` + restart -> discovery hit
+`/api/tags` and the daemon picked `qwen2.5:7b` **over the `*-cloud` id and over the live Codex login**,
+the reply came from the on-box server, and exactly **one** new audit row appeared (provider `ollama`)
+-> with only a `*-cloud` tag offered, status went **degraded with no model** rather than falling back to
+Codex sitting right there -> back in open mode, the real Codex brain called `set_privacy_mode` itself,
+the setting persisted, and **the very next turn ran on the local model**. Found live: the no-provider
+message told a local-only owner to connect a cloud provider, which would not help; it now names the
+missing on-box model. Gate: `just check` 13/13, `just test` 496 pass / 0 fail.
+
+Next: pillar 3 (deploy-anywhere).

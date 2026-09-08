@@ -1,8 +1,8 @@
 import { Agent, type AgentTool } from "@miro/agent-core";
 import { streamSimple, type Effort, type Model } from "@miro/model-client";
 import type { ModelRegistry } from "./models";
-import { AGENT_TOOLS, buildStatusTool, buildStackListTool, buildStackRecipeTool } from "./tools";
-import { OLLAMA_PROVIDER } from "./ollama";
+import { AGENT_TOOLS, buildStatusTool, buildStackListTool, buildStackRecipeTool, buildEgressLogTool } from "./tools";
+import { OLLAMA_PROVIDER, isLocalOllamaModel } from "./ollama";
 import { buildOperationTools } from "./operation-tools";
 import { buildReadTools } from "./read-tools";
 import { buildInteractionTools } from "./interaction-tools";
@@ -127,18 +127,26 @@ export function pickDefaultModel(
   models: ModelRegistry,
   getStoredKey: (provider: string) => string | null,
   policy: RoutingPolicy = "cheapest",
+  opts: { localOnly?: boolean } = {},
 ): Model<any> | null {
   const candidates: Model<any>[] = [];
-  for (const { provider } of PROVIDER_CATALOG) {
-    if (!resolveApiKey(provider, getStoredKey)) continue;
-    for (const model of models.getModels(provider)) {
-      // Excludes sentinel/dynamic entries like openrouter's "auto" (negative placeholder cost).
-      if (model.cost && totalCost(model) >= 0) candidates.push(model);
+  // Private-by-default (PLAN.md private-by-default pillar): in local-only mode NOTHING may leave the
+  // box, so every keyed cloud provider is skipped and only genuinely on-box Ollama models qualify
+  // (an ollama.com-proxied `*-cloud` id is not local). No local model -> null, and the caller says so
+  // rather than silently falling back to a cloud brain.
+  if (!opts.localOnly) {
+    for (const { provider } of PROVIDER_CATALOG) {
+      if (!resolveApiKey(provider, getStoredKey)) continue;
+      for (const model of models.getModels(provider)) {
+        // Excludes sentinel/dynamic entries like openrouter's "auto" (negative placeholder cost).
+        if (model.cost && totalCost(model) >= 0) candidates.push(model);
+      }
     }
   }
   // Ollama needs no key - being registered on `models` at all (done once at startup, only if the
   // local server was reachable) already means "connected", no separate credential check needed.
-  candidates.push(...models.getModels(OLLAMA_PROVIDER));
+  const ollama = models.getModels(OLLAMA_PROVIDER);
+  candidates.push(...(opts.localOnly ? ollama.filter((m) => isLocalOllamaModel(m.id)) : ollama));
   if (candidates.length === 0) return null;
 
   const sorted = [...candidates].sort((a, b) => totalCost(a) - totalCost(b));
@@ -176,7 +184,7 @@ export function createMiroAgent(
   const tools = [
     ...AGENT_TOOLS,
     ...(getSecret ? buildReadTools({ getSecret }) : []),
-    ...(operationCtx ? [buildCapabilitiesTool(operationCtx.db), buildStatusTool(operationCtx.db), buildStackListTool(operationCtx.db), buildStackRecipeTool(operationCtx.db)] : []),
+    ...(operationCtx ? [buildCapabilitiesTool(operationCtx.db), buildStatusTool(operationCtx.db), buildStackListTool(operationCtx.db), buildStackRecipeTool(operationCtx.db), buildEgressLogTool(operationCtx.db)] : []),
     ...(operationCtx && learnCtx
       ? buildInteractionTools({ send: operationCtx.send, waitForAnswer: operationCtx.waitForAnswer, setSecret: learnCtx.setSecret })
       : []),

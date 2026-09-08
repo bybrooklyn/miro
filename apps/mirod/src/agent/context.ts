@@ -12,7 +12,7 @@ import type { ExtensionManifest } from "../extensions/manifest";
 import { query as queryMemory } from "../memory/store";
 import { capabilityContextLines, capabilityStatus } from "../capabilities";
 import { notificationChannelLines } from "../notifications";
-import { setupGapLines } from "../setup/status";
+import { setupGapLines, readSetting } from "../setup/status";
 
 // Self-assembling context (PLAN.md §5.9 client decisions: "assembled block + on-demand tool").
 // The agent is handed a map of itself every turn - what is on this server right now, which
@@ -131,6 +131,13 @@ export function buildContextBlock(db: Database, snapshot: ServerSnapshot): strin
   // assesses, and proposes. Empty (silent) once the baseline is set up.
   const gaps = setupGapLines(db);
   if (gaps.length > 0) parts.push(gaps.join("\n"));
+  // Private-by-default (PLAN.md private-by-default pillar): local-only mode is load-bearing for how
+  // the agent plans, so it must see it. Silent in open mode - only the restriction needs stating.
+  if (readSetting(db, "privacy.mode") === "local_only") {
+    parts.push(
+      "PRIVACY: LOCAL-ONLY MODE IS ON. Nothing may leave this box: every model choice is pinned to an on-box Ollama model (a *-cloud id is NOT local). No keyed cloud provider, no Codex, no free-tier fallback, and web_search/web_fetch results are the only outside data you get. If a request needs a capability no local model has, say so plainly and let the owner decide (set_privacy_mode switches back to open) - never route around it. `egress_log` shows what left the box before this was on.",
+    );
+  }
   parts.push(REFUSALS);
   return parts.join("\n\n");
 }

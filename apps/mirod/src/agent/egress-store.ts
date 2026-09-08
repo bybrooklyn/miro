@@ -30,6 +30,49 @@ export function recordEgress(db: Database, a: EgressAudit): void {
   db.run("DELETE FROM egress_audit WHERE id <= (SELECT MAX(id) - ? FROM egress_audit)", [CAP]);
 }
 
+/** When "true", EVERY egress is recorded, not only the sensitivity-bearing ones - the full trail the
+ * owner needs to answer "show me exactly what left" (PLAN.md private-by-default pillar). */
+export const EGRESS_LOG_ALL_SETTING = "egress.log_all";
+
+export interface EgressRow {
+  at: number;
+  provider: string;
+  trust: string;
+  contentTier: string;
+  secretRedacted: boolean;
+  infraRedacted: number;
+  redactedTypes: string[];
+}
+
+/** The audit trail, newest first - the read side the table never had (it was write-only). Never holds
+ * content, only what left, to whom, at what trust, and what was scrubbed. */
+export function recentEgress(db: Database, limit = 50): EgressRow[] {
+  const rows = db.query("SELECT at, provider, trust, content_tier, secret_redacted, infra_redacted, redacted_types FROM egress_audit ORDER BY id DESC LIMIT ?").all(limit) as {
+    at: number;
+    provider: string;
+    trust: string;
+    content_tier: string;
+    secret_redacted: number;
+    infra_redacted: number;
+    redacted_types: string;
+  }[];
+  return rows.map((r) => ({
+    at: r.at,
+    provider: r.provider,
+    trust: r.trust,
+    contentTier: r.content_tier,
+    secretRedacted: r.secret_redacted === 1,
+    infraRedacted: r.infra_redacted,
+    redactedTypes: ((): string[] => {
+      try {
+        return JSON.parse(r.redacted_types);
+      } catch {
+        return [];
+      }
+    })(),
+  }));
+}
+
 export interface EgressGateDeps {
   db?: Database;
   getSetting?: (k: string) => string | null;
@@ -59,7 +102,8 @@ export function egressHooks(deps: EgressGateDeps | undefined): EgressHooks {
     transformProviderContext: (context, model) => {
       const { context: scrubbed, audit, restore: r } = gateEgress(context, model, getSetting, { roundTrip: true });
       restore = r && r.size ? r : null;
-      if (db && (audit.secretRedacted || audit.infraRedacted > 0 || audit.contentTier !== "public")) recordEgress(db, audit);
+      const logAll = getSetting(EGRESS_LOG_ALL_SETTING) === "true";
+      if (db && (logAll || audit.secretRedacted || audit.infraRedacted > 0 || audit.contentTier !== "public")) recordEgress(db, audit);
       return scrubbed;
     },
     transformAssistantMessage: (message) => {

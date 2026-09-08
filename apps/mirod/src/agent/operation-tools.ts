@@ -29,6 +29,7 @@ import { stackDeployKind, type StackDeployParams } from "../operations/kinds/sta
 import { stackControlKind, STACK_ACTIONS, type StackControlParams } from "../operations/kinds/stack-control";
 import { stackUpdateKind, type StackUpdateParams } from "../operations/kinds/stack-update";
 import { recordRecipe, recipeWorked, recipeFailed, getRecipe } from "../stacks/recipes";
+import { EGRESS_LOG_ALL_SETTING } from "./egress-store";
 import { classifyCommand, redactSecretsInText } from "../operations/classify";
 import { runSandboxed } from "../operations/sandbox";
 import { runBackup, pushBackup, type BackupDeps, BACKUP_ENABLED, BACKUP_REPO, BACKUP_AUTH, BACKUP_AGE_RECIPIENT, BACKUP_EXTRA_PATHS } from "../backup";
@@ -347,6 +348,21 @@ export function buildOperationTools(ctx: OperationToolContext) {
       execute: async (_id: string, params: { enabled: boolean }) => {
         ctx.setSetting?.(STRICT_MODE_SETTING, params.enabled ? "true" : "false");
         return textResult({ strict: params.enabled });
+      },
+    },
+    {
+      name: "set_privacy_mode",
+      label: "Set privacy mode",
+      description:
+        "Set how much may leave this box for an AI provider. 'open' (default) routes by cost across whatever providers are connected. 'local_only' pins every model choice to genuinely on-box models (Ollama, non-cloud ids) - no keyed cloud provider, no Codex, no llm7 fallback; if there is no local model Miro says so rather than sending anything off-machine. logAll:true records EVERY egress in the audit trail (see egress_log / `mirod egress`), not only the sensitivity-bearing ones.",
+      parameters: Type.Object({
+        mode: Type.Enum(["open", "local_only"], { description: "open = cost-routed across connected providers; local_only = nothing leaves the box." }),
+        logAll: Type.Optional(Type.Boolean({ description: "Record every egress, not just sensitivity-bearing ones. Default unchanged." })),
+      }),
+      execute: async (_id: string, params: { mode: "open" | "local_only"; logAll?: boolean }) => {
+        ctx.setSetting?.("privacy.mode", params.mode);
+        if (params.logAll !== undefined) ctx.setSetting?.(EGRESS_LOG_ALL_SETTING, params.logAll ? "true" : "false");
+        return textResult({ privacyMode: params.mode, logAll: params.logAll, note: params.mode === "local_only" ? "Only on-box models will be used. If none is available, Miro will report that instead of falling back to a cloud provider." : undefined });
       },
     },
     {
