@@ -3305,3 +3305,38 @@ longer leak into the transcript (masked prompt / CLI / drop-file / config-paste 
 guard), Miro proactively proposes the well-run baseline as one approvable plan, the owner tunes noise
 per class with one tap, and updates check daily (auto-install opt-in) - all governed by one opt-in
 `mode.strict` for those who want maximum oversight.
+
+### 5.45 The compose-killer, slice 1: managed compose stacks (2026-09-07)
+
+First slice of the flagship: **kill the docker-compose grind** (Portainer + hand-writing composes +
+pasting into ChatGPT). Miro now OWNS, deploys, tracks, and tears down a compose stack through the
+operation engine - the backbone. Outcome-first (you say "run X", Miro owns the compose), compose still
+agent-generated for now; self-learning `app_recipes` are slice 2 (§5.13 machine-earned knowledge, on
+the existing `capability` memory substrate). A "huge app catalog" stays a non-goal.
+
+- **`stacks/store.ts`** - the `managed_stacks` registry (the LIVE stacks Miro runs, keyed by app;
+  mirrors extensions/store.ts), distinct from the reusable recipe knowledge (slice 2).
+- **`operations/kinds/stack-deploy.ts`** (`stack.deploy`) - writes the compose under
+  `/var/lib/miro/stacks/<app>/`, brings it up through the engine (confirm -> verify running ->
+  rollback if not), registers it. **`scanCompose`** refuses the catastrophic shapes the classifier
+  can't see inside YAML (privileged/SYS_ADMIN, docker.sock, `/`, `/root`, `/var/lib/miro` binds);
+  the rest rides the human confirm. **`resolveCompose`** runs on the v2 plugin (`docker compose`) OR
+  the v1 standalone (`docker-compose`, what Debian ships) - "for everyone", not just Docker-CE.
+  verify counts running containers by the `com.docker.compose.project` label (version-agnostic).
+- **`operations/kinds/stack-control.ts`** (`stack.control`: stop/start/down/remove) - `remove`
+  trashes the dir (recoverable). - **Agent tools** `deploy_stack` / `stack_control` + a `stack_list`
+  read tool; the system prompt now routes installs through `deploy_stack`, not ad-hoc
+  file_write + compose. `allOperationKinds` takes the db (optional) so the stack kinds get the
+  registry. Managed composes fold into config-backup (§5.38); `*.env` is gitignored there.
+
+**Live-verified on the VM (real Docker), each step checked independently:** deployed a `traefik/whoami`
+stack -> committed + verified, registered `status:running`, and **`curl :8099` returned HTTP OK**;
+`stack.control` stop/start/remove all verified (after remove: registry row gone, dir trashed); a
+deliberately broken compose (bad image) **rolled back cleanly** (down + deregistered, registry null -
+no half-state). **Found live:** the VM had no compose CLI at all until `docker-compose` was installed -
+which drove the v1/v2 `resolveCompose` support. Gate: `just check` 13/13, `just test` 488 pass / 0 fail.
+
+**Next (this pillar):** slice 2 = self-learning install recipes (store a verified compose as a
+`capability` recipe, reuse-before-generate, wire the helpful/harmful outcome loop); slice 3 = update
+(pull+recreate+rollback) + edit-and-reapply. Then pillar 2 (private-by-default / local models) and
+pillar 3 (deploy-anywhere).
