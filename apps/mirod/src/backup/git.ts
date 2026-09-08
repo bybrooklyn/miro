@@ -12,7 +12,7 @@ const GIT_ENV = { GIT_TERMINAL_PROMPT: "0" };
 
 /** Never commit a stray private key even if some future path drops one into the tree. The intended
  * secrets bundle (secrets.age) is deliberately NOT ignored - it is ciphertext, safe to push. */
-const GITIGNORE = ["*.pem", "*.key", "id_*", "*_rsa", "*_ed25519", ""].join("\n");
+const GITIGNORE = ["*.pem", "*.key", "id_*", "*_rsa", "*_ed25519", "*.env", "stack.env", ""].join("\n");
 
 async function git(dir: string, args: string[], env?: Record<string, string>): Promise<string> {
   return run("git", ["-C", dir, ...args], { env: { ...GIT_ENV, ...env }, timeoutMs: 120_000 });

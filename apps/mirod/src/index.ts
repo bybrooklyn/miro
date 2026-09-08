@@ -30,6 +30,7 @@ import { NUT_UPS_SETTING } from "./operations/kinds/nut-install";
 import { reverifyCommitted } from "./operations/prodtest";
 import { configureCapabilities, refreshWebSearchPool } from "./capabilities";
 import { allOperationKinds } from "./agent/operation-tools";
+import { ensureStacksTable } from "./stacks/store";
 import { buildContextBlock, takeSnapshot } from "./agent/context";
 import { runDiscovery } from "./discovery";
 import { ensureMemoryTable, buildSummary, listAll, forget, formatForDisplay } from "./memory/store";
@@ -60,7 +61,6 @@ import { maybeRunStatusCli } from "./setup/status-cli";
 if (await maybeRunSecretCli()) process.exit(0);
 if (await maybeRunStatusCli()) process.exit(0);
 
-const OPERATION_KINDS = allOperationKinds((ref) => secretStore.getSecret(db, ref), (ref, value) => secretStore.setSecret(db, ref, value));
 
 mkdirSync(MIRO_DIR, { recursive: true });
 // H2: the secret material lives in the DB and the key file, both locked to the owner below (and
@@ -97,6 +97,10 @@ for (const ext of listEnabled(db)) {
 
 const secretStore = createSecretStore(join(MIRO_DIR, "secret.key"));
 secretStore.ensureTable(db);
+ensureStacksTable(db);
+// The operation-kind registry for crash reconciliation. Defined here (not at the top) so it can pass
+// the real db to the stack kinds' registry; its closures over secretStore/db are otherwise lazy.
+const OPERATION_KINDS = allOperationKinds((ref) => secretStore.getSecret(db, ref), (ref, value) => secretStore.setSecret(db, ref, value), db);
 const getStoredKey = (provider: string) => secretStore.getSecret(db, `provider.${provider}`);
 
 // Drop-file secret intake (PLAN.md secure-intake): a file in <MIRO_DIR>/secrets.d/ named after its

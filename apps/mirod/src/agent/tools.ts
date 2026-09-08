@@ -13,6 +13,7 @@ import { readAllUps } from "../inventory/power";
 import type { Database } from "bun:sqlite";
 import { computeSetupStatus } from "../setup/status";
 import { computeSeverity } from "../operations/severity";
+import { listStacks } from "../stacks/store";
 import { listTrash } from "../operations/trash";
 
 // Schemas are named so `execute` can reference `Static<typeof schema>` explicitly - TS can't
@@ -181,5 +182,18 @@ export function buildStatusTool(db: Database) {
       "Show how this box is set up: what's configured (backup, notifications, UPS monitoring), the current health severity, and what's still missing from the well-run-server baseline. Use it to answer 'how is my server set up / what's left' and to decide what to proactively offer.",
     parameters: Type.Object({}),
     execute: async () => textResult({ ...computeSetupStatus(db), health: await computeSeverity(db) }),
+  };
+}
+
+/** Db-bound read tool: the compose stacks Miro manages (name, status, dir). The "what am I running"
+ * surface for the compose-killer; distinct from container_list (all containers) - these are Miro's. */
+export function buildStackListTool(db: Database) {
+  return {
+    name: "stack_list",
+    label: "List managed stacks",
+    description:
+      "List the docker-compose stacks Miro manages (deployed via deploy_stack): name, status, and dir. Use it to see what you're running before an update/edit/remove, and to answer 'what apps do I have'. Distinct from container_list (which shows all containers, managed or not).",
+    parameters: Type.Object({}),
+    execute: async () => textResult(listStacks(db)),
   };
 }

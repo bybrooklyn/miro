@@ -15,7 +15,7 @@ import { redactSecretsInText } from "../operations/classify";
  * (discoverComposeFiles). Vendor systemd units live in /usr/lib and are skipped - only owner units
  * and drop-in overrides in /etc/systemd/system matter for reconstruction. Owner-extensible via the
  * backup.extra_paths setting. */
-export const DEFAULT_CONFIG_PATHS = ["/etc/docker/daemon.json", "/etc/fstab", "/etc/systemd/system"];
+export const DEFAULT_CONFIG_PATHS = ["/etc/docker/daemon.json", "/etc/fstab", "/etc/systemd/system", "/var/lib/miro/stacks"];
 
 /** Miro-state tables exported as NDJSON - non-secret by construction (settings/memories/operations)
  * or reference-only (extensions rows name secrets by ref, never value). The `secrets` table is

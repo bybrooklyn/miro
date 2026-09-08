@@ -1,6 +1,7 @@
 import { Type } from "@miro/schema-engine/typebox";
+import type { Database } from "bun:sqlite";
 import { textResult } from "./tool-result";
-import type { OperationToolContext } from "../operations/engine";
+import type { OperationToolContext, OperationKind } from "../operations/engine";
 import { runOperation } from "../operations/engine";
 import { systemdRestartKind } from "../operations/kinds/systemd-restart";
 import { systemdUnitKind, UNIT_ACTIONS, type SystemdUnitParams } from "../operations/kinds/systemd-unit";
@@ -24,6 +25,8 @@ import { isSensitivePath } from "../operations/classify";
 import { fileDeleteKind, type FileDeleteParams } from "../operations/kinds/file-delete";
 import { httpMutationKind, takeOutput as takeHttpOutput, type HttpMutationParams } from "../operations/kinds/http-mutation";
 import { secretFileKind, type SecretFileParams } from "../operations/kinds/secret-file";
+import { stackDeployKind, type StackDeployParams } from "../operations/kinds/stack-deploy";
+import { stackControlKind, STACK_ACTIONS, type StackControlParams } from "../operations/kinds/stack-control";
 import { classifyCommand, redactSecretsInText } from "../operations/classify";
 import { runSandboxed } from "../operations/sandbox";
 import { runBackup, pushBackup, type BackupDeps, BACKUP_ENABLED, BACKUP_REPO, BACKUP_AUTH, BACKUP_AGE_RECIPIENT, BACKUP_EXTRA_PATHS } from "../backup";
@@ -117,6 +120,18 @@ const fileDeleteParams = Type.Object({
   reason: Type.String({ description: "Why, in one line - shown to the user as the goal." }),
 });
 
+const deployStackParams = Type.Object({
+  app: Type.String({ description: "Short app/stack name, lowercase (letters, digits, _ -), e.g. immich. Names the compose project + the managed dir." }),
+  compose: Type.String({ description: "The full docker-compose YAML for the stack. Miro owns it under /var/lib/miro/stacks/<app>/ and runs it through the engine (verify + rollback). It's scanned for privileged/host-mount shapes and refused if unsafe. Put a secret via an env_file reference, never inline." }),
+  reason: Type.String({ description: "Why, in one line - shown to the owner as the goal." }),
+});
+
+const stackControlParams = Type.Object({
+  app: Type.String({ description: "The managed stack's name (see stack_list)." }),
+  action: Type.Enum(STACK_ACTIONS, { description: "stop | start | down | remove. remove moves the stack's dir to trash (recoverable) and drops it from the registry." }),
+  reason: Type.String({ description: "Why, in one line - shown to the owner as the goal." }),
+});
+
 const secretFileParams = Type.Object({
   path: Type.String({ description: "Absolute path to write, e.g. /var/lib/miro/vpn/gluetun.env - not a path Miro manages as its own secret material." }),
   template: Type.String({ description: "File content with {{secret:<ref>}} placeholders, e.g. WIREGUARD_PRIVATE_KEY={{secret:extension.gluetun.wg_key}}. Resolved at apply time - you never see the value and it never lands in a committed/backed-up file. Must contain at least one placeholder." }),
@@ -176,6 +191,8 @@ const restoreParams = Type.Object({
 export function buildOperationTools(ctx: OperationToolContext) {
   const httpKind = httpMutationKind(ctx.getSecret ?? (() => null), ctx.setSecret);
   const secretFile = secretFileKind(ctx.getSecret ?? (() => null));
+  const stackDeploy = stackDeployKind(ctx.db);
+  const stackControl = stackControlKind(ctx.db);
   const backupDeps: BackupDeps = {
     db: ctx.db,
     getSetting: ctx.getSetting ?? (() => null),
@@ -380,6 +397,28 @@ export function buildOperationTools(ctx: OperationToolContext) {
       },
     },
     {
+      name: "deploy_stack",
+      label: "Deploy a stack",
+      description:
+        "Stand up a self-hosted app as a managed docker-compose stack - the way to install/run an app. Miro owns the compose under /var/lib/miro/stacks/<app>/, runs it through the engine (confirm -> up -> verify healthy -> rollback if not), and tracks it so it can later be updated, edited, or removed. Write the full compose yourself (research it if you don't know the app); use this instead of ad-hoc file_write + `docker compose up`. Redeploying the same app name updates it in place.",
+      parameters: deployStackParams,
+      execute: async (_id: string, params: StackDeployParams & { reason: string }) => {
+        const { reason, ...p } = params;
+        return textResult(await runOperation(ctx, stackDeploy, reason, p));
+      },
+    },
+    {
+      name: "stack_control",
+      label: "Control a stack",
+      description:
+        "stop / start / down / remove a stack Miro manages (see stack_list). remove brings it down and moves its compose dir to Miro's trash (recoverable). A tracked, confirmed operation.",
+      parameters: stackControlParams,
+      execute: async (_id: string, params: StackControlParams & { reason: string }) => {
+        const { reason, ...p } = params;
+        return textResult(await runOperation(ctx, stackControl, reason, p));
+      },
+    },
+    {
       name: "backup_configure",
       label: "Configure backup",
       description:
@@ -532,10 +571,10 @@ export function buildOperationTools(ctx: OperationToolContext) {
 }
 
 /** Every kind the engine must know at boot for crash reconciliation (index.ts's OPERATION_KINDS). */
-export function allOperationKinds(getSecret: (ref: string) => string | null, setSecret?: (ref: string, value: string) => void) {
+export function allOperationKinds(getSecret: (ref: string) => string | null, setSecret?: (ref: string, value: string) => void, db?: Database) {
   const http = httpMutationKind(getSecret, setSecret);
   const secretFile = secretFileKind(getSecret);
-  return {
+  const kinds: Record<string, OperationKind<any, any>> = {
     [systemdRestartKind.kind]: systemdRestartKind,
     [systemdUnitKind.kind]: systemdUnitKind,
     [rebootKind.kind]: rebootKind,
@@ -550,4 +589,13 @@ export function allOperationKinds(getSecret: (ref: string) => string | null, set
     [http.kind]: http,
     [secretFile.kind]: secretFile,
   };
+  // The stack kinds need the db (the managed_stacks registry). Contexts without a db - an extension's
+  // declarative write-bindings - never use them, so they're only added when a db is available.
+  if (db) {
+    const stackDeploy = stackDeployKind(db);
+    const stackControl = stackControlKind(db);
+    kinds[stackDeploy.kind] = stackDeploy;
+    kinds[stackControl.kind] = stackControl;
+  }
+  return kinds;
 }
