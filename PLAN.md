@@ -3367,3 +3367,31 @@ check` 13/13, `just test` 491 pass / 0 fail.
 **Next:** slice 3 = update (pull+recreate+rollback) + edit-and-reapply, then pillar 2 (private-by-default)
 and pillar 3 (deploy-anywhere). A future opt-in community recipe EXCHANGE (with an anti-poisoning story,
 §5.17's Misevolve finding) is the payoff of "sharing-ready".
+
+### 5.47 The compose-killer, slice 3: update with exact rollback + edit safety (2026-09-08)
+
+Completes **"manage, not just install"** - the last piece of replacing Portainer for the owner. The two
+ongoing chores (update an app, change its config) are now tracked operations that revert precisely.
+
+- **`operations/kinds/stack-update.ts`** (`stack.update`) - `compose pull` + `up -d` as one confirmed
+  operation. `captureState` records the exact **image IDs** running (via `docker inspect
+  {{.Config.Image}} {{.Image}}` per project container) BEFORE the pull; `rollback` re-tags those IDs
+  back to their tags (`docker tag <id> <tag>`) and force-recreates. So a bad update reverts to the exact
+  bits that were running, rather than hoping the old tag still resolves the same digest - the thing
+  people actually fear about updating self-hosted apps. verify polls the project's running-container
+  count (label-based, compose-version-agnostic) against the compose's declared service count.
+- **Edit is `deploy_stack` with a modified compose** (no new kind needed - redeploy already captures the
+  prior compose). Its rollback now **restores the previous compose AND brings it back up**, so a failed
+  edit leaves the stack running what it ran before, not merely the old file on disk.
+- Tool `stack_update`; the tool description points config changes at `deploy_stack`.
+
+**Live-verified on the VM (real Docker), one sequence:** deploy `traefik/whoami` on :8099 (committed,
+curl OK) -> `stack.update` (committed, curl still OK) -> edit to :8098 (committed, curl 8098 OK) -> a
+**deliberately broken edit** (nonexistent image) -> **rolledback, and curl 8098 still OK** (the prior
+compose was restored and re-upped) -> remove (committed). Gate: `just check` 13/13, `just test` 491
+pass / 0 fail.
+
+**The compose-killer is now complete (slices 1-3, §5.45-5.47):** Miro stands an app up from an outcome,
+learns the recipe, keeps it running, updates it safely, edits it safely, and tears it down - all through
+the engine, all reversible. Next: pillar 2 (private-by-default / local models - the owner's one fear)
+then pillar 3 (deploy-anywhere).
