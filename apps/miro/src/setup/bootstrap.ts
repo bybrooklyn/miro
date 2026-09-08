@@ -41,6 +41,8 @@ export async function probeSshAccess(
   }
 }
 
+/** The real one-liner - `install.sh` at the repo root, served raw from the public repo. Was a
+ * miro.computer URL that never existed; a domain can front this later without changing callers. */
 export function installCommand(): string {
-  return "curl -fsSL https://miro.computer/install | sudo sh";
+  return "curl -fsSL https://raw.githubusercontent.com/bybrooklyn/miro/master/install.sh | sudo sh";
 }

@@ -46,10 +46,10 @@ export function computeSetupStatus(db: Database): SetupStatus {
   if (ups) configured.push(`UPS/power monitoring → ${ups}`);
   else gaps.push({ key: "ups", label: "UPS/power monitoring", how: "nut_install" });
 
-  // Automatic update checks need a GitHub token on file (provider.github); its presence is enough,
-  // no decryption. A well-run box knows when an update is out.
-  if (hasSecret(db, "provider.github")) configured.push("automatic update checks");
-  else gaps.push({ key: "updates", label: "automatic update checks", how: "store a GitHub token: `mirod secret set provider.github` - Miro then checks daily" });
+  // Update checks read the public releases of a public repo, so no credential is needed at all - the
+  // daily check is on by default and this is a configured item, not a gap. A token is still honoured
+  // (provider.github) for a private fork or to lift the unauthenticated API rate limit.
+  configured.push(hasSecret(db, "provider.github") ? "automatic update checks (authenticated)" : "automatic update checks");
 
   return { configured, gaps };
 }

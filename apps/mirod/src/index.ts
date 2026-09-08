@@ -55,6 +55,7 @@ import { maybeRunSecretCli } from "./secret-intake/cli";
 import { importSecretDropFiles } from "./secret-intake/drop-file";
 import { maybeRunStatusCli } from "./setup/status-cli";
 import { maybeRunEgressCli } from "./setup/egress-cli";
+import { maybeRunVerifyManifestCli } from "./self-update/verify-cli";
 
 // CLI subcommands (`mirod secret set <ref>`, `mirod status`) run and exit BEFORE the daemon boots -
 // a credential stored out-of-band never reaches the agent/model/transcript; status is a from-anywhere
@@ -62,6 +63,7 @@ import { maybeRunEgressCli } from "./setup/egress-cli";
 if (await maybeRunSecretCli()) process.exit(0);
 if (await maybeRunStatusCli()) process.exit(0);
 if (await maybeRunEgressCli()) process.exit(0);
+if (await maybeRunVerifyManifestCli()) process.exit(0);
 
 
 mkdirSync(MIRO_DIR, { recursive: true });

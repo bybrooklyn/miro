@@ -11,10 +11,11 @@ function db(settings: Record<string, string> = {}, secrets: string[] = []): Data
   return d;
 }
 
-test("a fresh box: everything is a gap, nothing configured", () => {
+test("a fresh box: everything is a gap except update checks, which need no credential", () => {
   const s = computeSetupStatus(db());
-  expect(s.configured).toEqual([]);
-  expect(s.gaps.map((g) => g.key).sort()).toEqual(["backup", "notifications", "updates", "ups"]);
+  // Releases are public, so the daily update check works out of the box - it is never a gap.
+  expect(s.configured).toEqual(["automatic update checks"]);
+  expect(s.gaps.map((g) => g.key).sort()).toEqual(["backup", "notifications", "ups"]);
   expect(setupGapLines(db()).join(" ")).toContain("offer once");
 });
 
@@ -29,14 +30,20 @@ test("a fully-set-up box: no gaps, all configured, silent nudge", () => {
   expect(setupGapLines(d)).toEqual([]);
 });
 
-test("partial: backup on, notifications set; ups + updates still gaps", () => {
+test("partial: backup on, notifications set; ups still a gap", () => {
   const s = computeSetupStatus(db({ "backup.enabled": "true", "notify.gotify.url": "http://g" }));
-  expect(s.gaps.map((g) => g.key).sort()).toEqual(["updates", "ups"]);
-  expect(s.configured.length).toBe(2);
+  expect(s.gaps.map((g) => g.key).sort()).toEqual(["ups"]);
+  expect(s.configured.length).toBe(3);
+});
+
+test("a stored GitHub token upgrades the update-check line rather than closing a gap", () => {
+  const s = computeSetupStatus(db({}, ["provider.github"]));
+  expect(s.configured).toEqual(["automatic update checks (authenticated)"]);
+  expect(s.gaps.map((g) => g.key)).not.toContain("updates");
 });
 
 test("computeSetupStatus never throws on a db missing the tables", () => {
   const bare = new Database(":memory:");
   expect(() => computeSetupStatus(bare)).not.toThrow();
-  expect(computeSetupStatus(bare).gaps.length).toBe(4);
+  expect(computeSetupStatus(bare).gaps.length).toBe(3);
 });

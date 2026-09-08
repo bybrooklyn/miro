@@ -1,8 +1,9 @@
 import { test, expect } from "bun:test";
 import { probeSshAccess, installCommand } from "./bootstrap";
 
-test("installCommand matches the plan's documented experienced-path bootstrap (plan §10)", () => {
-  expect(installCommand()).toBe("curl -fsSL https://miro.computer/install | sudo sh");
+test("installCommand points at the install script that actually exists", () => {
+  // Was a miro.computer URL with nothing behind it; the deploy-anywhere slice shipped install.sh.
+  expect(installCommand()).toBe("curl -fsSL https://raw.githubusercontent.com/bybrooklyn/miro/master/install.sh | sudo sh");
 });
 
 test(

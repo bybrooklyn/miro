@@ -36,7 +36,7 @@ jobs:
           # The shippable source tree - no node_modules (the daemon runs bun install after unpack),
           # no .git, no tools/dev-vm. Deterministic-ish ordering.
           tar --sort=name --owner=0 --group=0 --numeric-owner \
-              -czf "dist/${NAME}" apps packages package.json bun.lock justfile LICENSE
+              -czf "dist/${NAME}" apps packages package.json bun.lock justfile install.sh LICENSE
           SHA=$(shasum -a 256 "dist/${NAME}" | cut -d' ' -f1)
           SIZE=$(wc -c < "dist/${NAME}" | tr -d ' ')
           MSG=$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")
