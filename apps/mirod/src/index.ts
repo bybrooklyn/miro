@@ -56,6 +56,7 @@ import { importSecretDropFiles } from "./secret-intake/drop-file";
 import { maybeRunStatusCli } from "./setup/status-cli";
 import { maybeRunEgressCli } from "./setup/egress-cli";
 import { maybeRunVerifyManifestCli } from "./self-update/verify-cli";
+import { isSocketLive } from "./socket-guard";
 
 // CLI subcommands (`mirod secret set <ref>`, `mirod status`) run and exit BEFORE the daemon boots -
 // a credential stored out-of-band never reaches the agent/model/transcript; status is a from-anywhere
@@ -72,10 +73,23 @@ mkdirSync(MIRO_DIR, { recursive: true });
 // drops to the `miro` user and must traverse MIRO_DIR/extensions to load generated code, so a
 // blanket chmod here would break it (found live: "Cannot find module tools.ts" when the host, as
 // miro, could not enter a root-owned 0700 dir).
-try {
-  unlinkSync(SOCKET_PATH);
-} catch {
-  // no stale socket to remove
+
+// A socket file left by a crash must be removed, but one a LIVE daemon is listening on must not: a
+// second `mirod` (an operator typo, an old release ignoring a CLI subcommand it does not know) would
+// otherwise unlink it, listen on its own, and leave the socket dead when it exits - the unit stays
+// "active" while nothing can connect. Found live during the deploy-anywhere slice, on a box where
+// `mirod status` against an older tree hijacked the running daemon's socket.
+if (existsSync(SOCKET_PATH)) {
+  if (await isSocketLive(SOCKET_PATH)) {
+    console.error(`another mirod is already listening on ${SOCKET_PATH} - refusing to start a second one.`);
+    console.error("Use `systemctl status mirod` to see it; run CLI subcommands (status, egress, secret set) with the installed `mirod` wrapper, which exits before the daemon boots.");
+    process.exit(1);
+  }
+  try {
+    unlinkSync(SOCKET_PATH);
+  } catch {
+    // nothing to remove
+  }
 }
 
 const db = new Database(DB_PATH);

@@ -3432,3 +3432,68 @@ message told a local-only owner to connect a cloud provider, which would not hel
 missing on-box model. Gate: `just check` 13/13, `just test` 496 pass / 0 fail.
 
 Next: pillar 3 (deploy-anywhere).
+
+### 5.49 Deploy-anywhere, PR 1: install.sh, proven on a cold box (2026-09-08)
+
+Pillar 3's first piece, and the one that turns everything already built into something the owner can
+run. Until now every box was hand-built by `tools/dev-vm/install-mirod.sh` ("Dev-only, not shipped"),
+and `installCommand()` returned `curl -fsSL https://miro.computer/install | sudo sh` - a URL that
+never existed, called only from `SetupScreen.tsx`, itself dead code.
+
+**`install.sh`** (POSIX sh, repo root) produces exactly the `/opt/miro` layout the self-update
+machinery already owns, so the first install and every later update take the same audited path. It
+installs a **pinned Bun 1.4.0** (CI's version) to `/opt/miro/bin/bun` - not a compiled binary, because
+`extensions/host.ts:105` and `self-update/fetch.ts:121` both spawn `process.execPath` *as Bun* -
+checks the tarball's **sha256 against the signed manifest before unpacking**, then **Sigstore-verifies
+the manifest before anything starts** via a new `mirod verify-manifest` CLI (dispatched beside the
+other CLIs so it inherits verify.ts's shim-first import order). A version failing either check is
+deleted, not run. Modes: `--client` (no root, `~/.miro`, for a laptop), `--uninstall` / `--purge`,
+`--dry-run`, `--non-interactive`, `--channel`, `--version`. Also: `MIRO_RELEASE_BASE` for a mirror or
+an airgapped copy; releases now ship `install.sh` in the tarball; update checks stopped counting as a
+setup gap (public releases need no token).
+
+Care where a half-install would be dangerous: nothing under `/opt` before download+sha256 pass; a
+version dir without `node_modules` is a half-install and gets redone (because `stageUpdate` only
+checks that the directory exists); every swap is tmp+rename including `current` (bare `ln -sfn` has
+the unlink window `preflight.mjs` already avoids), with `preflight.mjs` digest-checked after copy;
+unpack runs `bun install --ignore-scripts` so nothing from an unverified tarball executes; upgrade mode
+never touches `current`, never restarts the unit, never writes the marker - it stages and hands off to
+the running daemon, refusing if an update is in flight or the daemon is down; systemd must be **PID 1**,
+not merely installed.
+
+**Live-verified on a genuinely cold box** (dev disk parked, `up.sh` cold-provisioned a fresh Debian 13
+arm64 guest: no Bun, no `/opt/miro`, no source tree, empty `/usr/local/bin`), driving the real signed
+v0.0.2 release over a local `MIRO_RELEASE_BASE`. Checked independently, not from the installer's own
+report: unit `active`+`enabled`, `current -> versions/0.0.2`, the daemon's `/proc/<pid>/cwd` inside the
+version dir, socket `660 root:miro` in a `0750` dir, and a **raw python unix-socket client got the real
+protocol's first event** (the `personality` question). Then: the signature gate refused a tampered
+manifest (locally, against the real bundle) and a bogus one on the box - **version deleted, nothing
+started, `current` and the marker untouched**; a re-run of the same version reported `noop`; staging on
+top of an in-flight marker refused; upgrading with the daemon stopped refused; `--purge` left nothing
+behind; the `useradd --system` flags were confirmed on Debian 13 (uid 999); and `--client` installed
+unprivileged and the TUI actually rendered.
+
+**Four real bugs, all found by the cold box and none reachable by tests:**
+1. **A stock Debian 13 cloud image has no `unzip`** (the dev VM had picked one up - exactly what a
+   pampered box hides), and Bun ships zips. Now falls back to `python3 -m zipfile`, which every
+   cloud image has because cloud-init is written in it.
+2. **`--purge` would have deleted the operator's own account** on a box whose admin user is named
+   `miro` (uid 1000 - the case on this very VM). Now only removes a *system* account it would have
+   created (uid < 1000, not `$SUDO_USER`), and says so.
+3. **POSIX sh has no locals**: `install_bun_to` assigned `url`, clobbering the tarball URL its caller
+   had set, so `--client` downloaded **Bun as the release tarball**. The sha256 gate caught it - which
+   is what the gate is for. Its globals are prefixed now.
+4. **A second `mirod` stole the live socket.** `mirod status` against the v0.0.2 tree (which predates
+   that CLI) ignored the argument, booted a daemon, unlinked the running daemon's socket and left it
+   dead on exit while the unit still reported `active`. Fixed daemon-side: `socket-guard.ts`'s
+   `isSocketLive` connects before unlinking and refuses to start a second daemon (tested against a
+   real listener, a stale file, and a stopped listener). The installer also refuses to invoke
+   `verify-manifest` on a tree that predates it, for the same reason.
+
+Gate: `just check` 13/13, `just test` 522 pass / 0 fail. Dev VM restored (`current -> versions/0.0.1`,
+unit active, media stack up).
+
+Still owed before the one-liner is real for a stranger: flip the repo public (history scan came back
+clean of high-signal secret shapes across all 155 commits; `tools/dev-vm/state/` was never committed)
+and cut a release that contains `verify-manifest`, so the in-path signature gate runs on a real
+signed artifact. Next: PR 2, device pairing.

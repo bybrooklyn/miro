@@ -144,6 +144,17 @@ fetch_to() { # url dest
   else die "need curl or wget"; fi
 }
 
+# Bun publishes zips, and a stock Debian 13 cloud image has no unzip (found live on a cold box - the
+# dev VM had picked one up somewhere, which is exactly the kind of thing a pampered box hides). Every
+# cloud image does have python3, because cloud-init is written in it. So: unzip if present, else
+# python3's zipfile. Neither means a clear instruction rather than a mysterious failure.
+extract_zip() { # zipfile destdir
+  if have unzip; then unzip -qo "$1" -d "$2"
+  elif have python3; then python3 -m zipfile -e "$1" "$2"
+  else die "need unzip or python3 to unpack Bun (apt-get install unzip)"; fi
+}
+have_unzipper() { have unzip || have python3; }
+
 # Every symlink and binary swap is tmp-then-rename. `ln -sfn` unlinks before it symlinks, and the
 # daemon's own preflight.mjs goes out of its way to avoid that window - so this does too.
 atomic_symlink() { # target linkpath
@@ -163,30 +174,34 @@ resolve_version() {
   printf '%s' "${tag#v}"
 }
 
+# POSIX sh has no locals: every variable here is global, so this function's names are prefixed. An
+# unprefixed `url` here silently clobbered the caller's tarball URL and made the client download Bun
+# as the release tarball - caught live by the sha256 check, which is exactly what it is for.
 install_bun_to() { # destdir  -> installs <destdir>/bun at the pinned version
-  destdir="$1"
-  if [ -x "$destdir/bun" ] && [ "$("$destdir/bun" --version 2>/dev/null)" = "$BUN_VERSION" ]; then
-    say "Bun $BUN_VERSION already at $destdir/bun"
+  _b_dest="$1"
+  if [ -x "$_b_dest/bun" ] && [ "$("$_b_dest/bun" --version 2>/dev/null)" = "$BUN_VERSION" ]; then
+    say "Bun $BUN_VERSION already at $_b_dest/bun"
     return
   fi
-  asset=$(resolve_bun_asset "$ARCH" "$LIBC" "$BASELINE")
-  url=$(bun_url "$asset")
-  fact BUN_ASSET "$asset"; fact BUN_URL "$url"
-  have unzip || die "need unzip to install Bun (apt-get install unzip)"
-  fetch_to "$url" "$TMP/bun.zip"
+  _b_asset="${2:-$(resolve_bun_asset "$ARCH" "$LIBC" "$BASELINE")}"
+  _b_url=$(bun_url "$_b_asset")
+  fact BUN_ASSET "$_b_asset"; fact BUN_URL "$_b_url"
+  have_unzipper || die "need unzip or python3 to unpack Bun"
+  fetch_to "$_b_url" "$TMP/bun.zip"
   fetch_to "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/SHASUMS256.txt" "$TMP/bun.sums"
   if [ "$DRY" != 1 ]; then
-    want=$(grep " $asset\$" "$TMP/bun.sums" | cut -d' ' -f1)
-    got=$(sha256_of "$TMP/bun.zip")
-    [ -n "$want" ] || die "no published checksum for $asset"
-    [ "$want" = "$got" ] || die "Bun checksum mismatch: expected $want, got $got"
-    unzip -qo "$TMP/bun.zip" -d "$TMP/bunzip"
-    mkdir -p "$destdir"
-    mv -f "$TMP/bunzip"/*/bun "$destdir/bun.new"
-    chmod 755 "$destdir/bun.new"
-    mv -f "$destdir/bun.new" "$destdir/bun"
+    _b_want=$(grep " $_b_asset\$" "$TMP/bun.sums" | cut -d' ' -f1)
+    _b_got=$(sha256_of "$TMP/bun.zip")
+    [ -n "$_b_want" ] || die "no published checksum for $_b_asset"
+    [ "$_b_want" = "$_b_got" ] || die "Bun checksum mismatch: expected $_b_want, got $_b_got"
+    rm -rf "$TMP/bunzip"
+    extract_zip "$TMP/bun.zip" "$TMP/bunzip"
+    mkdir -p "$_b_dest"
+    mv -f "$TMP/bunzip"/*/bun "$_b_dest/bun.new"
+    chmod 755 "$_b_dest/bun.new"
+    mv -f "$_b_dest/bun.new" "$_b_dest/bun"
   else
-    fact WOULD_INSTALL_BUN "$destdir/bun"
+    fact WOULD_INSTALL_BUN "$_b_dest/bun"
   fi
 }
 
@@ -206,8 +221,16 @@ do_uninstall() {
     warn "--purge also removes /var/lib/miro (DB, secrets, stacks) and the miro user/group."
     run rm -rf /var/lib/miro
     [ -n "${SUDO_USER:-}" ] && run gpasswd -d "$SUDO_USER" miro 2>/dev/null || true
-    run userdel miro 2>/dev/null || true
-    run groupdel miro 2>/dev/null || true
+    # Only remove the account if it is the system user WE would have created. On a box whose admin
+    # happens to be named miro - which is exactly the case on a cloud image where you named your
+    # login that - userdel would be aimed at the operator's own account. Found live.
+    miro_uid=$(id -u miro 2>/dev/null || echo "")
+    if [ -n "$miro_uid" ] && [ "$miro_uid" -lt 1000 ] && [ "${SUDO_USER:-}" != miro ]; then
+      run userdel miro 2>/dev/null || true
+      run groupdel miro 2>/dev/null || true
+    elif [ -n "$miro_uid" ]; then
+      say "Left the existing 'miro' account alone (uid $miro_uid) - Miro did not create it."
+    fi
     say "Purged. /var/lib/miro is gone."
   else
     say "Removed. /var/lib/miro kept - reinstalling picks it back up."
@@ -228,28 +251,18 @@ do_client() {
   esac
   v=$(resolve_version); fact VERSION "$v"
   tarball="miro-v$v.tar.gz"
-  url=$(release_url "$v" "$tarball"); fact TARBALL_URL "$url"
-  fact MANIFEST_URL "$(release_url "$v" manifest.json)"
+  # c_ prefix: install_bun_to below shares this shell's globals.
+  c_url=$(release_url "$v" "$tarball"); fact TARBALL_URL "$c_url"
+  c_murl=$(release_url "$v" manifest.json); fact MANIFEST_URL "$c_murl"
+  # macOS asset naming differs from Linux's, and has no musl/baseline split - otherwise identical, so
+  # the same download-verify-extract path handles both.
   if [ "$BUN_OS" = darwin ]; then
-    # Bun's macOS asset naming differs from Linux's; no musl/baseline split to worry about.
-    asset="bun-darwin-$ARCH.zip"
-    fact BUN_URL "$(bun_url "$asset")"
-    have unzip || die "need unzip"
-    if [ "$DRY" != 1 ]; then
-      if [ ! -x "$dest/bin/bun" ] || [ "$("$dest/bin/bun" --version 2>/dev/null)" != "$BUN_VERSION" ]; then
-        fetch_to "$(bun_url "$asset")" "$TMP/bun.zip"
-        fetch_to "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/SHASUMS256.txt" "$TMP/bun.sums"
-        want=$(grep " $asset\$" "$TMP/bun.sums" | cut -d' ' -f1); got=$(sha256_of "$TMP/bun.zip")
-        [ "$want" = "$got" ] || die "Bun checksum mismatch"
-        unzip -qo "$TMP/bun.zip" -d "$TMP/bunzip"; mkdir -p "$dest/bin"
-        mv -f "$TMP/bunzip"/*/bun "$dest/bin/bun.new"; chmod 755 "$dest/bin/bun.new"; mv -f "$dest/bin/bun.new" "$dest/bin/bun"
-      fi
-    fi
+    install_bun_to "$dest/bin" "bun-darwin-$ARCH.zip"
   else
     install_bun_to "$dest/bin"
   fi
-  fetch_to "$url" "$TMP/$tarball"
-  fetch_to "$(release_url "$v" manifest.json)" "$TMP/manifest.json"
+  fetch_to "$c_url" "$TMP/$tarball"
+  fetch_to "$c_murl" "$TMP/manifest.json"
   if [ "$DRY" != 1 ]; then
     want=$(grep -o '"sha256" *: *"[^"]*"' "$TMP/manifest.json" | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
     got=$(sha256_of "$TMP/$tarball")
@@ -281,7 +294,7 @@ preconditions() {
   # where `systemctl start` fails in a way nobody can read.
   have systemctl && [ -d /run/systemd/system ] || die "systemd must be PID 1 on this box (this looks like a container or WSL1)"
   for t in tar; do have "$t" || die "need $t"; done
-  have unzip || die "need unzip (apt-get install unzip)"
+  have_unzipper || die "need unzip or python3 (to unpack Bun)"
   resolve_sha_cmd || die "need sha256sum, shasum or openssl"
   have setpriv || warn "setpriv is missing (util-linux) - the extension host cannot drop privileges without it"
   have groupadd && have useradd || die "need groupadd/useradd (shadow-utils)"
