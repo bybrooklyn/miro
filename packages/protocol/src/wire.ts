@@ -162,6 +162,35 @@ export interface PairResultEvent {
   error?: string;
 }
 
+/** One managed compose stack, as the daemon sees it right now: the registry's record plus live
+ * container counts. `running`/`declared` are containers up vs services the compose declares, which is
+ * what makes "degraded" visible rather than a bare up/down. */
+export interface StackSummary {
+  app: string;
+  status: "running" | "stopped";
+  dir: string;
+  running: number;
+  declared: number;
+  images: string[];
+  updatedAt: number;
+}
+
+/** Answer to `stacks_request` - the managed-stack view any client can render. */
+export interface StacksEvent {
+  type: "stacks";
+  stacks: StackSummary[];
+  /** Absent when a compose CLI is present; a reason string when stacks cannot be inspected at all. */
+  unavailable?: string;
+}
+
+/** Answer to `stack_logs_request`: the tail of a stack's compose logs, newest last. */
+export interface StackLogsEvent {
+  type: "stack_logs";
+  app: string;
+  lines: string[];
+  error?: string;
+}
+
 export type ServerEvent =
   | StatusEvent
   | QuestionEvent
@@ -174,7 +203,9 @@ export type ServerEvent =
   | OperationProgressEvent
   | OperationResultEvent
   | SystemPlanEvent
-  | PairResultEvent;
+  | PairResultEvent
+  | StacksEvent
+  | StackLogsEvent;
 
 export interface ChatMessage {
   type: "chat";
@@ -237,6 +268,28 @@ export interface PairRedeemMessage {
   deviceName?: string;
 }
 
+/** Ask for the managed-stack view. A read: it inspects, it changes nothing. */
+export interface StacksRequestMessage {
+  type: "stacks_request";
+}
+
+/** Ask for the tail of one stack's logs. */
+export interface StackLogsRequestMessage {
+  type: "stack_logs_request";
+  app: string;
+  /** How many lines from the end (default 200, capped by the daemon). */
+  lines?: number;
+}
+
+/** Act on a managed stack from a UI control. This is NOT a shortcut around the operation engine: the
+ * daemon runs the same operation kind the agent's tools use, so the client sees the usual
+ * operation_plan + confirming question + operation_result, and a failure rolls back as always. */
+export interface StackActionMessage {
+  type: "stack_action";
+  app: string;
+  action: "start" | "stop" | "down" | "remove" | "update";
+}
+
 export type ClientMessage =
   | ChatMessage
   | AnswerMessage
@@ -246,7 +299,10 @@ export type ClientMessage =
   | MemoryForgetMessage
   | NoticeFeedbackMessage
   | AuthMessage
-  | PairRedeemMessage;
+  | PairRedeemMessage
+  | StacksRequestMessage
+  | StackLogsRequestMessage
+  | StackActionMessage;
 
 /** The wire protocol's version, as documented in docs/protocol.md. Additive changes (a new event type,
  * a new optional field) keep this number; anything a existing client could misread bumps it, and the

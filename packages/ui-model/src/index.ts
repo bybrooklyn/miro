@@ -1,4 +1,12 @@
-import type { ServerEvent, ClientMessage, SystemPlanEvent, OperationPlanEvent, QuestionOption, OperationProgressEvent } from "@miro/protocol";
+import type {
+  ServerEvent,
+  ClientMessage,
+  SystemPlanEvent,
+  OperationPlanEvent,
+  QuestionOption,
+  OperationProgressEvent,
+  StackSummary,
+} from "@miro/protocol";
 
 // The headless view-model (PLAN.md §5.9 client decision: "one view-model, two thin renderers").
 // A pure reducer from protocol events to what a client shows: a transcript of blocks, the one
@@ -109,10 +117,17 @@ export interface UiState {
   working: boolean;
   /** Monotonic id source for client-originated blocks. */
   seq: number;
+  /** The managed-stack view, when a client has asked for it (`stacks_request`). null until then, so a
+   * renderer can tell "not asked" from "asked, none managed". */
+  stacks: StackSummary[] | null;
+  /** Why the live numbers are missing (no compose CLI, docker unreachable), when they are. */
+  stacksUnavailable?: string;
+  /** Log tails by app, newest last - only for stacks a client has asked about. */
+  stackLogs: Record<string, { lines: string[]; error?: string }>;
 }
 
 export function initialState(server = "home"): UiState {
-  return { server, health: "connecting", blocks: [], pending: null, pendingQueue: [], working: false, seq: 0 };
+  return { server, health: "connecting", blocks: [], pending: null, pendingQueue: [], working: false, seq: 0, stacks: null, stackLogs: {} };
 }
 
 /** Show a new prompt now if none is open, else hold it behind the current one - never overwrite an
@@ -181,6 +196,14 @@ function updateNode(node: ActivityNode, path: number[], fn: (n: ActivityNode) =>
 
 /** Apply one server event. `now` is injectable so tests are deterministic. */
 export function reduce(state: UiState, event: ServerEvent, now = Date.now()): UiState {
+  // The managed-stack view (PLAN.md deploy-anywhere PR 3b). Kept in the view-model, not in a renderer,
+  // so the terminal can grow the same view without reimplementing any of it.
+  if (event.type === "stacks") {
+    return { ...state, stacks: event.stacks, stacksUnavailable: event.unavailable };
+  }
+  if (event.type === "stack_logs") {
+    return { ...state, stackLogs: { ...state.stackLogs, [event.app]: { lines: event.lines, error: event.error } } };
+  }
   switch (event.type) {
     case "status": {
       const next = { ...state, server: event.server, health: event.health, model: event.model ?? state.model, privilege: event.privilege ?? state.privilege };

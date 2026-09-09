@@ -3594,3 +3594,51 @@ device with a live last-seen, and pairing raised its `worth_knowing` notificatio
 
 Gate: `just check` 14/14 (apps/web is new), `just test` 542 pass / 0 fail. VM restored to as-found (web
 off, devices and codes cleared, test file removed). Next: PR 3b, the managed-stack views.
+
+### 5.52 Deploy-anywhere, PR 3b: the managed-stack views (2026-09-09)
+
+The last piece of the program, and the one that makes the browser a Portainer replacement rather than a
+chat window: see what Miro runs, read its logs, and start/stop/update/remove it - from a phone.
+
+- **Stacks are protocol messages, not an HTTP side-door.** `stacks_request` → `stacks` (each stack's
+  status, dir, **running/declared** container counts and images, or an `unavailable` reason), and
+  `stack_logs_request` → `stack_logs` (a bounded tail, newest last). Additive, so `PROTOCOL_VERSION`
+  stays 1. Keeping them in the protocol means the terminal can grow the same view later for free -
+  an `/api/stacks` endpoint would have been a second surface that only the browser could use.
+- **`stacks/view.ts`** is the read side: registry rows plus what is actually up. `running` vs
+  `declared` is what makes "2/3 up" sayable rather than a bare up/down; a missing compose CLI degrades
+  to the registry with a stated reason instead of reporting everything as stopped. `stackLogs` refuses
+  an app the daemon does not manage - the one place a client-supplied name reaches a path.
+- **A button is not a bypass.** `stack_action` runs the *same* `stack.control` / `stack.update` kind
+  the agent's tools run, so tapping Stop produces a real `operation_plan` (class, write scope including
+  `/var/run/docker.sock`, scope evidence), its confirming question, and an `operation_result` - and a
+  failure rolls back exactly as it would have. The web client switches to the transcript when an action
+  is sent, so the confirmation is never somewhere the person is not looking.
+- **The view lives in `@miro/ui-model`** (`stacks`, `stacksUnavailable`, `stackLogs`), null until asked
+  so "not asked" and "none managed" stay distinguishable, with the renderer left thin.
+
+**Live-verified on real Docker, through a real browser** (Playwright over an ssh tunnel): Miro deployed
+`traefik/whoami` as a managed stack on its own; the Stacks tab showed **whoami 1/1 up** with its image;
+Logs returned the container's real output; **Stop** produced a confirmed operation -> approved -> the
+container exited, the app stopped answering on :8099, the registry read `stopped` and the operation
+`committed`; **Start** brought it back (HTTP 200 again, registry `running`); **Remove** trashed it -
+containers gone, registry empty, compose dir in Miro's recoverable trash. All checked on the box, not
+from the UI's own claims.
+
+**Two bugs found live, both invisible to tests:**
+1. **An invented compose project prefix.** This code filtered containers by
+   `com.docker.compose.project=miro-<app>`, but every stack kind uses `-p <app>` - so a perfectly healthy
+   stack rendered as "nothing running". The deploy proved it: the container was `whoami-whoami-1`.
+2. **`--no-color` does not strip cursor control.** Real log lines arrived with an erase-line escape
+   (`ESC[2K`) that a terminal swallows and a browser prints as garbage. `stripAnsi` now removes escapes
+   on the way out, with a test built from the exact bytes that came back.
+
+Gate: `just check` 14/14, `just test` 557 pass / 0 fail. VM restored (stack removed, web off, devices
+cleared, `current -> versions/0.0.1`).
+
+**Pillar 3 is complete, and with it the three-pillar program** (compose-killer → private-by-default →
+deploy-anywhere): Miro installs itself from one public command onto a box it has never seen, verifies its
+own release signature before starting, pairs a device with an expiring code, and can be driven from a
+browser on a phone - chat, plans, approvals, and the stacks it runs. **v0.0.4 is released and signed**, so
+the one-liner delivers all of it. Next, when it earns priority: the web transport ladder's step 2 (a
+browser Iroh peer, so a hosted page reaches any box with no tunnel).

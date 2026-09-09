@@ -32,6 +32,9 @@ import { reverifyCommitted } from "./operations/prodtest";
 import { configureCapabilities, refreshWebSearchPool } from "./capabilities";
 import { allOperationKinds } from "./agent/operation-tools";
 import { ensureStacksTable } from "./stacks/store";
+import { stackSummaries, stackLogs } from "./stacks/view";
+import { stackControlKind } from "./operations/kinds/stack-control";
+import { stackUpdateKind } from "./operations/kinds/stack-update";
 import { buildContextBlock, takeSnapshot } from "./agent/context";
 import { runDiscovery } from "./discovery";
 import { ensureMemoryTable, buildSummary, listAll, forget, formatForDisplay } from "./memory/store";
@@ -854,6 +857,40 @@ function createConnectionState(send: (event: ServerEvent) => void): ConnState {
           `Run that on the other machine. It exchanges the code for its own token, which you can list and\n` +
           `revoke any time with \`mirod devices\`. The code alone is: ${code.slice(0, 3)} ${code.slice(3, 6)} ${code.slice(6)}`,
       });
+    } else if (msg.type === "stacks_request") {
+      // A read, so it answers straight away rather than going through the agent: the managed-stack view
+      // is the same data `stack_list` gives the agent, shaped for a client to render.
+      stackSummaries(db)
+        .then((view) => send({ type: "stacks", ...view }))
+        .catch((err) => send({ type: "stacks", stacks: [], unavailable: err instanceof Error ? err.message : String(err) }));
+    } else if (msg.type === "stack_logs_request") {
+      stackLogs(db, msg.app, msg.lines)
+        .then((res) => send({ type: "stack_logs", app: msg.app, ...res }))
+        .catch((err) => send({ type: "stack_logs", app: msg.app, lines: [], error: err instanceof Error ? err.message : String(err) }));
+    } else if (msg.type === "stack_action") {
+      // A button in a UI must not be a way around the engine: this runs the SAME operation kind the
+      // agent's stack_control/stack_update tools run, so the client gets the usual plan, confirmation
+      // and result, and a failure rolls back exactly as it would have.
+      const ctx: OperationToolContext = {
+        db,
+        send,
+        waitForAnswer: (id) => waitForAnswer(state, id),
+        cancelAnswer: (id) => state.pendingAnswers.delete(id),
+        reflect,
+        afterOperation,
+        getSecret: (ref) => secretStore.getSecret(db, ref),
+        setSecret: (ref, value) => secretStore.setSecret(db, ref, value),
+        setSetting,
+        getSetting,
+      };
+      const goal = `${msg.action} the ${msg.app} stack (asked from a client)`;
+      const op =
+        msg.action === "update"
+          ? runOperation(ctx, stackUpdateKind(db), goal, { app: msg.app, reason: "asked from a client" })
+          : runOperation(ctx, stackControlKind(db), goal, { app: msg.app, action: msg.action, reason: "asked from a client" });
+      op
+        .then(() => stackSummaries(db).then((view) => send({ type: "stacks", ...view }))) // refresh the view
+        .catch((err) => send({ type: "notice", level: "warn", text: `stack ${msg.action} failed: ${err instanceof Error ? err.message : err}` }));
     } else if (msg.type === "memory_list") {
       send({ type: "reply", text: formatForDisplay(listAll(db, 50)) });
     } else if (msg.type === "memory_forget") {

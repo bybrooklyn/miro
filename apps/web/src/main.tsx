@@ -5,6 +5,7 @@ import { createLineBuffer, encodeLine, type ClientMessage, type ServerEvent } fr
 import { initialState, reduce, userSent, answered, type UiState } from "@miro/ui-model";
 import { Transcript } from "./Transcript";
 import { Prompt } from "./Prompt";
+import { Stacks } from "./Stacks";
 
 // The web renderer. It holds no UI logic of its own: @miro/ui-model reduces the same protocol events
 // the terminal client reduces, and this turns the resulting UiState into DOM (PLAN.md:1720, "one
@@ -76,6 +77,7 @@ function Pairing({ onPaired }: { onPaired: () => void }) {
 
 function Chat() {
   const [ui, setUi] = useState<UiState>(() => initialState());
+  const [tab, setTab] = useState<"chat" | "stacks">("chat");
   const sendRef = useRef<((msg: ClientMessage) => boolean) | null>(null);
   const [text, setText] = useState("");
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -143,15 +145,46 @@ function Chat() {
       <header>
         <span className={`dot ${ui.health}`} />
         <span className="name">{ui.server}</span>
+        <nav className="tabs">
+          <button className={tab === "chat" ? "tab on" : "tab"} onClick={() => setTab("chat")}>
+            Chat
+          </button>
+          <button
+            className={tab === "stacks" ? "tab on" : "tab"}
+            onClick={() => {
+              setTab("stacks");
+              send({ type: "stacks_request" });
+            }}
+          >
+            Stacks
+          </button>
+        </nav>
         <span className="meta">
           {ui.model ?? "no model"}
           {ui.privilege ? ` · ${ui.privilege}` : ""}
         </span>
       </header>
       <main>
-        <Transcript blocks={ui.blocks} />
-        {ui.working && <div className="working">working…</div>}
-        <div ref={endRef} />
+        {tab === "chat" ? (
+          <>
+            <Transcript blocks={ui.blocks} />
+            {ui.working && <div className="working">working…</div>}
+            <div ref={endRef} />
+          </>
+        ) : (
+          <Stacks
+            stacks={ui.stacks}
+            unavailable={ui.stacksUnavailable}
+            logs={ui.stackLogs}
+            onRefresh={() => send({ type: "stacks_request" })}
+            onLogs={(app) => send({ type: "stack_logs_request", app })}
+            onAction={(app, action) => {
+              // An action produces an operation, and its plan and confirmation land in the transcript -
+              // so go there to answer it rather than leaving the person wondering where it went.
+              if (send({ type: "stack_action", app, action })) setTab("chat");
+            }}
+          />
+        )}
       </main>
       <footer>
         {ui.pending && <Prompt pending={ui.pending} onAnswer={answer} />}

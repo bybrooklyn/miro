@@ -57,6 +57,9 @@ The web listener wraps the same exchange in HTTP: `GET /api/session` -> `{"authe
 | `memory_list` | - | Lists what Miro remembers. |
 | `memory_forget` | `id` | Forgets one memory. |
 | `notice_feedback` | `source`, `action` (`quiet`\|`keep`) | Teaches Miro to tier a notification class down, or resets it. |
+| `stacks_request` | - | Asks for the managed-stack view. A read; answered with `stacks`. |
+| `stack_logs_request` | `app`, `lines?` | The tail of one stack's compose logs (default 200, capped at 500). Answered with `stack_logs`. |
+| `stack_action` | `app`, `action` (`start`\|`stop`\|`down`\|`remove`\|`update`) | Acts on a managed stack. **Not a shortcut around the operation engine**: the daemon runs the same operation kind the agent's tools use, so you get the usual `operation_plan`, its confirming `question`, and `operation_result` - and a failure rolls back as always. |
 | `auth` | `token` | Remote transports only, first message. |
 | `pair_redeem` | `code`, `deviceName?` | Remote transports only, first message. |
 
@@ -76,6 +79,8 @@ The web listener wraps the same exchange in HTTP: `GET /api/session` -> `{"authe
 | `operation_progress` | `id`, `phase` | `capturing` -> `applying` -> `verifying`, or `awaiting_reachability` for a lifeline change. |
 | `operation_result` | `id`, `outcome`, `message` | `committed`, `rolledback`, or `applied_unverified` (it reached the server, verify could not confirm it, and it was irreversible - so nothing was rolled back). |
 | `pair_result` | `ok`, `token?`, `deviceId?`, `deviceName?`, `error?` | Remote transports only, in answer to `auth`/`pair_redeem`. |
+| `stacks` | `stacks[]`, `unavailable?` | Each stack's `app`, `status`, `dir`, `running`/`declared` container counts and `images`. `unavailable` explains why the live numbers are missing (no compose CLI, docker unreachable) rather than showing everything as stopped. |
+| `stack_logs` | `app`, `lines[]`, `error?` | Newest last. An app the daemon does not manage is refused, not shelled out with. |
 
 ## Rendering it
 

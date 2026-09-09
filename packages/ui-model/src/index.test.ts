@@ -224,3 +224,43 @@ test("countSteps counts every descendant of a finished tree", () => {
   expect(countSteps(node)).toBe(2);
   expect(isQuiet(node)).toBe(true);
 });
+
+// The managed-stack view (PLAN.md deploy-anywhere PR 3b) lives in the reducer, so the terminal can grow
+// the same view later without reimplementing any of it.
+test("stacks: null until asked, then whatever the daemon reported", () => {
+  let s = initialState();
+  expect(s.stacks).toBeNull(); // "not asked" is distinguishable from "asked, none managed"
+  s = reduce(s, { type: "stacks", stacks: [] });
+  expect(s.stacks).toEqual([]);
+  const one = { app: "media", status: "running" as const, dir: "/var/lib/miro/stacks/media", running: 2, declared: 3, images: ["a", "b"], updatedAt: 1 };
+  s = reduce(s, { type: "stacks", stacks: [one] });
+  expect(s.stacks).toEqual([one]);
+  expect(s.stacksUnavailable).toBeUndefined();
+});
+
+test("stacks: an unavailable reason is carried, not swallowed", () => {
+  const s = reduce(initialState(), { type: "stacks", stacks: [], unavailable: "no docker compose CLI on this box" });
+  expect(s.stacksUnavailable).toContain("no docker compose");
+});
+
+test("stack logs are kept per app and replaced on refresh, never merged", () => {
+  let s = initialState();
+  s = reduce(s, { type: "stack_logs", app: "media", lines: ["one", "two"] });
+  s = reduce(s, { type: "stack_logs", app: "other", lines: ["x"] });
+  expect(s.stackLogs.media?.lines).toEqual(["one", "two"]);
+  expect(s.stackLogs.other?.lines).toEqual(["x"]);
+  s = reduce(s, { type: "stack_logs", app: "media", lines: ["three"] });
+  expect(s.stackLogs.media?.lines).toEqual(["three"]);
+  s = reduce(s, { type: "stack_logs", app: "media", lines: [], error: "compose logs exited 1" });
+  expect(s.stackLogs.media?.error).toBe("compose logs exited 1");
+});
+
+test("a stacks event does not disturb the transcript or a pending prompt", () => {
+  let s = initialState();
+  s = reduce(s, { type: "reply", text: "hello" });
+  s = reduce(s, { type: "question", id: "op_confirm:1", prompt: "ok?", options: [{ label: "Approve", value: "approve" }] });
+  const before = { blocks: s.blocks, pending: s.pending };
+  s = reduce(s, { type: "stacks", stacks: [] });
+  expect(s.blocks).toEqual(before.blocks);
+  expect(s.pending).toEqual(before.pending);
+});
