@@ -3642,3 +3642,37 @@ own release signature before starting, pairs a device with an expiring code, and
 browser on a phone - chat, plans, approvals, and the stacks it runs. **v0.0.4 is released and signed**, so
 the one-liner delivers all of it. Next, when it earns priority: the web transport ladder's step 2 (a
 browser Iroh peer, so a hosted page reaches any box with no tunnel).
+
+### 5.53 The web client, redesigned (2026-09-09)
+
+The owner's verdict on the first web client was "it sucks, its slop", and looking at it honestly he was
+right - and two of the problems were bugs, not taste.
+
+**The bugs.** The assistant writes markdown and the client printed it raw, so a reply arrived as literal
+`**Hardware & OS**` and `- **CPU:**`. And activity lines carried truncated JSON - `{ "interfaces": [ {
+"name": "lo0", "address"…` - because `summarizeResult` sliced a tool's result at 120 characters, which is
+still a payload, just a broken one, and the protocol says an activity's `detail` is "short outcome text -
+never a full payload". Fixed at the source: `describeJson` says `3 items`, or names the field that
+actually reports the outcome, or lists the keys. The daemon owed that to the terminal client too.
+
+- **`markdown.tsx`**: headings, bold, italic, inline code, fenced code, nested lists, blockquotes, rules
+  and links, built as **React nodes and never innerHTML** - assistant text is model output, so there is no
+  path here where a string becomes markup, and only http/https/mailto hrefs are clickable. A deliberate
+  subset: tables and the rest of CommonMark are not what a sysadmin's assistant writes, and every extra
+  rule is another thing to get subtly wrong.
+- **The design, per the owner: terminal-flavoured, done well.** Mono throughout but with a real type
+  scale, hairlines and a state-coloured left edge instead of grey boxes, one accent with colour reserved
+  for state, a 74ch measure, and the reading column aligned to the same gutter as the header and the
+  prompt caret rather than floating in the middle of a wide window. A `›` caret marks the user's turn and
+  the composer; activity collapses to one quiet line that opens into the tool tree.
+- Found while building: the CSS treated `header/main/footer` as body's flex children, but React mounts
+  them inside `#root` - so nothing stretched and the composer floated under the header with the page empty
+  below it.
+
+**Verified against a real daemon and a real model** (a local unprivileged daemon, browser driven with
+Playwright at 1100px and at 390px): markdown renders as markdown, nested bullets stay nested, an operation
+card shows class/writes/network/proposed/scope and its diff, **approving from the phone-width layout wrote
+the file** (checked on disk), and the card turned green with the activity line collapsing to `⋯ write
+file`. Pairing, the stacks empty state and the reconnect path were checked at both widths.
+
+Gate: `just check` 14/14, `just test` 575 pass / 0 fail.

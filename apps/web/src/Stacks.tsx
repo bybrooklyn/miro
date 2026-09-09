@@ -15,10 +15,10 @@ const ACTIONS: { action: "start" | "stop" | "update" | "down" | "remove"; label:
   { action: "remove", label: "Remove", danger: true },
 ];
 
-function health(s: StackSummary): { text: string; color: string } {
-  if (s.declared > 0 && s.running === s.declared) return { text: `${s.running}/${s.declared} up`, color: "var(--good)" };
-  if (s.running > 0) return { text: `${s.running}/${s.declared || "?"} up`, color: "var(--warn)" };
-  return { text: s.status === "stopped" ? "stopped" : "nothing running", color: "var(--dim)" };
+function health(s: StackSummary): { text: string; tone: "up" | "part" | "down" } {
+  if (s.declared > 0 && s.running === s.declared) return { text: `${s.running}/${s.declared} up`, tone: "up" };
+  if (s.running > 0) return { text: `${s.running}/${s.declared || "?"} up`, tone: "part" };
+  return { text: s.status === "stopped" ? "stopped" : "nothing running", tone: "down" };
 }
 
 export function Stacks({
@@ -38,75 +38,65 @@ export function Stacks({
 }) {
   const [open, setOpen] = useState<string | null>(null);
 
-  if (stacks === null) return <div className="working">loading stacks…</div>;
+  if (stacks === null) return <div className="working">loading stacks</div>;
 
   return (
     <>
-      {unavailable ? <div className="notice block warn">{unavailable}</div> : null}
+      {unavailable ? <div className="notice warn">{unavailable}</div> : null}
       {stacks.length === 0 ? (
-        <div className="center">
-          <p>
-            Miro manages no stacks yet. Ask it for an app - "run Jellyfin" - and it writes the compose,
-            stands it up, and it shows up here.
-          </p>
-          <button onClick={onRefresh}>Refresh</button>
+        <div className="empty">
+          Nothing managed yet. Ask for an app - "run Jellyfin" - and Miro writes the compose, stands it up,
+          and it appears here.
         </div>
       ) : null}
       {stacks.map((s) => {
         const h = health(s);
         const log = logs[s.app];
         return (
-          <div key={s.app} className="operation block">
-            <div className="label">stack</div>
-            <div style={{ color: "var(--bright)", display: "flex", alignItems: "baseline", gap: 8 }}>
-              {s.app}
-              <span style={{ color: h.color, fontSize: 13 }}>{h.text}</span>
+          <div key={s.app} className="stack">
+            <div className="head">
+              <span className="app">{s.app}</span>
+              <span className={`state ${h.tone}`}>{h.text}</span>
             </div>
-            {s.images.length ? (
-              <dl className="kv" style={{ marginTop: 6 }}>
-                <dt>images</dt>
-                <dd>{s.images.join(", ")}</dd>
-              </dl>
-            ) : null}
-            <div className="options" style={{ marginTop: 8 }}>
+            {s.images.length ? <div className="image">{s.images.join(", ")}</div> : null}
+            <div className="actions">
               {ACTIONS.map((a) => (
                 <button key={a.action} className={a.danger ? "danger" : ""} onClick={() => onAction(s.app, a.action)}>
                   {a.label}
                 </button>
               ))}
               <button
+                className="link"
+                style={{ marginLeft: 4 }}
                 onClick={() => {
                   const next = open === s.app ? null : s.app;
                   setOpen(next);
                   if (next) onLogs(s.app);
                 }}
               >
-                {open === s.app ? "Hide logs" : "Logs"}
+                {open === s.app ? "hide logs" : "logs"}
               </button>
             </div>
             {open === s.app ? (
               <>
-                {log?.error ? <div className="notice warn" style={{ marginTop: 8 }}>{log.error}</div> : null}
+                {log?.error ? <div className="notice warn" style={{ marginTop: 10 }}>{log.error}</div> : null}
                 {log && !log.error ? (
-                  // Newest last, like a terminal; the container scrolls rather than the page.
-                  <pre className="compose" style={{ maxHeight: 320, overflowY: "auto" }}>
-                    {log.lines.length ? log.lines.join("\n") : "(no output)"}
-                  </pre>
+                  <pre className="out logs">{log.lines.length ? log.lines.join("\n") : "(no output)"}</pre>
                 ) : null}
-                {!log ? <div className="working">fetching logs…</div> : null}
-                <button style={{ marginTop: 6 }} onClick={() => onLogs(s.app)}>
-                  Refresh logs
-                </button>
+                {!log ? <div className="working">fetching logs</div> : null}
+                {log && !log.error ? (
+                  <button className="link" onClick={() => onLogs(s.app)}>
+                    refresh
+                  </button>
+                ) : null}
               </>
             ) : null}
           </div>
         );
       })}
-      {stacks.length ? (
-        <button onClick={onRefresh} style={{ alignSelf: "flex-start" }}>
-          Refresh
-        </button>
-      ) : null}
+      <button className="link" onClick={onRefresh}>
+        refresh
+      </button>
     </>
   );
 }

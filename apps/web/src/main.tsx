@@ -51,26 +51,28 @@ function Pairing({ onPaired }: { onPaired: () => void }) {
     }
   };
   return (
-    <div className="center">
-      <h1>Pair this browser</h1>
-      <p>
-        Run <code>/pair</code> in Miro on the server and type the nine digits it shows. The code works once and
-        expires in ten minutes.
-      </p>
-      <form className="composer" onSubmit={submit}>
-        <input
-          value={code}
-          onChange={(e) => setCode(e.target.value)}
-          placeholder="123 456 789"
-          inputMode="numeric"
-          autoFocus
-          aria-label="pairing code"
-        />
-        <button className="primary" type="submit" disabled={busy || code.replace(/\s+/g, "").length < 9}>
-          {busy ? "…" : "Pair"}
-        </button>
-      </form>
-      <p className="err">{error}</p>
+    <div className="screen">
+      <div className="inner">
+        <h1>Pair this browser</h1>
+        <p>
+          Run <code>/pair</code> on the server and type the nine digits. One use, ten minutes.
+        </p>
+        <form className="row" onSubmit={submit}>
+          <input
+            className="code"
+            value={code}
+            onChange={(e) => setCode(e.target.value.replace(/[^\d ]/g, ""))}
+            placeholder="000000000"
+            inputMode="numeric"
+            autoFocus
+            aria-label="pairing code"
+          />
+          <button className="primary" type="submit" disabled={busy || code.replace(/\s+/g, "").length < 9}>
+            {busy ? "…" : "pair"}
+          </button>
+        </form>
+        <div className="err">{error}</div>
+      </div>
     </div>
   );
 }
@@ -146,17 +148,17 @@ function Chat() {
         <span className={`dot ${ui.health}`} />
         <span className="name">{ui.server}</span>
         <nav className="tabs">
-          <button className={tab === "chat" ? "tab on" : "tab"} onClick={() => setTab("chat")}>
-            Chat
+          <button className={tab === "chat" ? "on" : ""} onClick={() => setTab("chat")}>
+            chat
           </button>
           <button
-            className={tab === "stacks" ? "tab on" : "tab"}
+            className={tab === "stacks" ? "on" : ""}
             onClick={() => {
               setTab("stacks");
               send({ type: "stacks_request" });
             }}
           >
-            Stacks
+            stacks
           </button>
         </nav>
         <span className="meta">
@@ -168,7 +170,7 @@ function Chat() {
         {tab === "chat" ? (
           <>
             <Transcript blocks={ui.blocks} />
-            {ui.working && <div className="working">working…</div>}
+            {ui.working && <div className="working">working</div>}
             <div ref={endRef} />
           </>
         ) : (
@@ -193,11 +195,11 @@ function Chat() {
             <input
               value={text}
               onChange={(e) => setText(e.target.value)}
-              placeholder={ui.health === "connecting" ? "reconnecting…" : "Ask for an outcome…"}
+              placeholder={ui.health === "connecting" ? "reconnecting" : "ask for an outcome"}
               aria-label="message"
             />
-            <button className="primary" type="submit">
-              Send
+            <button type="submit" aria-label="send">
+              send
             </button>
           </form>
         )}
@@ -208,7 +210,7 @@ function Chat() {
 
 function App() {
   const { session, setSession } = useSession();
-  if (session.state === "checking") return <div className="center">…</div>;
+  if (session.state === "checking") return <div className="screen" />;
   if (session.state === "unpaired") return <Pairing onPaired={() => setSession({ state: "paired" })} />;
   return <Chat />;
 }

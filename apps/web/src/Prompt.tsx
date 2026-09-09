@@ -36,9 +36,7 @@ export function Prompt({ pending, onAnswer }: { pending: Pending; onAnswer: (val
             Skip
           </button>
         </form>
-        <div className="label" style={{ marginTop: 6 }}>
-          stored by reference - never shown to the model, never echoed
-        </div>
+        <div className="hint">stored by reference - never shown to the model, never echoed</div>
       </div>
     );
   }
@@ -67,7 +65,7 @@ export function Prompt({ pending, onAnswer }: { pending: Pending; onAnswer: (val
     <div className="prompt">
       <div className="q">
         {pending.prompt}
-        {left !== null ? <span style={{ color: "var(--warn)" }}> · {left}s to confirm</span> : null}
+        {left !== null ? <span className="clock"> · {left}s to confirm</span> : null}
       </div>
       <div className="options">
         {pending.options.map((o) => (

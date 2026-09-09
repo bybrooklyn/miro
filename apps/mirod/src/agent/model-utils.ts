@@ -64,13 +64,44 @@ export interface TurnHooks {
   parentActivityId?: string;
 }
 
-/** A short, safe outcome line for a finished tool call - never the full payload. */
+/** Describe a JSON result instead of quoting it. The protocol says an activity's `detail` is "short
+ * outcome text - never a full payload", but truncating JSON to 120 characters is still a payload, just a
+ * broken one: the web client showed `{ "interfaces": [ { "name": "lo0", "address"…` in the transcript.
+ * A count or a field list says more in less space. */
+function describeJson(value: unknown): string {
+  if (Array.isArray(value)) return `${value.length} item${value.length === 1 ? "" : "s"}`;
+  if (value && typeof value === "object") {
+    const o = value as Record<string, unknown>;
+    // Prefer the fields that actually say what happened, when a tool provides them.
+    for (const key of ["message", "note", "error", "outcome", "status", "summary"]) {
+      const v = o[key];
+      if (typeof v === "string" && v.trim()) return v.trim().length > 120 ? `${v.trim().slice(0, 117)}…` : v.trim();
+    }
+    if (typeof o.ok === "boolean") return o.ok ? "ok" : "failed";
+    const keys = Object.keys(o);
+    if (keys.length === 0) return "nothing";
+    const shown = keys.slice(0, 4).join(", ");
+    return keys.length > 4 ? `${shown}, +${keys.length - 4} more` : shown;
+  }
+  return String(value);
+}
+
 function summarizeResult(result: unknown, isError: boolean): string | undefined {
   const text = typeof result === "string" ? result : (result as { content?: { text?: string }[] } | undefined)?.content?.[0]?.text;
   if (!text) return isError ? "failed" : undefined;
   const line = text.replace(/\s+/g, " ").trim();
+  if (!line) return isError ? "failed" : undefined;
+  if (/^[[{]/.test(line)) {
+    try {
+      return describeJson(JSON.parse(text));
+    } catch {
+      // not JSON after all - fall through and treat it as prose
+    }
+  }
   return line.length > 120 ? `${line.slice(0, 117)}…` : line;
 }
+
+export { describeJson, summarizeResult };
 
 /** Runs one full turn (including any tool round-trips) and returns the final assistant text. */
 export async function runTurn(agent: Agent, text: string, hooks: TurnHooks | ((label: string) => void) = {}): Promise<string> {
