@@ -19,3 +19,6 @@ auth.json
 
 # Playwright MCP scratch output (page snapshots, console logs) from live browser testing.
 .playwright-mcp/
+
+# Stray screenshots from live browser testing.
+current-ui.png
